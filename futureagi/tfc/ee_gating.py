@@ -61,6 +61,12 @@ class EEFeature(str, Enum):
     EXTENDED_RETENTION = "extended_retention"
     CUSTOM_BRAND = "custom_brand"
     DEDICATED_SUPPORT = "dedicated_support"
+    FALCON_AI = "falcon_ai"
+    TURING_MODELS = "turing_models"
+    PROTECT = "protect"
+    SCENARIOS = "scenarios"
+    ERROR_FEED = "error_feed"
+    FIX_MY_AGENT = "fix_my_agent"
 
 
 class EEResource(str, Enum):

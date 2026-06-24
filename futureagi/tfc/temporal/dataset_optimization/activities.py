@@ -219,6 +219,10 @@ async def run_optimization_activity(input: Dict[str, Any]) -> Dict[str, Any]:
     Run entire optimization in one activity. Resume from latest DatasetOptimizationTrial if exists.
     Uses callback to persist each trial immediately after completion.
     """
+    from tfc.ee_gating import EEFeature, check_ee_feature
+
+    check_ee_feature(EEFeature.OPTIMIZATION, activity=True)
+
     _safe_close_db()
     hb = Heartbeater(("optimization",))
     async with hb:
@@ -452,9 +456,13 @@ async def run_optimization_activity(input: Dict[str, Any]) -> Dict[str, Any]:
             try:
                 from ee.agenthub.fix_your_agent.fix_your_agent import FixYourAgent
             except ImportError:
-                if settings.DEBUG:
-                    logger.warning("Could not import ee.agenthub.fix_your_agent.fix_your_agent", exc_info=True)
-                return None
+                from temporalio.exceptions import ApplicationError
+
+                raise ApplicationError(
+                    "Dataset optimization requires ee.agenthub (EE).",
+                    type="FeatureUnavailable",
+                    non_retryable=True,
+                )
 
             # Get organization and workspace for API keys
             organization = dataset.organization
@@ -498,12 +506,13 @@ async def run_optimization_activity(input: Dict[str, Any]) -> Dict[str, Any]:
                     normalize_prompt_text,
                 )
             except ImportError:
-                if settings.DEBUG:
-                    logger.warning(
-                        "Could not import ee.agent_opt.utils.template_variables",
-                        exc_info=True,
-                    )
-                return None
+                from temporalio.exceptions import ApplicationError
+
+                raise ApplicationError(
+                    "Dataset optimization requires ee.agent_opt (EE).",
+                    type="FeatureUnavailable",
+                    non_retryable=True,
+                )
 
             initial_prompt = normalize_prompt_text(initial_prompt)
 
