@@ -137,6 +137,8 @@ INSTALLED_APPS = [
     "mcp_server",
     "agentcc",
     "tfc.deployment_telemetry",
+    "tfc.licensing",
+    "tfc.capabilities",
     # gRPC framework
     "django_socio_grpc",
     # "djstripe"
