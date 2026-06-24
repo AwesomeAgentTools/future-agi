@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 from rest_framework import status as drf_status
-from rest_framework.exceptions import APIException
 from temporalio.exceptions import ApplicationError
 
+from tfc.ee_gating import FeatureUnavailable
 
-class CapabilityDenied(APIException):
-    """Raised when a capability check fails. HTTP 402."""
+
+class CapabilityDenied(FeatureUnavailable):
+    """Raised when a capability check fails. HTTP 402.
+
+    Inherits from FeatureUnavailable so existing exception handlers
+    that catch FeatureUnavailable also catch this.
+    """
 
     status_code = drf_status.HTTP_402_PAYMENT_REQUIRED
     default_detail = "This feature is not available on your current plan."
@@ -25,8 +30,10 @@ class CapabilityDenied(APIException):
         self.upgrade_cta = upgrade_cta
         self.metadata = metadata or {}
         super().__init__(
+            feature=feature_id,
             detail=detail or f"'{feature_id}' is not available. Upgrade your plan.",
             code=reason_code,
+            upgrade_cta=upgrade_cta,
         )
 
 

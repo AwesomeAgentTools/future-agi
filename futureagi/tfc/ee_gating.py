@@ -154,8 +154,8 @@ def check_ee_feature(
 ) -> None:
     """Imperative pre-flight check. Raises on deny.
 
-    Use inside function bodies where a decorator is awkward (e.g. deep inside
-    a Temporal activity or an AI tool execute() method).
+    Delegates to tfc.capabilities.service when configured (after
+    AppConfig.ready). Falls back to legacy logic during early startup.
 
     Args:
         feature: EEFeature member, or a string present in EE_FEATURES_OSS.
@@ -179,6 +179,11 @@ def check_ee_feature(
     if feature_str not in EE_FEATURES_OSS:
         return
 
+    # Try the new capability service first (available after AppConfig.ready)
+    if _try_capability_service(feature_str, org_id=org_id, activity=activity):
+        return
+
+    # Legacy fallback for early startup or when capability service isn't wired
     if is_oss():
         _raise_denied(feature_str, activity=activity)
         return
@@ -189,13 +194,7 @@ def check_ee_feature(
     try:
         from ee.usage.services.entitlements import Entitlements
 
-        # Use check_feature so we can thread upgrade_cta through to the FE.
-        # has_feature_unified is the underlying bool; check_feature wraps it
-        # with CheckResult(allowed, reason, upgrade_cta) on Cloud.
         if not Entitlements.has_feature_unified(str(org_id), feature_str):
-            # Fetch the full CheckResult for Cloud upsell CTA. OSS/EE
-            # fallbacks inside has_feature_unified handle the boolean; the
-            # CTA only exists on Cloud, so guard against attribute errors.
             cta = None
             reason = None
             try:
@@ -222,6 +221,38 @@ def check_ee_feature(
         logger.warning(
             "ee.usage.services.entitlements import failed; allowing by default"
         )
+
+
+def _try_capability_service(
+    feature_str: str,
+    *,
+    org_id: Optional[str] = None,
+    activity: bool = False,
+) -> bool:
+    """Attempt to use the new capability service. Returns True if handled.
+
+    Returns False if the service isn't configured yet (early startup),
+    signalling the caller to fall back to legacy logic.
+    """
+    try:
+        from tfc.capabilities import service
+        from tfc.capabilities.registry import is_registered
+
+        # Only use new service if it's been configured (after AppConfig.ready)
+        if not service._configured:
+            return False
+
+        # Only handle features in the new registry
+        if not is_registered(feature_str):
+            return False
+
+        decision = service.check(feature_str, org_id=org_id)
+        if not decision.allowed:
+            service._raise_denied(decision, activity=activity)
+        return True
+    except Exception:
+        # Any import/config error — fall through to legacy
+        return False
 
 
 ResourceName = Union[EEResource, str]

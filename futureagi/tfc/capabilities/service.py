@@ -72,6 +72,7 @@ _license_resolver: LicenseResolver | None = None
 _cloud_plan_resolver: CloudPlanResolver | None = None
 _deployment_flavor: DeploymentFlavor = DeploymentFlavor.OSS
 _deployment_location: DeploymentLocation = DeploymentLocation.SELF_HOSTED
+_configured: bool = False
 
 
 def configure(
@@ -82,11 +83,12 @@ def configure(
     cloud_plan_resolver: CloudPlanResolver | None = None,
 ) -> None:
     """Wire resolvers at application startup. Called from AppConfig.ready()."""
-    global _license_resolver, _cloud_plan_resolver, _deployment_flavor, _deployment_location
+    global _license_resolver, _cloud_plan_resolver, _deployment_flavor, _deployment_location, _configured
     _deployment_flavor = flavor
     _deployment_location = location
     _license_resolver = license_resolver
     _cloud_plan_resolver = cloud_plan_resolver
+    _configured = True
 
 
 def check(
