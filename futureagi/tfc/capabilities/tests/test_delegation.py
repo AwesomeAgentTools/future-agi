@@ -75,10 +75,8 @@ class TestDelegation:
 
 
 class TestFallbackWhenNotConfigured:
-    def test_falls_back_when_not_configured(self):
+    def test_falls_back_when_not_configured(self, monkeypatch):
         service._configured = False
-        # OSS fallback: known EE feature should raise
-        # is_oss() will be True if ee.usage is not importable
-        # (which it won't be in this test environment)
+        monkeypatch.setattr("tfc.ee_gating.is_oss", lambda: True)
         with pytest.raises(FeatureUnavailable):
             check_ee_feature(EEFeature.VOICE_SIM)

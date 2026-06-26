@@ -237,22 +237,19 @@ def _try_capability_service(
     try:
         from tfc.capabilities import service
         from tfc.capabilities.registry import is_registered
-
-        # Only use new service if it's been configured (after AppConfig.ready)
-        if not service._configured:
-            return False
-
-        # Only handle features in the new registry
-        if not is_registered(feature_str):
-            return False
-
-        decision = service.check(feature_str, org_id=org_id)
-        if not decision.allowed:
-            service._raise_denied(decision, activity=activity)
-        return True
     except Exception:
-        # Any import/config error — fall through to legacy
         return False
+
+    if not service._configured:
+        return False
+
+    if not is_registered(feature_str):
+        return False
+
+    decision = service.check(feature_str, org_id=org_id)
+    if not decision.allowed:
+        service._raise_denied(decision, activity=activity)
+    return True
 
 
 ResourceName = Union[EEResource, str]
