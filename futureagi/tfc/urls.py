@@ -144,20 +144,25 @@ if has_ee("ee.usage"):
 
     if is_cloud_deployment():
         try:
-            urlpatterns += [
-                path(
-                    "telemetry/",
-                    include("ee.usage.deployment_telemetry_urls"),
-                )
-            ]
+            if has_ee("ee.cloud"):
+                urlpatterns += [
+                    path("usage/", include("ee.cloud.urls")),
+                    path(
+                        "telemetry/",
+                        include("ee.cloud.telemetry.urls"),
+                    ),
+                ]
+            else:
+                urlpatterns += [
+                    path(
+                        "telemetry/",
+                        include("ee.usage.deployment_telemetry_urls"),
+                    )
+                ]
         except ImportError:
-            # The deployment_telemetry URLconf is missing on a cloud install.
-            # Silently passing here previously left an operator with no
-            # signal that ``/telemetry/`` would 404; warn instead.
             import structlog
-
             structlog.get_logger(__name__).warning(
-                "deployment_telemetry_url_mount_skipped", exc_info=True
+                "cloud_url_mount_skipped", exc_info=True
             )
 
 urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
