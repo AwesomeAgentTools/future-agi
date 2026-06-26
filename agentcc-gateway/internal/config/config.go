@@ -16,6 +16,7 @@ type Config struct {
 	Providers     map[string]ProviderConfig `yaml:"providers" json:"providers"`
 	ModelMap      map[string]string         `yaml:"model_map" json:"model_map"`
 	Auth          AuthConfig                `yaml:"auth" json:"auth"`
+	LicenseAuth   LicenseAuthConfig         `yaml:"license_auth" json:"license_auth"`
 	CostTracking  CostTrackingConfig        `yaml:"cost_tracking" json:"cost_tracking"`
 	RateLimiting  RateLimitConfig           `yaml:"rate_limiting" json:"rate_limiting"`
 	Cache         CacheConfig               `yaml:"cache" json:"cache"`
@@ -257,6 +258,17 @@ type AuthConfig struct {
 	Keys    []AuthKeyConfig `yaml:"keys" json:"keys"`
 }
 
+type LicenseAuthConfig struct {
+	Enabled    bool                   `yaml:"enabled" json:"enabled"`
+	PublicKey  string                 `yaml:"public_key" json:"-"`
+	PublicKeys []LicenseAuthPublicKey `yaml:"public_keys" json:"-"`
+}
+
+type LicenseAuthPublicKey struct {
+	KID       string `yaml:"kid" json:"kid"`
+	PublicKey string `yaml:"public_key" json:"-"`
+}
+
 // AuthKeyConfig is a single API key definition in config.
 type AuthKeyConfig struct {
 	Name          string                    `yaml:"name" json:"name"`
@@ -348,9 +360,9 @@ type RequestLoggingConfig struct {
 
 // CostTrackingConfig controls per-request cost calculation.
 type CostTrackingConfig struct {
-	Enabled          bool                       `yaml:"enabled" json:"enabled"`
-	CustomPricing    map[string]CustomPricing   `yaml:"custom_pricing" json:"custom_pricing"`
-	AliasCostFactors map[string]float64         `yaml:"alias_cost_factors" json:"alias_cost_factors"`
+	Enabled          bool                     `yaml:"enabled" json:"enabled"`
+	CustomPricing    map[string]CustomPricing `yaml:"custom_pricing" json:"custom_pricing"`
+	AliasCostFactors map[string]float64       `yaml:"alias_cost_factors" json:"alias_cost_factors"`
 }
 
 // CustomPricing allows overriding model pricing.

@@ -861,6 +861,7 @@ func New(cfg *config.Config, configPath string, registry *providers.Registry, en
 	var handler http.Handler = router
 	handler = middleware.Timeout(cfg.Server.DefaultRequestTimeout, "/v1/chat/completions")(handler)
 	handler = middleware.KeyAuth(authKeyStore, authEnabled)(handler)
+	handler = middleware.LicenseAuth(cfg.LicenseAuth)(handler)
 	handler = middleware.RequestID(handler)
 	if cfg.CORS.Enabled {
 		handler = middleware.CORS(cfg.CORS)(handler)
