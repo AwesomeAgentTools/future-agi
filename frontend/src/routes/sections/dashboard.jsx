@@ -91,8 +91,8 @@ const UserManagementV2 = lazyWithRetry(
 const BillingPageV2 = lazyWithRetry(
   () => import("src/sections/settings/BillingV2/BillingPage"),
 );
-const EELicensesPage = lazyWithRetry(
-  () => import("src/sections/settings/EELicenses/EELicensesPage"),
+const LicensePage = lazyWithRetry(
+  () => import("src/sections/settings/License/LicensePage"),
 );
 const ProfileSettings = lazyWithRetry(
   () => import("src/pages/dashboard/settings/ProfileSettings"),
@@ -717,7 +717,7 @@ export const dashboardRoutes = (
           path: "ee-licenses",
           element: (
             <RoleProtection allowedRoles={billingAllowedRoles}>
-              <EELicensesPage />
+              <LicensePage />
             </RoleProtection>
           ),
         },

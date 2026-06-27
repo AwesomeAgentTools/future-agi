@@ -477,14 +477,13 @@ export function useNavSettingsData() {
         icon: SettingsIcons.Security,
       });
     }
-    // EE Licenses - hidden (feature not available yet)
-    // if (effectiveRole === ROLES.OWNER) {
-    //   orgItems.push({
-    //     title: "EE Licenses",
-    //     path: "/dashboard/settings/ee-licenses",
-    //     icon: SettingsIcons.Keys,
-    //   });
-    // }
+    if (!isOSS && isOrgAdminPlus) {
+      orgItems.push({
+        title: "License",
+        path: "/dashboard/settings/ee-licenses",
+        icon: SettingsIcons.Keys,
+      });
+    }
     if (wsEnabled && canAccess(RoutesName.workspace)) {
       orgItems.push({
         title: "Workspaces",
