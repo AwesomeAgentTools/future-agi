@@ -56,12 +56,20 @@ func LicenseAuth(cfg config.LicenseAuthConfig, store *redisstate.LicenseStore) f
 
 			rawToken := extractBearerToken(r)
 			if rawToken == "" {
+				if isManagedRequest(r) {
+					models.WriteError(w, models.ErrUnauthorized("Missing managed service token"))
+					return
+				}
 				next.ServeHTTP(w, r)
 				return
 			}
 
 			claims, err := verifyLicenseToken(rawToken, keys)
 			if err != nil {
+				if isManagedRequest(r) {
+					models.WriteError(w, models.ErrUnauthorized("Invalid managed service token"))
+					return
+				}
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -80,6 +88,17 @@ func LicenseAuth(cfg config.LicenseAuthConfig, store *redisstate.LicenseStore) f
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+func isManagedRequest(r *http.Request) bool {
+	if r.Method != http.MethodPost || r.URL.Path != "/v1/chat/completions" {
+		return false
+	}
+	model, err := readRequestModel(r)
+	if err != nil {
+		return false
+	}
+	return serviceForModel(model) != ""
 }
 
 func authorizeRuntimeState(claims *licenseClaims, cfg config.LicenseAuthConfig, store *redisstate.LicenseStore) *models.APIError {

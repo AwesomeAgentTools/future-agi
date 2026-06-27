@@ -163,7 +163,11 @@ def _check_cloud(
         )
 
     if org_id is None:
-        return CapabilityDecision(allowed=True, feature_id=feature.id)
+        return CapabilityDecision(
+            allowed=False,
+            feature_id=feature.id,
+            reason_code=DenialReason.RESOLVER_UNAVAILABLE.value,
+        )
 
     if _cloud_plan_resolver.has_feature(org_id, feature.id):
         return CapabilityDecision(allowed=True, feature_id=feature.id)

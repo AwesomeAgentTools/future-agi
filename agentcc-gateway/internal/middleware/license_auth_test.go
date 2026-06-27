@@ -80,7 +80,7 @@ func TestLicenseAuthRejectsModelOutsideScope(t *testing.T) {
 	}
 }
 
-func TestLicenseAuthDoesNotAuthorizeExpiredToken(t *testing.T) {
+func TestLicenseAuthRejectsExpiredTokenForManagedModel(t *testing.T) {
 	privateKey, publicPEM := testRSAKeyPair(t)
 	token := signTestLicenseToken(t, privateKey, licenseClaims{
 		LicenseID:  "lic_test",
@@ -93,10 +93,7 @@ func TestLicenseAuthDoesNotAuthorizeExpiredToken(t *testing.T) {
 	})
 
 	handler := LicenseAuth(config.LicenseAuthConfig{Enabled: true, PublicKey: publicPEM}, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if IsLicenseAuthorized(r.Context()) {
-			t.Fatal("expired token should not authorize request")
-		}
-		w.WriteHeader(http.StatusNoContent)
+		t.Fatal("handler should not be called")
 	}))
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"turing_small"}`))
@@ -105,8 +102,41 @@ func TestLicenseAuthDoesNotAuthorizeExpiredToken(t *testing.T) {
 
 	handler.ServeHTTP(rr, req)
 
-	if rr.Code != http.StatusNoContent {
-		t.Fatalf("expected pass-through 204, got %d", rr.Code)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rr.Code)
+	}
+}
+
+func TestLicenseAuthRejectsMissingTokenForManagedModel(t *testing.T) {
+	_, publicPEM := testRSAKeyPair(t)
+	handler := LicenseAuth(config.LicenseAuthConfig{Enabled: true, PublicKey: publicPEM}, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("handler should not be called")
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"turing_small"}`))
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rr.Code)
+	}
+}
+
+func TestLicenseAuthRejectsInvalidTokenForManagedModel(t *testing.T) {
+	_, publicPEM := testRSAKeyPair(t)
+	handler := LicenseAuth(config.LicenseAuthConfig{Enabled: true, PublicKey: publicPEM}, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("handler should not be called")
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"protect_flash"}`))
+	req.Header.Set("Authorization", "Bearer not-a-valid-jwt")
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rr.Code)
 	}
 }
 
