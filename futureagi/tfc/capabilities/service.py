@@ -91,6 +91,24 @@ def configure(
     _configured = True
 
 
+def get_deployment_flavor() -> DeploymentFlavor:
+    return _deployment_flavor
+
+
+def get_deployment_location() -> DeploymentLocation:
+    return _deployment_location
+
+
+def get_license_snapshot() -> LicenseSnapshot | None:
+    if _license_resolver is None:
+        return None
+    return _license_resolver.get_snapshot()
+
+
+def is_configured() -> bool:
+    return _configured
+
+
 def check(
     feature_id: str,
     *,

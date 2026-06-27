@@ -29,6 +29,12 @@ _LEGACY_TO_CAPABILITY_ID: dict[str, str] = {
     "extended_retention": "extended_retention",
     "custom_brand": "custom_brand",
     "dedicated_support": "dedicated_support",
+    "falcon_ai": "falcon_ai",
+    "turing_models": "turing_models",
+    "protect": "protect",
+    "scenarios": "scenarios",
+    "error_feed": "error_feed",
+    "fix_my_agent": "fix_my_agent",
 }
 
 

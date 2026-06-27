@@ -240,7 +240,7 @@ def _try_capability_service(
     except Exception:
         return False
 
-    if not service._configured:
+    if not service.is_configured():
         return False
 
     if not is_registered(feature_str):

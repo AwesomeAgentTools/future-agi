@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from rest_framework import serializers, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -14,6 +16,8 @@ from tfc.licensing.types import (
     derive_display_mode,
 )
 
+logger = logging.getLogger(__name__)
+
 
 class CapabilitiesView(APIView):
     permission_classes = [IsAuthenticated]
@@ -22,8 +26,8 @@ class CapabilitiesView(APIView):
         org = getattr(request, "organization", None)
         org_id = str(org.id) if org else None
 
-        flavor = service._deployment_flavor
-        location = service._deployment_location
+        flavor = service.get_deployment_flavor()
+        location = service.get_deployment_location()
         license_state = self._get_license_state()
         display_mode = derive_display_mode(flavor, location, license_state)
 
@@ -52,17 +56,17 @@ class CapabilitiesView(APIView):
         return Response(response_data)
 
     def _get_license_state(self) -> LicenseState:
-        if service._license_resolver is None:
-            if service._deployment_flavor == DeploymentFlavor.CLOUD:
+        snapshot = service.get_license_snapshot()
+        if snapshot is None:
+            if service.get_deployment_flavor() == DeploymentFlavor.CLOUD:
                 return LicenseState.NOT_APPLICABLE
             return LicenseState.MISSING
-        snapshot = service._license_resolver.get_snapshot()
         return snapshot.state
 
     def _get_license_details(self) -> dict | None:
-        if service._license_resolver is None:
+        snapshot = service.get_license_snapshot()
+        if snapshot is None:
             return None
-        snapshot = service._license_resolver.get_snapshot()
         if snapshot.state in (LicenseState.MISSING, LicenseState.NOT_APPLICABLE):
             return None
         return {
@@ -82,6 +86,7 @@ class CapabilitiesView(APIView):
             state = get_or_create_telemetry_state()
             return str(state.instance_id)
         except Exception:
+            logger.debug("capabilities_view_instance_id_unavailable", exc_info=True)
             return None
 
     def _is_admin(self, request) -> bool:
@@ -96,5 +101,5 @@ class CapabilitiesView(APIView):
             if membership and membership.role in ("owner", "admin"):
                 return True
         except Exception:
-            pass
+            logger.debug("capabilities_view_membership_check_failed", exc_info=True)
         return user.is_staff
