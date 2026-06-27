@@ -19,6 +19,7 @@ import (
 
 	"github.com/futureagi/agentcc-gateway/internal/config"
 	"github.com/futureagi/agentcc-gateway/internal/models"
+	"github.com/futureagi/agentcc-gateway/internal/redisstate"
 )
 
 type licenseAuthContextKey struct{}
@@ -42,7 +43,7 @@ type modelRequest struct {
 	Model string `json:"model"`
 }
 
-func LicenseAuth(cfg config.LicenseAuthConfig) func(http.Handler) http.Handler {
+func LicenseAuth(cfg config.LicenseAuthConfig, store *redisstate.LicenseStore) func(http.Handler) http.Handler {
 	keys := buildLicensePublicKeyMap(cfg)
 	authEnabled := cfg.Enabled && len(keys) > 0
 
@@ -70,10 +71,56 @@ func LicenseAuth(cfg config.LicenseAuthConfig) func(http.Handler) http.Handler {
 				return
 			}
 
+			if err := authorizeRuntimeState(claims, cfg, store); err != nil {
+				models.WriteError(w, err)
+				return
+			}
+
 			ctx := context.WithValue(r.Context(), licenseAuthContextKey{}, true)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+func authorizeRuntimeState(claims *licenseClaims, cfg config.LicenseAuthConfig, store *redisstate.LicenseStore) *models.APIError {
+	if !cfg.RuntimeStateRequired && cfg.RateLimitRPM <= 0 && cfg.MonthlyUsageLimit <= 0 {
+		return nil
+	}
+	if store == nil {
+		return models.ErrServiceUnavailable("license runtime state unavailable")
+	}
+
+	if cfg.RuntimeStateRequired {
+		sessionActive, err := store.SessionActive(claims.JTI)
+		if err != nil {
+			return models.ErrServiceUnavailable("license runtime state unavailable")
+		}
+		if !sessionActive {
+			return models.ErrForbidden("license session is not active")
+		}
+
+		instanceActive, err := store.InstanceActive(claims.LicenseID, claims.InstanceID)
+		if err != nil {
+			return models.ErrServiceUnavailable("license runtime state unavailable")
+		}
+		if !instanceActive {
+			return models.ErrForbidden("license instance is not active")
+		}
+	}
+
+	if allowed, err := store.AllowRate(claims.LicenseID, cfg.RateLimitRPM); err != nil {
+		return models.ErrServiceUnavailable("license rate state unavailable")
+	} else if !allowed {
+		return models.ErrTooManyRequests("license rate limit exceeded")
+	}
+
+	if allowed, err := store.AllowMonthlyUsage(claims.LicenseID, cfg.MonthlyUsageLimit); err != nil {
+		return models.ErrServiceUnavailable("license usage state unavailable")
+	} else if !allowed {
+		return models.ErrForbidden("license usage limit exceeded")
+	}
+
+	return nil
 }
 
 func IsLicenseAuthorized(ctx context.Context) bool {

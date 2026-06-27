@@ -259,9 +259,12 @@ type AuthConfig struct {
 }
 
 type LicenseAuthConfig struct {
-	Enabled    bool                   `yaml:"enabled" json:"enabled"`
-	PublicKey  string                 `yaml:"public_key" json:"-"`
-	PublicKeys []LicenseAuthPublicKey `yaml:"public_keys" json:"-"`
+	Enabled              bool                   `yaml:"enabled" json:"enabled"`
+	PublicKey            string                 `yaml:"public_key" json:"-"`
+	PublicKeys           []LicenseAuthPublicKey `yaml:"public_keys" json:"-"`
+	RuntimeStateRequired bool                   `yaml:"runtime_state_required" json:"runtime_state_required"`
+	RateLimitRPM         int                    `yaml:"rate_limit_rpm" json:"rate_limit_rpm"`
+	MonthlyUsageLimit    int                    `yaml:"monthly_usage_limit" json:"monthly_usage_limit"`
 }
 
 type LicenseAuthPublicKey struct {

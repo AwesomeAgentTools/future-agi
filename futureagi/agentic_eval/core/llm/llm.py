@@ -7,6 +7,7 @@ import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import wraps
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import anthropic
@@ -417,6 +418,10 @@ class LLM:
         self, payload: dict, tools: Optional[list] = None
     ) -> Optional[Any]:
         """Attempt completion via the Agentcc gateway. Returns response or None on failure."""
+        managed_response = self._try_managed_ai_completion(payload, tools=tools)
+        if managed_response is not None:
+            return managed_response
+
         if not getattr(self, "_gateway_client", None):
             return None
         if getattr(self, "api_key", None):
@@ -447,6 +452,33 @@ class LLM:
                     time.sleep(self.GATEWAY_RETRY_BACKOFF[attempt])
         return None
 
+    def _try_managed_ai_completion(
+        self, payload: dict, tools: Optional[list] = None
+    ) -> Optional[Any]:
+        try:
+            from ee.licensing.managed_ai import chat_completion, is_managed_model
+        except ImportError:
+            return None
+
+        model = payload.get("model", self.model_name)
+        if not is_managed_model(model):
+            return None
+
+        managed_payload = dict(payload)
+        if tools:
+            managed_payload["tools"] = tools
+        response = chat_completion(managed_payload)
+        return self._to_openai_like_response(response)
+
+    def _to_openai_like_response(self, value: Any) -> Any:
+        if isinstance(value, dict):
+            return SimpleNamespace(
+                **{key: self._to_openai_like_response(val) for key, val in value.items()}
+            )
+        if isinstance(value, list):
+            return [self._to_openai_like_response(item) for item in value]
+        return value
+
     def _build_gateway_request_kwargs(
         self,
         payload: dict,
@@ -470,6 +502,10 @@ class LLM:
         self, payload: dict, tools: Optional[list] = None
     ) -> Optional[Any]:
         """Async version: attempt completion via Agentcc gateway."""
+        managed_response = await self._try_managed_ai_completion_async(payload, tools=tools)
+        if managed_response is not None:
+            return managed_response
+
         if not getattr(self, "_async_gateway_client", None):
             return None
         if getattr(self, "api_key", None):
@@ -499,6 +535,24 @@ class LLM:
                 if attempt < self.GATEWAY_MAX_ATTEMPTS - 1:
                     await asyncio.sleep(self.GATEWAY_RETRY_BACKOFF[attempt])
         return None
+
+    async def _try_managed_ai_completion_async(
+        self, payload: dict, tools: Optional[list] = None
+    ) -> Optional[Any]:
+        try:
+            from ee.licensing.managed_ai import chat_completion, is_managed_model
+        except ImportError:
+            return None
+
+        model = payload.get("model", self.model_name)
+        if not is_managed_model(model):
+            return None
+
+        managed_payload = dict(payload)
+        if tools:
+            managed_payload["tools"] = tools
+        response = await asyncio.to_thread(chat_completion, managed_payload)
+        return self._to_openai_like_response(response)
 
     def _update_token_usage(self, response: Any) -> None:
         """
@@ -1231,6 +1285,8 @@ class LLM:
                     threshold = max_output
             except Exception:
                 pass
+        if not isinstance(threshold, (int, float)):
+            threshold = None
         if threshold and _max_tokens > threshold:
             _max_tokens = threshold
 

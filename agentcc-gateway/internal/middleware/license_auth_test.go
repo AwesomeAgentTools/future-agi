@@ -31,7 +31,7 @@ func TestLicenseAuthAcceptsScopedManagedToken(t *testing.T) {
 	})
 
 	called := false
-	handler := LicenseAuth(config.LicenseAuthConfig{Enabled: true, PublicKey: publicPEM})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := LicenseAuth(config.LicenseAuthConfig{Enabled: true, PublicKey: publicPEM}, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called = true
 		if !IsLicenseAuthorized(r.Context()) {
 			t.Fatal("request context was not marked license-authorized")
@@ -65,7 +65,7 @@ func TestLicenseAuthRejectsModelOutsideScope(t *testing.T) {
 		JTI:        "tok_test",
 	})
 
-	handler := LicenseAuth(config.LicenseAuthConfig{Enabled: true, PublicKey: publicPEM})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := LicenseAuth(config.LicenseAuthConfig{Enabled: true, PublicKey: publicPEM}, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("handler should not be called")
 	}))
 
@@ -92,7 +92,7 @@ func TestLicenseAuthDoesNotAuthorizeExpiredToken(t *testing.T) {
 		JTI:        "tok_test",
 	})
 
-	handler := LicenseAuth(config.LicenseAuthConfig{Enabled: true, PublicKey: publicPEM})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := LicenseAuth(config.LicenseAuthConfig{Enabled: true, PublicKey: publicPEM}, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if IsLicenseAuthorized(r.Context()) {
 			t.Fatal("expired token should not authorize request")
 		}
@@ -107,6 +107,37 @@ func TestLicenseAuthDoesNotAuthorizeExpiredToken(t *testing.T) {
 
 	if rr.Code != http.StatusNoContent {
 		t.Fatalf("expected pass-through 204, got %d", rr.Code)
+	}
+}
+
+func TestLicenseAuthFailsClosedWhenRuntimeStateRequiredWithoutStore(t *testing.T) {
+	privateKey, publicPEM := testRSAKeyPair(t)
+	token := signTestLicenseToken(t, privateKey, licenseClaims{
+		LicenseID:  "lic_test",
+		InstanceID: "inst_test",
+		Scope:      "enterprise",
+		Services:   []string{"turing"},
+		Models:     []string{"turing_small"},
+		ExpiresAt:  time.Now().Add(time.Hour).Unix(),
+		JTI:        "tok_test",
+	})
+
+	handler := LicenseAuth(config.LicenseAuthConfig{
+		Enabled:              true,
+		PublicKey:            publicPEM,
+		RuntimeStateRequired: true,
+	}, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("handler should not be called")
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"turing_small"}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", rr.Code)
 	}
 }
 
