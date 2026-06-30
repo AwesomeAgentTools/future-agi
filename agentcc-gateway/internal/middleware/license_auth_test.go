@@ -80,6 +80,60 @@ func TestLicenseAuthRejectsModelOutsideScope(t *testing.T) {
 	}
 }
 
+func TestLicenseAuthRejectsServiceOutsideScope(t *testing.T) {
+	privateKey, publicPEM := testRSAKeyPair(t)
+	token := signTestLicenseToken(t, privateKey, licenseClaims{
+		LicenseID:  "lic_test",
+		InstanceID: "inst_test",
+		Scope:      "enterprise",
+		Services:   []string{"falcon"},
+		Models:     []string{"turing_small"},
+		ExpiresAt:  time.Now().Add(time.Hour).Unix(),
+		JTI:        "tok_test",
+	})
+
+	handler := LicenseAuth(config.LicenseAuthConfig{Enabled: true, PublicKey: publicPEM}, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("handler should not be called")
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"turing_small"}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", rr.Code)
+	}
+}
+
+func TestLicenseAuthRejectsOssScopeForManagedModel(t *testing.T) {
+	privateKey, publicPEM := testRSAKeyPair(t)
+	token := signTestLicenseToken(t, privateKey, licenseClaims{
+		LicenseID:  "lic_test",
+		InstanceID: "inst_test",
+		Scope:      "oss",
+		Services:   []string{"turing"},
+		Models:     []string{"turing_small"},
+		ExpiresAt:  time.Now().Add(time.Hour).Unix(),
+		JTI:        "tok_test",
+	})
+
+	handler := LicenseAuth(config.LicenseAuthConfig{Enabled: true, PublicKey: publicPEM}, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("handler should not be called")
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"turing_small"}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rr.Code)
+	}
+}
+
 func TestLicenseAuthRejectsExpiredTokenForManagedModel(t *testing.T) {
 	privateKey, publicPEM := testRSAKeyPair(t)
 	token := signTestLicenseToken(t, privateKey, licenseClaims{
