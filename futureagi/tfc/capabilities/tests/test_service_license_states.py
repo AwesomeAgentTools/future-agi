@@ -297,6 +297,39 @@ class TestResolverFailure:
         assert decision.allowed is True
 
 
+class _FakeCloudPlanResolver:
+    def has_feature(self, org_id: str, feature_id: str) -> bool:
+        return True
+
+    def get_upgrade_cta(self, org_id: str, feature_id: str) -> dict | None:
+        return None
+
+
+class TestCloudResolverFailure:
+    def test_cloud_denies_paid_feature_when_org_id_missing(self):
+        service.configure(
+            flavor=DeploymentFlavor.CLOUD,
+            location=DeploymentLocation.CLOUD,
+            cloud_plan_resolver=_FakeCloudPlanResolver(),
+        )
+
+        decision = service.check("voice_sim", org_id=None)
+
+        assert decision.allowed is False
+        assert decision.reason_code == DenialReason.RESOLVER_UNAVAILABLE.value
+
+    def test_cloud_allows_oss_baseline_when_org_id_missing(self):
+        service.configure(
+            flavor=DeploymentFlavor.CLOUD,
+            location=DeploymentLocation.CLOUD,
+            cloud_plan_resolver=_FakeCloudPlanResolver(),
+        )
+
+        decision = service.check("knowledge_base", org_id=None)
+
+        assert decision.allowed is True
+
+
 class TestCheckOrRaise:
     def test_raises_capability_denied_on_denial(self, active_license):
         with pytest.raises(CapabilityDenied) as exc_info:
