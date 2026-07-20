@@ -45,6 +45,13 @@ class OptimisationCreateView(APIView):
     _gm = GeneralMethods()
     permission_classes = [IsAuthenticated]
 
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        from tfc.ee_gating import EEFeature, check_ee_feature
+
+        org = getattr(request, "organization", None)
+        check_ee_feature(EEFeature.OPTIMIZATION, org_id=str(org.id) if org else None)
+
     @validated_request(
         request_serializer=OptimizationDatasetSerializer,
         responses={

@@ -194,6 +194,13 @@ class ScenariosListView(APIView):
     permission_classes = [IsAuthenticated]
     _gm = GeneralMethods()
 
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        from tfc.ee_gating import EEFeature, check_ee_feature
+
+        org = getattr(request, "organization", None)
+        check_ee_feature(EEFeature.SCENARIOS, org_id=str(org.id) if org else None)
+
     def dispatch(self, request, *args, **kwargs):
         # Initialize request properly
         self.args = args
@@ -357,6 +364,13 @@ class CreateScenarioView(APIView):
     """
 
     permission_classes = [IsAuthenticated]
+
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        from tfc.ee_gating import EEFeature, check_ee_feature
+
+        org = getattr(request, "organization", None)
+        check_ee_feature(EEFeature.SCENARIOS, org_id=str(org.id) if org else None)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -751,6 +765,13 @@ class DeleteScenarioView(APIView):
     permission_classes = [IsAuthenticated]
     _gm = GeneralMethods()
 
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        from tfc.ee_gating import EEFeature, check_ee_feature
+
+        org = getattr(request, "organization", None)
+        check_ee_feature(EEFeature.SCENARIOS, org_id=str(org.id) if org else None)
+
     @swagger_auto_schema(
         tags=["Scenarios"],
         operation_summary="Delete scenario",
@@ -802,6 +823,13 @@ class EditScenarioView(APIView):
     """
 
     permission_classes = [IsAuthenticated]
+
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        from tfc.ee_gating import EEFeature, check_ee_feature
+
+        org = getattr(request, "organization", None)
+        check_ee_feature(EEFeature.SCENARIOS, org_id=str(org.id) if org else None)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
