@@ -64,6 +64,14 @@ func LicenseAuth(cfg config.LicenseAuthConfig, store *redisstate.LicenseStore) f
 				return
 			}
 
+			// Only attempt license verification if the token looks like a JWT.
+			// Internal API keys (e.g. fi-internal-...) should pass through to
+			// the pipeline auth plugin.
+			if !looksLikeJWT(rawToken) {
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			claims, err := verifyLicenseToken(rawToken, keys)
 			if err != nil {
 				if isManagedRequest(r) {
@@ -305,4 +313,8 @@ func contains(values []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+func looksLikeJWT(token string) bool {
+	return strings.Count(token, ".") == 2
 }
