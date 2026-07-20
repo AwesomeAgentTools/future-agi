@@ -196,7 +196,7 @@ function LicenseCard({ license, onRevoke, onCopyKey }) {
             </Button>
           </Tooltip>
         )}
-        {isActive && (
+        {isActive && onRevoke && (
           <Button
             size="small"
             variant="outlined"
@@ -225,7 +225,7 @@ LicenseCard.propTypes = {
     max_gateway_monthly: PropTypes.number,
     jwt_key: PropTypes.string,
   }).isRequired,
-  onRevoke: PropTypes.func.isRequired,
+  onRevoke: PropTypes.func,
   onCopyKey: PropTypes.func.isRequired,
 };
 
@@ -242,11 +242,17 @@ export default function EELicensesPage() {
 
   const queryClient = useQueryClient();
 
-  const { data: licenses, isLoading } = useQuery({
+  const { data: licensesData, isLoading } = useQuery({
     queryKey: ["ee-licenses"],
     queryFn: () => axios.get(apiPath("/usage/ee/licenses/")),
-    select: (res) => res.data?.result?.licenses || [],
+    select: (res) => ({
+      licenses: res.data?.result?.licenses || [],
+      readOnly: res.data?.result?.read_only || false,
+    }),
   });
+
+  const licenses = licensesData?.licenses || [];
+  const readOnly = licensesData?.readOnly || false;
 
   const createMutation = useMutation({
     mutationFn: (data) => axios.post(apiPath("/usage/ee/licenses/"), data),
@@ -302,13 +308,16 @@ export default function EELicensesPage() {
             EE Licenses
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            Manage enterprise license keys for self-hosted deployments.
+            {readOnly
+              ? "Your enterprise license details."
+              : "Manage enterprise license keys for self-hosted deployments."}
           </Typography>
         </Box>
         <Button
           variant="contained"
           startIcon={<Iconify icon="mdi:key-plus" />}
           onClick={() => setCreateOpen(true)}
+          sx={{ display: readOnly ? "none" : undefined }}
         >
           Generate License
         </Button>
@@ -386,7 +395,7 @@ export default function EELicensesPage() {
             <LicenseCard
               key={lic.id}
               license={lic}
-              onRevoke={(id) => revokeMutation.mutate(id)}
+              onRevoke={readOnly ? null : (id) => revokeMutation.mutate(id)}
               onCopyKey={handleCopyKey}
             />
           ))}

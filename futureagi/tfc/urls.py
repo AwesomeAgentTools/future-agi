@@ -26,7 +26,7 @@ from drf_yasg.views import get_schema_view
 
 from tfc.ee_loader import ee_feature_enabled, has_ee
 from tfc.views.deployment import DeploymentInfoView
-from tfc.capabilities.views import CapabilitiesView
+from tfc.capabilities.views import CapabilitiesView, LicenseDetailView
 from tfc.views.health import (
     AuthenticatedHealthView,
     HealthCheckView,
@@ -141,6 +141,11 @@ urlpatterns = [
         "api/capabilities/",
         CapabilitiesView.as_view(),
         name="capabilities",
+    ),
+    path(
+        "usage/ee/licenses/",
+        LicenseDetailView.as_view(),
+        name="license-detail",
     ),
 ]
 

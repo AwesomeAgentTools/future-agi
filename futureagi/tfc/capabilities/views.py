@@ -103,3 +103,34 @@ class CapabilitiesView(APIView):
         except Exception:
             logger.debug("capabilities_view_membership_check_failed", exc_info=True)
         return user.is_staff
+
+
+class LicenseDetailView(APIView):
+    """Self-hosted license info — reads from the locally validated JWT."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        snapshot = service.get_license_snapshot()
+        if snapshot is None or snapshot.state in (
+            LicenseState.MISSING,
+            LicenseState.NOT_APPLICABLE,
+        ):
+            return Response(
+                {"status": True, "result": {"licenses": []}},
+            )
+
+        license_entry = {
+            "id": snapshot.license_id or "",
+            "customer_name": snapshot.issued_to or "",
+            "band": snapshot.band or "",
+            "billing_interval": "annual",
+            "features": sorted(snapshot.features),
+            "max_traces_monthly": snapshot.limits.get("traces_monthly", -1),
+            "max_gateway_monthly": snapshot.limits.get("gateway_requests_monthly", -1),
+            "issued_at": snapshot.issued_at.isoformat() if snapshot.issued_at else None,
+            "expires_at": snapshot.expires_at.isoformat() if snapshot.expires_at else None,
+            "status": snapshot.state.value,
+        }
+
+        return Response({"status": True, "result": {"licenses": [license_entry], "read_only": True}})

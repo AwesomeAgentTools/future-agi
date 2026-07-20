@@ -23,9 +23,11 @@ import (
 )
 
 type licenseAuthContextKey struct{}
+type licenseClaimsContextKey struct{}
 
 type licenseClaims struct {
 	LicenseID  string   `json:"license_id"`
+	CustomerID string   `json:"customer_id"`
 	InstanceID string   `json:"instance_id"`
 	Scope      string   `json:"scope"`
 	Services   []string `json:"services"`
@@ -93,6 +95,7 @@ func LicenseAuth(cfg config.LicenseAuthConfig, store *redisstate.LicenseStore) f
 			}
 
 			ctx := context.WithValue(r.Context(), licenseAuthContextKey{}, true)
+			ctx = context.WithValue(ctx, licenseClaimsContextKey{}, claims)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
@@ -153,6 +156,24 @@ func authorizeRuntimeState(claims *licenseClaims, cfg config.LicenseAuthConfig, 
 func IsLicenseAuthorized(ctx context.Context) bool {
 	value, _ := ctx.Value(licenseAuthContextKey{}).(bool)
 	return value
+}
+
+type LicenseClaims struct {
+	LicenseID  string
+	CustomerID string
+	InstanceID string
+}
+
+func GetLicenseClaims(ctx context.Context) *LicenseClaims {
+	claims, _ := ctx.Value(licenseClaimsContextKey{}).(*licenseClaims)
+	if claims == nil {
+		return nil
+	}
+	return &LicenseClaims{
+		LicenseID:  claims.LicenseID,
+		CustomerID: claims.CustomerID,
+		InstanceID: claims.InstanceID,
+	}
 }
 
 func buildLicensePublicKeyMap(cfg config.LicenseAuthConfig) map[string]*rsa.PublicKey {
@@ -235,9 +256,12 @@ func authorizeManagedRequest(r *http.Request, claims *licenseClaims) error {
 	if err != nil {
 		return err
 	}
+
 	service := serviceForModel(model)
 	if service == "" {
-		return fmt.Errorf("model %q is not a managed FutureAGI model", model)
+		// Non-managed models (Vertex, Bedrock, etc.) are allowed for any
+		// valid enterprise token — the gateway handles provider routing.
+		return nil
 	}
 	if !contains(claims.Services, service) {
 		return fmt.Errorf("service %q not included in token scope", service)

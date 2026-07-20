@@ -40,6 +40,12 @@ func (p *Plugin) ProcessRequest(ctx context.Context, rc *models.RequestContext) 
 	if middleware.IsLicenseAuthorized(ctx) {
 		rc.Metadata["key_type"] = "internal"
 		rc.Metadata["key_access_groups"] = "internal"
+		if claims := middleware.GetLicenseClaims(ctx); claims != nil {
+			rc.Metadata["license_id"] = claims.LicenseID
+			rc.Metadata["customer_id"] = claims.CustomerID
+			rc.Metadata["instance_id"] = claims.InstanceID
+			rc.Metadata["auth_type"] = "license"
+		}
 		return pipeline.ResultContinue()
 	}
 
