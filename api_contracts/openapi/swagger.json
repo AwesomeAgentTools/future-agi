@@ -51989,10 +51989,7 @@
                     "200": {
                         "description": "",
                         "schema": {
-                            "type": "array",
-                            "items": {
-                                "$ref": "#/definitions/TestExecutionItemResponse"
-                            }
+                            "$ref": "#/definitions/RunTestExecutionsResponse"
                         }
                     },
                     "404": {
@@ -106196,13 +106193,15 @@
                 },
                 "prompt_config_snapshot": {
                     "title": "Prompt config snapshot",
-                    "type": "string",
+                    "description": "\nGet prompt_config_snapshot with backward compatibility for modelDetail.\nIf modelDetail is missing from configuration, generate it from the model name.\n",
+                    "type": "object",
                     "readOnly": true
                 },
                 "template_name": {
                     "title": "Template name",
                     "type": "string",
-                    "readOnly": true
+                    "readOnly": true,
+                    "minLength": 1
                 },
                 "original_template": {
                     "title": "Original template",
@@ -106213,11 +106212,12 @@
                 "metadata": {
                     "title": "Metadata",
                     "type": "object",
+                    "readOnly": true,
                     "x-nullable": true
                 },
                 "variable_names": {
                     "title": "Variable names",
-                    "type": "string",
+                    "type": "object",
                     "readOnly": true
                 },
                 "evaluation_results": {
@@ -106228,6 +106228,7 @@
                 "evaluation_configs": {
                     "title": "Evaluation configs",
                     "type": "object",
+                    "readOnly": true,
                     "x-nullable": true
                 },
                 "created_at": {
@@ -106257,7 +106258,7 @@
                 },
                 "labels": {
                     "title": "Labels",
-                    "type": "string",
+                    "type": "object",
                     "readOnly": true
                 },
                 "placeholders": {
@@ -113586,10 +113587,8 @@
                 },
                 "description": {
                     "title": "Description",
-                    "description": "Description of the test run",
                     "type": "string",
                     "readOnly": true,
-                    "minLength": 1,
                     "x-nullable": true
                 },
                 "agent_definition": {
@@ -113603,20 +113602,12 @@
                 "agent_version": {
                     "title": "Agent version",
                     "type": "object",
-                    "additionalProperties": {
-                        "type": "string",
-                        "x-nullable": true
-                    },
                     "readOnly": true,
                     "x-nullable": true
                 },
                 "agent_definition_detail": {
                     "title": "Agent definition detail",
                     "type": "object",
-                    "additionalProperties": {
-                        "type": "string",
-                        "x-nullable": true
-                    },
                     "readOnly": true,
                     "x-nullable": true
                 },
@@ -113648,10 +113639,6 @@
                 "prompt_template_detail": {
                     "title": "Prompt template detail",
                     "type": "object",
-                    "additionalProperties": {
-                        "type": "string",
-                        "x-nullable": true
-                    },
                     "readOnly": true,
                     "x-nullable": true
                 },
@@ -113666,10 +113653,6 @@
                 "prompt_version_detail": {
                     "title": "Prompt version detail",
                     "type": "object",
-                    "additionalProperties": {
-                        "type": "string",
-                        "x-nullable": true
-                    },
                     "readOnly": true,
                     "x-nullable": true
                 },
@@ -113687,11 +113670,7 @@
                 "scenarios_detail": {
                     "type": "array",
                     "items": {
-                        "type": "object",
-                        "additionalProperties": {
-                            "type": "string",
-                            "x-nullable": true
-                        }
+                        "type": "object"
                     },
                     "readOnly": true
                 },
@@ -113717,10 +113696,6 @@
                 "simulator_agent_detail": {
                     "title": "Simulator agent detail",
                     "type": "object",
-                    "additionalProperties": {
-                        "type": "string",
-                        "x-nullable": true
-                    },
                     "readOnly": true,
                     "x-nullable": true
                 },
@@ -116764,6 +116739,37 @@
                     "type": "string",
                     "readOnly": true,
                     "minLength": 1
+                }
+            }
+        },
+        "RunTestExecutionsResponse": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "title": "Count",
+                    "type": "integer",
+                    "readOnly": true
+                },
+                "next": {
+                    "title": "Next",
+                    "type": "string",
+                    "readOnly": true,
+                    "minLength": 1,
+                    "x-nullable": true
+                },
+                "previous": {
+                    "title": "Previous",
+                    "type": "string",
+                    "readOnly": true,
+                    "minLength": 1,
+                    "x-nullable": true
+                },
+                "results": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/TestExecutionItemResponse"
+                    },
+                    "readOnly": true
                 }
             }
         },
