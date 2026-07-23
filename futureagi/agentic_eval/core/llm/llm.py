@@ -390,29 +390,39 @@ class LLM:
         # Initialize gateway client for internal LLM routing (all providers)
         self._gateway_client = None
         try:
-            try:
-                from ee.usage.services.gateway_llm_client import get_gateway_client
-            except ImportError:
-                get_gateway_client = None
+            from ee.usage.services.gateway_llm_client import get_gateway_client
 
             self._gateway_client = get_gateway_client()
-        except (ImportError, Exception):
-            pass  # Gateway not available — litellm fallback will be used
+        except ImportError:
+            if self._requires_managed_transport():
+                raise
+        except Exception:
+            if self._requires_managed_transport():
+                raise
 
         # Initialize async gateway client for non-blocking LLM routing
         self._async_gateway_client = None
         try:
-            try:
-                from ee.usage.services.gateway_llm_client import get_async_gateway_client
-            except ImportError:
-                get_async_gateway_client = None
+            from ee.usage.services.gateway_llm_client import get_async_gateway_client
 
             self._async_gateway_client = get_async_gateway_client()
-        except (ImportError, Exception):
-            pass
+        except ImportError:
+            if self._requires_managed_transport():
+                raise
+        except Exception:
+            if self._requires_managed_transport():
+                raise
 
     GATEWAY_MAX_ATTEMPTS = 3
     GATEWAY_RETRY_BACKOFF = (0.5, 1.0, 2.0)
+
+    def _requires_managed_transport(self, model: object | None = None) -> bool:
+        try:
+            from ee.licensing.managed_ai import is_managed_model
+            from ee.usage.deployment import DeploymentMode
+        except ImportError:
+            return False
+        return DeploymentMode.is_ee() and is_managed_model(model or self.model_name)
 
     def _try_gateway_completion(
         self, payload: dict, tools: Optional[list] = None
@@ -670,16 +680,19 @@ class LLM:
                     payload.pop("max_tokens", None)
 
                 litellm.set_verbose = False
+                managed_transport = self._requires_managed_transport(
+                    payload.get("model")
+                )
 
                 # Handle different providers
-                if self.provider == "vllm":
+                if self.provider == "vllm" and not managed_transport:
                     vllm_result = self._handle_vllm_completion(payload)
                     return str(vllm_result)
-                elif self.provider == "protect":
+                elif self.provider == "protect" and not managed_transport:
                     protect_result = self._handle_protect_completion(payload)
                     # Return the full protect_result dict for DeterministicEvaluator
                     return protect_result
-                elif self.provider == "protect_flash":
+                elif self.provider == "protect_flash" and not managed_transport:
                     protect_flash_result = self._handle_protect_flash_completion(
                         payload
                     )
@@ -784,6 +797,8 @@ class LLM:
                     return content if content is not None else ""
 
             except Exception as e:
+                if self._requires_managed_transport(payload.get("model")):
+                    raise
                 logger.exception(
                     f"{self.provider} API error: {str(e)}",
                     attempt=attempt,
@@ -950,15 +965,18 @@ class LLM:
                     payload.pop("max_tokens", None)
 
                 litellm.set_verbose = False
+                managed_transport = self._requires_managed_transport(
+                    payload.get("model")
+                )
 
                 # Handle different providers
-                if self.provider == "vllm":
+                if self.provider == "vllm" and not managed_transport:
                     vllm_result = self._handle_vllm_completion(payload)
                     return str(vllm_result)
-                elif self.provider == "protect":
+                elif self.provider == "protect" and not managed_transport:
                     protect_result = self._handle_protect_completion(payload)
                     return protect_result
-                elif self.provider == "protect_flash":
+                elif self.provider == "protect_flash" and not managed_transport:
                     protect_flash_result = self._handle_protect_flash_completion(
                         payload
                     )
@@ -978,9 +996,9 @@ class LLM:
 
                 # Default litellm handling for all other providers
                 else:
-                    # Skip gateway for WebSocket streaming — gateway returns
-                    # non-streaming responses, bypassing incremental chunk emission.
-                    if not (streaming and ws_manager):
+                    # Managed models must use the gateway even when the caller
+                    # requested incremental WebSocket streaming.
+                    if managed_transport or not (streaming and ws_manager):
                         gw_response = await self._try_gateway_completion_async(payload)
                         if gw_response is not None:
                             self._update_token_usage(gw_response)
@@ -1162,6 +1180,8 @@ class LLM:
                     return content if content is not None else ""
 
             except Exception as e:
+                if self._requires_managed_transport(payload.get("model")):
+                    raise
                 logger.exception(
                     "API error",
                     provider=self.provider,
@@ -2088,10 +2108,10 @@ class LLM:
             max_tokens=self.max_tokens,
         )
 
-        # Try gateway first — but only when the caller has NOT supplied their
-        # own API key. When api_key is set the request must go through the
-        # customer's own provider credentials via litellm, not our gateway.
-        if not getattr(self, "api_key", None):
+        # User-supplied provider keys bypass the gateway only for non-managed
+        # models. Self-hosted managed models always use the licensed transport.
+        managed_transport = self._requires_managed_transport(self.model_name)
+        if managed_transport or not getattr(self, "api_key", None):
             try:
                 try:
                     from ee.usage.services.gateway_llm_client import get_gateway_client
@@ -2099,6 +2119,8 @@ class LLM:
                     get_gateway_client = None
 
                 gateway = get_gateway_client()
+                if gateway is None and managed_transport:
+                    raise RuntimeError("Managed gateway client is unavailable")
                 if gateway is not None:
                     logger.info("llm_call_routing", route="agentcc_gateway", model=self.model_name)
                     gateway_kwargs = {
@@ -2124,8 +2146,11 @@ class LLM:
                     )
                     return content if content is not None else ""
             except ImportError:
-                pass  # usage module not available — fall through to litellm
+                if managed_transport:
+                    raise
             except Exception as e:
+                if managed_transport:
+                    raise
                 logger.debug(f"Gateway call failed, falling back to litellm: {str(e)}")
 
         # Fallback: existing litellm path

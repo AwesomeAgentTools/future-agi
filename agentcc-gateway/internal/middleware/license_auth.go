@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -26,14 +27,20 @@ type licenseAuthContextKey struct{}
 type licenseClaimsContextKey struct{}
 
 type licenseClaims struct {
-	LicenseID  string   `json:"license_id"`
-	CustomerID string   `json:"customer_id"`
-	InstanceID string   `json:"instance_id"`
-	Scope      string   `json:"scope"`
-	Services   []string `json:"services"`
-	Models     []string `json:"models"`
-	ExpiresAt  int64    `json:"exp"`
-	JTI        string   `json:"jti"`
+	Type                 string   `json:"typ"`
+	Issuer               string   `json:"iss"`
+	Audience             string   `json:"aud"`
+	IssuedAt             int64    `json:"iat"`
+	NotBefore            int64    `json:"nbf"`
+	ExpiresAt            int64    `json:"exp"`
+	JTI                  string   `json:"jti"`
+	LicenseID            string   `json:"license_id"`
+	CustomerID           string   `json:"customer_id"`
+	InstanceID           string   `json:"instance_id"`
+	AuthorizationVersion int      `json:"authorization_version"`
+	Scope                string   `json:"scope"`
+	Services             []string `json:"services"`
+	Models               []string `json:"models"`
 }
 
 type jwtHeader struct {
@@ -46,19 +53,23 @@ type modelRequest struct {
 }
 
 func LicenseAuth(cfg config.LicenseAuthConfig, store *redisstate.LicenseStore) func(http.Handler) http.Handler {
+	cfg = withLicenseAuthDefaults(cfg)
 	keys := buildLicensePublicKeyMap(cfg)
-	authEnabled := cfg.Enabled && len(keys) > 0
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !authEnabled || !strings.HasPrefix(r.URL.Path, "/v1/") {
+			if !cfg.Enabled || !strings.HasPrefix(r.URL.Path, "/v1/") {
 				next.ServeHTTP(w, r)
+				return
+			}
+			if len(keys) == 0 {
+				models.WriteError(w, models.ErrServiceUnavailable("license verification unavailable"))
 				return
 			}
 
 			rawToken := extractBearerToken(r)
 			if rawToken == "" {
-				if isManagedRequest(r) {
+				if isManagedEndpoint(r) {
 					models.WriteError(w, models.ErrUnauthorized("Missing managed service token"))
 					return
 				}
@@ -74,13 +85,9 @@ func LicenseAuth(cfg config.LicenseAuthConfig, store *redisstate.LicenseStore) f
 				return
 			}
 
-			claims, err := verifyLicenseToken(rawToken, keys)
+			claims, err := verifyLicenseToken(rawToken, keys, cfg)
 			if err != nil {
-				if isManagedRequest(r) {
-					models.WriteError(w, models.ErrUnauthorized("Invalid managed service token"))
-					return
-				}
-				next.ServeHTTP(w, r)
+				models.WriteError(w, models.ErrUnauthorized("Invalid managed service token"))
 				return
 			}
 
@@ -96,20 +103,24 @@ func LicenseAuth(cfg config.LicenseAuthConfig, store *redisstate.LicenseStore) f
 
 			ctx := context.WithValue(r.Context(), licenseAuthContextKey{}, true)
 			ctx = context.WithValue(ctx, licenseClaimsContextKey{}, claims)
-			next.ServeHTTP(w, r.WithContext(ctx))
+
+			meter := &usageMeterResponseWriter{ResponseWriter: w}
+			next.ServeHTTP(meter, r.WithContext(ctx))
+
+			if store != nil && cfg.MonthlyUsageLimit > 0 && meter.status >= 200 && meter.status < 300 {
+				if err := store.IncrMonthlyUsage(claims.LicenseID); err != nil {
+					slog.Warn("license_usage_charge_failed",
+						"license_id", claims.LicenseID,
+						"err", err.Error(),
+					)
+				}
+			}
 		})
 	}
 }
 
-func isManagedRequest(r *http.Request) bool {
-	if r.Method != http.MethodPost || r.URL.Path != "/v1/chat/completions" {
-		return false
-	}
-	model, err := readRequestModel(r)
-	if err != nil {
-		return false
-	}
-	return serviceForModel(model) != ""
+func isManagedEndpoint(r *http.Request) bool {
+	return r.Method == http.MethodPost && r.URL.Path == "/v1/chat/completions"
 }
 
 func authorizeRuntimeState(claims *licenseClaims, cfg config.LicenseAuthConfig, store *redisstate.LicenseStore) *models.APIError {
@@ -121,6 +132,14 @@ func authorizeRuntimeState(claims *licenseClaims, cfg config.LicenseAuthConfig, 
 	}
 
 	if cfg.RuntimeStateRequired {
+		grantActive, err := store.GrantActive(claims.LicenseID, claims.AuthorizationVersion)
+		if err != nil {
+			return models.ErrServiceUnavailable("license runtime state unavailable")
+		}
+		if !grantActive {
+			return models.ErrForbidden("license grant is not active")
+		}
+
 		sessionActive, err := store.SessionActive(claims.JTI)
 		if err != nil {
 			return models.ErrServiceUnavailable("license runtime state unavailable")
@@ -144,13 +163,41 @@ func authorizeRuntimeState(claims *licenseClaims, cfg config.LicenseAuthConfig, 
 		return models.ErrTooManyRequests("license rate limit exceeded")
 	}
 
-	if allowed, err := store.AllowMonthlyUsage(claims.LicenseID, cfg.MonthlyUsageLimit); err != nil {
+	if allowed, err := store.PeekMonthlyUsage(claims.LicenseID, cfg.MonthlyUsageLimit); err != nil {
 		return models.ErrServiceUnavailable("license usage state unavailable")
 	} else if !allowed {
 		return models.ErrForbidden("license usage limit exceeded")
 	}
 
 	return nil
+}
+
+type usageMeterResponseWriter struct {
+	http.ResponseWriter
+	status  int
+	written bool
+}
+
+func (w *usageMeterResponseWriter) WriteHeader(status int) {
+	if !w.written {
+		w.status = status
+		w.written = true
+	}
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *usageMeterResponseWriter) Write(b []byte) (int, error) {
+	if !w.written {
+		w.status = http.StatusOK
+		w.written = true
+	}
+	return w.ResponseWriter.Write(b)
+}
+
+func (w *usageMeterResponseWriter) Flush() {
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
 }
 
 func IsLicenseAuthorized(ctx context.Context) bool {
@@ -176,6 +223,22 @@ func GetLicenseClaims(ctx context.Context) *LicenseClaims {
 	}
 }
 
+func withLicenseAuthDefaults(cfg config.LicenseAuthConfig) config.LicenseAuthConfig {
+	if cfg.Issuer == "" {
+		cfg.Issuer = "https://licenses.futureagi.com"
+	}
+	if cfg.Audience == "" {
+		cfg.Audience = "futureagi-agentcc-gateway"
+	}
+	if cfg.TokenType == "" {
+		cfg.TokenType = "futureagi-managed-service-token"
+	}
+	if cfg.ClockSkewSeconds == 0 {
+		cfg.ClockSkewSeconds = 300
+	}
+	return cfg
+}
+
 func buildLicensePublicKeyMap(cfg config.LicenseAuthConfig) map[string]*rsa.PublicKey {
 	keys := make(map[string]*rsa.PublicKey)
 	if cfg.PublicKey != "" {
@@ -194,7 +257,7 @@ func buildLicensePublicKeyMap(cfg config.LicenseAuthConfig) map[string]*rsa.Publ
 	return keys
 }
 
-func verifyLicenseToken(raw string, keys map[string]*rsa.PublicKey) (*licenseClaims, error) {
+func verifyLicenseToken(raw string, keys map[string]*rsa.PublicKey, cfg config.LicenseAuthConfig) (*licenseClaims, error) {
 	parts := strings.Split(raw, ".")
 	if len(parts) != 3 {
 		return nil, errors.New("invalid token")
@@ -238,8 +301,35 @@ func verifyLicenseToken(raw string, keys map[string]*rsa.PublicKey) (*licenseCla
 	if err := json.Unmarshal(payloadBytes, &claims); err != nil {
 		return nil, err
 	}
-	if claims.ExpiresAt <= time.Now().Unix() {
+
+	now := time.Now().Unix()
+	skew := int64(cfg.ClockSkewSeconds)
+	if skew < 0 {
+		return nil, errors.New("invalid license token clock skew")
+	}
+	if claims.Type != cfg.TokenType {
+		return nil, errors.New("invalid license token type")
+	}
+	if claims.Issuer != cfg.Issuer {
+		return nil, errors.New("invalid license token issuer")
+	}
+	if claims.Audience != cfg.Audience {
+		return nil, errors.New("invalid license token audience")
+	}
+	if claims.IssuedAt <= 0 || claims.IssuedAt > now+skew {
+		return nil, errors.New("invalid license token issued-at time")
+	}
+	if claims.NotBefore <= 0 || claims.NotBefore > now+skew {
+		return nil, errors.New("license token not yet valid")
+	}
+	if claims.ExpiresAt <= now-skew || claims.ExpiresAt <= claims.NotBefore {
 		return nil, errors.New("license token expired")
+	}
+	if claims.LicenseID == "" || claims.InstanceID == "" || claims.JTI == "" {
+		return nil, errors.New("license token identity claims are required")
+	}
+	if claims.AuthorizationVersion <= 0 {
+		return nil, errors.New("license token authorization version is required")
 	}
 	if claims.Scope != "enterprise" {
 		return nil, errors.New("invalid license token scope")
@@ -248,26 +338,24 @@ func verifyLicenseToken(raw string, keys map[string]*rsa.PublicKey) (*licenseCla
 }
 
 func authorizeManagedRequest(r *http.Request, claims *licenseClaims) error {
-	if r.Method != http.MethodPost || r.URL.Path != "/v1/chat/completions" {
-		return nil
+	if !isManagedEndpoint(r) {
+		return errors.New("managed service token is not valid for this endpoint")
 	}
 
 	model, err := readRequestModel(r)
 	if err != nil {
 		return err
 	}
+	if !contains(claims.Models, model) {
+		return fmt.Errorf("model %q not included in token scope", model)
+	}
 
 	service := serviceForModel(model)
 	if service == "" {
-		// Non-managed models (Vertex, Bedrock, etc.) are allowed for any
-		// valid enterprise token — the gateway handles provider routing.
-		return nil
+		return fmt.Errorf("model %q is not a managed service model", model)
 	}
 	if !contains(claims.Services, service) {
 		return fmt.Errorf("service %q not included in token scope", service)
-	}
-	if !contains(claims.Models, model) {
-		return fmt.Errorf("model %q not included in token scope", model)
 	}
 	return nil
 }

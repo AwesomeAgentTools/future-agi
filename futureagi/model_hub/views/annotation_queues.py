@@ -2856,22 +2856,6 @@ def _check_annotation_queue_create_limit(org, workspace=None):
         raise
 
 
-def _review_workflow_entitlement_denial(request):
-    try:
-        from ee.usage.services.entitlements import Entitlements
-    except ImportError:
-        return None
-
-    org = getattr(request, "organization", None) or request.user.organization
-    feat_check = Entitlements.check_feature(
-        str(org.id),
-        "has_review_workflow",
-    )
-    if not feat_check.allowed:
-        return feat_check.reason
-    return None
-
-
 class AnnotationQueuePagination(ExtendedPageNumberPagination):
     def get_page_size(self, request):
         if self.page_size_query_param in request.query_params:
@@ -3008,16 +2992,6 @@ class AnnotationQueueViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelVie
         try:
             serializer.is_valid(raise_exception=True)
 
-            from tfc.ee_gating import (
-                EEFeature,
-                check_ee_feature,
-            )
-
-            requires_review = _is_truthy(
-                serializer.validated_data.get("requires_review", False)
-            )
-            if requires_review:
-                check_ee_feature(EEFeature.REVIEW_WORKFLOW, org_id=str(org.id))
             _check_annotation_queue_create_limit(
                 org, getattr(request, "workspace", None)
             )
@@ -3046,15 +3020,6 @@ class AnnotationQueueViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelVie
             return self._gm.forbidden_response(
                 "Only queue managers can update queue settings."
             )
-
-        requires_review_requested = request.data.get("requires_review")
-        if requires_review_requested is not None and _is_truthy(
-            requires_review_requested
-        ):
-            from tfc.ee_gating import EEFeature, check_ee_feature
-
-            org = getattr(request, "organization", None) or request.user.organization
-            check_ee_feature(EEFeature.REVIEW_WORKFLOW, org_id=str(org.id))
 
         try:
             return super().update(request, *args, **kwargs)
@@ -6814,10 +6779,6 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
     @action(detail=False, methods=["post"], url_path="bulk-review")
     def bulk_review(self, request, queue_id=None):
         """Approve or send back multiple pending-review items."""
-        entitlement_denial = _review_workflow_entitlement_denial(request)
-        if entitlement_denial:
-            return self._gm.forbidden_response(entitlement_denial)
-
         if not _has_queue_role(
             queue_id,
             request.user,
@@ -6969,10 +6930,6 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
     @action(detail=True, methods=["post"], url_path="review")
     def review_item(self, request, queue_id=None, pk=None):
         """Approve, request changes, or leave reviewer feedback on an item."""
-        entitlement_denial = _review_workflow_entitlement_denial(request)
-        if entitlement_denial:
-            return self._gm.forbidden_response(entitlement_denial)
-
         # Verify requesting user has reviewer or manager role
         if not _has_queue_role(
             queue_id,

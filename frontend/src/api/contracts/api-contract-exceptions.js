@@ -6,10 +6,4 @@ export const API_CONTRACT_EXCEPTION_STATUSES = Object.freeze({
 
 // Keep this manifest empty unless an API is intentionally outside the generated
 // Management API contract. New frontend API calls must use apiPath(...).
-export const API_CONTRACT_EXCEPTIONS = Object.freeze({
-  "/api/capabilities/": {
-    status: API_CONTRACT_EXCEPTION_STATUSES.ENTERPRISE_CONTRACT_PENDING,
-    owner: "enterprise-licensing",
-    reason: "Capabilities endpoint added before API contract regeneration.",
-  },
-});
+export const API_CONTRACT_EXCEPTIONS = Object.freeze({});

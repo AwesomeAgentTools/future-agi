@@ -23,9 +23,14 @@ license_auth:
   #       ...
   #       -----END PUBLIC KEY-----
 
-  # When true, the gateway requires Redis-backed license_session and
-  # license_instance keys to be active. Fail closed if Redis is unavailable.
-  runtime_state_required: false
+  issuer: "https://licenses.futureagi.com"
+  audience: "futureagi-agentcc-gateway"
+  token_type: "futureagi-managed-service-token"
+  clock_skew_seconds: 300
+
+  # Managed authorization always checks grant, session, and instance state.
+  # Redis failures deny the request.
+  runtime_state_required: true
 
   # Per-license rate limit (requests per minute). 0 = unlimited.
   rate_limit_rpm: 0

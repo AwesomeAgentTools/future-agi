@@ -79,6 +79,7 @@ test-results/
 **/.codex-tmp/
 .playwright-mcp/
 **/.playwright-mcp/
+ee
 ee.local-leftover/
 
 # Documentation (not needed in image)

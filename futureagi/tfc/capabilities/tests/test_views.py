@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from importlib import reload
 from types import SimpleNamespace
+from unittest.mock import patch
 
+import pytest
+from django.urls import Resolver404, clear_url_caches, resolve
 from rest_framework.test import APIRequestFactory
 
 from tfc.capabilities import service
@@ -64,3 +68,26 @@ def test_capabilities_view_hides_license_details_for_non_admin_user():
     assert response.status_code == 200
     assert "license" not in response.data
     assert "instance_id" not in response.data
+
+
+def test_self_hosted_routes_expose_status_not_control_plane():
+    import tfc.urls
+
+    try:
+        with patch(
+            "tfc.deployment_telemetry.config.is_cloud_deployment",
+            return_value=False,
+        ):
+            urls = reload(tfc.urls)
+            clear_url_caches()
+            assert resolve("/api/capabilities/", urlconf=urls).view_name == "capabilities"
+            for path in (
+                "/usage/ee/licenses/",
+                "/v1/self-hosted/activations",
+                "/v1/internal/licenses",
+            ):
+                with pytest.raises(Resolver404):
+                    resolve(path, urlconf=urls)
+    finally:
+        reload(tfc.urls)
+        clear_url_caches()

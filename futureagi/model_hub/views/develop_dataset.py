@@ -15154,12 +15154,6 @@ class CreateKnowledgeBaseView(APIView):
                 if not ent_check.allowed:
                     return self._gm.forbidden_response(ent_check.reason)
 
-                if Entitlements is not None:
-                    feat_check = Entitlements.check_feature(
-                        str(org.id), "has_knowledge_base"
-                    )
-                    if not feat_check.allowed:
-                        return self._gm.forbidden_response(feat_check.reason)
                 entitlements_checked = True
             except ImportError:
                 pass
@@ -15288,21 +15282,6 @@ class CreateKnowledgeBaseView(APIView):
                 return self._gm.bad_request(
                     get_error_message("KNOWLEDGE_BASE_NOT_FOUND")
                 )
-
-            try:
-                try:
-                    from ee.usage.services.entitlements import Entitlements
-                except ImportError:
-                    Entitlements = None
-
-                if Entitlements is not None:
-                    feat_check = Entitlements.check_feature(
-                        str(org.id), "has_knowledge_base"
-                    )
-                    if not feat_check.allowed:
-                        return self._gm.forbidden_response(feat_check.reason)
-            except ImportError:
-                pass
 
             file_names = {file.name for file in files}
             if len(file_names) != len(files):

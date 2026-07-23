@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import logging
 
-from rest_framework import serializers, status
+from drf_yasg.utils import swagger_auto_schema
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from tfc.capabilities import service
+from tfc.capabilities.contracts import CapabilitiesResponseSerializer
 from tfc.capabilities.registry import FEATURE_REGISTRY
 from tfc.licensing.types import (
     DeploymentFlavor,
@@ -22,6 +23,7 @@ logger = logging.getLogger(__name__)
 class CapabilitiesView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @swagger_auto_schema(responses={200: CapabilitiesResponseSerializer})
     def get(self, request):
         org = getattr(request, "organization", None)
         org_id = str(org.id) if org else None
@@ -53,7 +55,9 @@ class CapabilitiesView(APIView):
             response_data["license"] = self._get_license_details()
             response_data["instance_id"] = self._get_instance_id()
 
-        return Response(response_data)
+        serializer = CapabilitiesResponseSerializer(data=response_data)
+        serializer.is_valid(raise_exception=True)
+        return Response(serializer.data)
 
     def _get_license_state(self) -> LicenseState:
         snapshot = service.get_license_snapshot()
@@ -103,34 +107,3 @@ class CapabilitiesView(APIView):
         except Exception:
             logger.debug("capabilities_view_membership_check_failed", exc_info=True)
         return user.is_staff
-
-
-class LicenseDetailView(APIView):
-    """Self-hosted license info — reads from the locally validated JWT."""
-
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request):
-        snapshot = service.get_license_snapshot()
-        if snapshot is None or snapshot.state in (
-            LicenseState.MISSING,
-            LicenseState.NOT_APPLICABLE,
-        ):
-            return Response(
-                {"status": True, "result": {"licenses": []}},
-            )
-
-        license_entry = {
-            "id": snapshot.license_id or "",
-            "customer_name": snapshot.issued_to or "",
-            "band": snapshot.band or "",
-            "billing_interval": "annual",
-            "features": sorted(snapshot.features),
-            "max_traces_monthly": snapshot.limits.get("traces_monthly", -1),
-            "max_gateway_monthly": snapshot.limits.get("gateway_requests_monthly", -1),
-            "issued_at": snapshot.issued_at.isoformat() if snapshot.issued_at else None,
-            "expires_at": snapshot.expires_at.isoformat() if snapshot.expires_at else None,
-            "status": snapshot.state.value,
-        }
-
-        return Response({"status": True, "result": {"licenses": [license_entry], "read_only": True}})

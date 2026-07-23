@@ -61,7 +61,8 @@ class TestDelegation:
             check_ee_feature(EEFeature.SCIM, org_id="org_1")
 
     def test_oss_baseline_always_passes(self):
-        check_ee_feature(EEFeature.KNOWLEDGE_BASE, org_id="org_1")
+        check_ee_feature("knowledge_base", org_id="org_1")
+        check_ee_feature("review_workflow", org_id="org_1")
 
     def test_activity_raises_application_error(self):
         from temporalio.exceptions import ApplicationError

@@ -92,7 +92,7 @@ const BillingPageV2 = lazyWithRetry(
   () => import("src/sections/settings/BillingV2/BillingPage"),
 );
 const LicensePage = lazyWithRetry(
-  () => import("src/sections/settings/EELicenses/EELicensesPage"),
+  () => import("src/sections/settings/License/LicensePage"),
 );
 const ProfileSettings = lazyWithRetry(
   () => import("src/pages/dashboard/settings/ProfileSettings"),

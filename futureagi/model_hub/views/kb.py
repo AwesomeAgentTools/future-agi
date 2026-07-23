@@ -67,11 +67,6 @@ class KnowledgeBaseViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewS
         reject_unknown_fields=True,
     )
     def create(self, request: Request, *args: Any, **kwargs: Any) -> Response:
-        from tfc.ee_gating import EEFeature, check_ee_feature
-
-        org = getattr(request, "organization", None) or request.user.organization
-        check_ee_feature(EEFeature.KNOWLEDGE_BASE, org_id=str(org.id))
-
         try:
             serializer = self.get_serializer(data=request.validated_data)
             serializer.is_valid(raise_exception=True)

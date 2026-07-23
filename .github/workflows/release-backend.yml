@@ -64,7 +64,7 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and push
+      - name: Build and push OSS image
         uses: docker/build-push-action@v5
         with:
           context: ${{ env.CONTEXT }}
@@ -76,5 +76,13 @@ jobs:
             ${{ env.IMAGE }}:${{ steps.version.outputs.version }}
             ${{ env.IMAGE }}:${{ steps.version.outputs.minor }}
             ${{ env.IMAGE }}:latest
-          cache-from: type=gha,scope=backend
-          cache-to: type=gha,scope=backend,mode=max
+          cache-from: type=gha,scope=backend-oss
+          cache-to: type=gha,scope=backend-oss,mode=max
+
+      - name: Verify OSS image boundary
+        env:
+          OSS_IMAGE: ${{ env.IMAGE }}:${{ steps.version.outputs.version }}
+        run: |
+          set -eu
+          docker pull "$OSS_IMAGE"
+          ./scripts/verify-image-contents.sh "${{ steps.version.outputs.version }}" oss

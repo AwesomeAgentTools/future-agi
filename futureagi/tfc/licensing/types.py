@@ -101,6 +101,9 @@ class DenialReason(str, Enum):
     # Cloud-specific
     PLAN_FEATURE_MISSING = "PLAN_FEATURE_MISSING"
 
+    # Runtime compatibility
+    LICENSE_VERSION_UNSUPPORTED = "LICENSE_VERSION_UNSUPPORTED"
+
 
 @dataclass(frozen=True)
 class LicenseSnapshot:
@@ -121,6 +124,7 @@ class LicenseSnapshot:
     features: frozenset[str] = field(default_factory=frozenset)
     limits: dict[str, int] = field(default_factory=dict)
     max_instances: int | None = None
+    min_version: str | None = None
     issued_at: datetime | None = None
     expires_at: datetime | None = None
     grace_ends_at: datetime | None = None
