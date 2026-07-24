@@ -3847,8 +3847,11 @@ class TraceView(BaseModelViewSetMixin, ModelViewSet):
         #      common-case typed attributes (gen_ai.* keys for LLM spans).
         # We SELECT all three and reconstruct the flat dict on the Python
         # side, matching the pattern used by the trace-tree fetch above
-        # (~line 1195). `FINAL` collapses ReplacingMergeTree duplicates;
-        # the `idx_id` bloom filter keeps the PREWHERE scan cheap.
+        # (~line 1195). Version dedup uses `ORDER BY _version DESC LIMIT 1 BY id`,
+        # not `FINAL`: bare `FINAL` (without use_skip_indexes_if_final=1) disables
+        # the `idx_id` skip index and full-scans the table. `is_deleted = 0` filters
+        # before the version-pick — page ids already came from an is_deleted=0
+        # keyset scan, so a tombstone-latest row can't surface here.
         page_rows = result.data[:page_size]
         span_ids = [
             str(row.get("span_id", "")) for row in page_rows if row.get("span_id")
