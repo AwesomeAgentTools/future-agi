@@ -6873,14 +6873,13 @@ class TestVoiceCallListPhase1bMigration:
             "_list_voice_calls_clickhouse references the legacy CDC mirror; "
             "the Phase 1b query must read from the v2 `spans` table."
         )
-        # Narrow the `_peerdb_is_deleted` ban to the Phase 1b block, found
-        # by anchoring on the unique `attributes_extra AS span_attributes`
-        # projection and slicing forward to the next `analytics.execute_ch_query`
-        # call. Anything inside that slice belongs to the Phase 1b query.
-        anchor = "attributes_extra AS span_attributes"
+        # Narrow the `_peerdb_is_deleted` ban to the Phase 1b block, found by
+        # anchoring on the unique `AS span_attributes` projection and slicing
+        # forward. Anything inside that slice belongs to the Phase 1b query.
+        anchor = "AS span_attributes"
         assert anchor in src, (
-            "Phase 1b query no longer projects `attributes_extra AS "
-            "span_attributes`; this regression test needs a new anchor."
+            "Phase 1b query no longer projects `span_attributes`; "
+            "this regression test needs a new anchor."
         )
         start = src.index(anchor)
         phase_1b_block = src[start : start + 600]
@@ -6890,28 +6889,24 @@ class TestVoiceCallListPhase1bMigration:
         )
 
     def test_phase_1b_reads_v2_spans_table(self):
-        """Phase 1b must read v2 `spans` and dedupe versions WITHOUT `FINAL`.
+        """Phase 1b must read v2 `spans` FINAL with the skip-index setting.
 
-        `FROM spans` is the v2 table (not the legacy CDC mirror). Dedup is
-        done via `ORDER BY _version DESC LIMIT 1 BY id`, not `FINAL`: `FINAL`
-        disables the `idx_id` skip index and full-scans the table (~194M rows)
-        to fetch one page. The version-pick is the equivalent dedup contract.
+        `FROM spans FINAL` dedupes ReplacingMergeTree versions; bare `FINAL`
+        disables the `idx_id` skip index and full-scans the table (~194M rows),
+        so it MUST be paired with `use_skip_indexes_if_final = 1` (the
+        CHSpanReader idiom) to prune the scan.
         """
         import re
 
         src = self._voice_list_source()
-        # Reads the v2 `spans` table (not `tracer_observation_span`).
+        # Reads the v2 `spans FINAL` (not the legacy `tracer_observation_span`).
         assert re.search(
-            r"FROM\s+spans\b", src
-        ), "_list_voice_calls_clickhouse must hydrate from the v2 `spans` table."
-        # No `FINAL` in the hot Phase 1b query — it defeats the skip index.
-        assert "FROM spans FINAL" not in src, (
-            "Phase 1b must not use `FINAL` — it disables the idx_id skip index "
-            "and full-scans `spans`. Dedupe via `ORDER BY _version DESC LIMIT 1 BY id`."
-        )
-        # ReplacingMergeTree dedup via keyset version-pick.
-        assert "ORDER BY _version DESC" in src and "LIMIT 1 BY id" in src, (
-            "Phase 1b must dedupe versions via `ORDER BY _version DESC LIMIT 1 BY id`."
+            r"FROM\s+spans\s+FINAL", src
+        ), "_list_voice_calls_clickhouse must hydrate from v2 `spans FINAL`."
+        # FINAL without the setting full-scans; the setting re-enables idx_id.
+        assert "use_skip_indexes_if_final = 1" in src, (
+            "Phase 1b `FINAL` must set `use_skip_indexes_if_final = 1`, else it "
+            "disables the idx_id skip index and full-scans `spans`."
         )
         assert "is_deleted = 0" in src
 
@@ -6924,7 +6919,9 @@ class TestVoiceCallListPhase1bMigration:
         `span_attributes` because nothing fell into the overflow tier.
         """
         src = self._voice_list_source()
-        assert "attributes_extra AS span_attributes" in src
+        # attributes_extra is projected (via the call_logs-stripping rebuild) as
+        # span_attributes; the typed Maps come back alongside it.
+        assert "attributes_extra" in src and "AS span_attributes" in src
         assert "attrs_string" in src
         assert "attrs_number" in src
         assert "attrs_bool" in src
@@ -6945,19 +6942,27 @@ class TestVoiceCallListPhase1bMigration:
         assert "bool(v)" in src
 
     def test_phase_1b_scopes_by_project_and_drops_call_logs(self):
-        """Phase 1b must scope by `project_id` and drop `call_logs` at read.
+        """Phase 1b must scope by `project_id` and drop `call_logs` from BOTH cols.
 
-        `project_id` in the WHERE lets the primary key prune the page's parts
-        (paired with the no-FINAL dedup). `call_logs` (avg ~900 KiB/row) is
-        detail-only bloat the FE never reads — dropped via `mapFilter` so it's
-        never fetched. `raw_log` is kept: process_raw_logs still needs it.
+        `project_id` in the WHERE lets the primary key prune the page's parts.
+        `call_logs` (avg ~900 KiB/row) is detail-only bloat the FE never reads,
+        and it lands in `attrs_string` (collector) OR `attributes_extra`
+        (backfill) — so it's stripped from both at read: `mapFilter` on the Map
+        and a `JSONExtractKeysAndValuesRaw` rebuild on the JSON overflow.
+        `raw_log` is kept: process_raw_logs still needs it.
         """
         src = self._voice_list_source()
         assert "project_id = %(project_id)s" in src, (
             "Phase 1b must scope by project_id so the primary key can prune."
         )
+        # attrs_string Map strip.
         assert "mapFilter" in src and "call_logs" in src, (
             "Phase 1b must exclude `call_logs` from attrs_string at read time."
+        )
+        # attributes_extra JSON-overflow strip (backfill cohort).
+        assert "JSONExtractKeysAndValuesRaw" in src, (
+            "Phase 1b must also strip `call_logs` from attributes_extra so the "
+            "backfill cohort doesn't ship the blob CH->backend."
         )
 
     def test_voice_call_list_strips_heavy_payload_keys(self):

@@ -3845,13 +3845,15 @@ class TraceView(BaseModelViewSetMixin, ModelViewSet):
         #      typed-Map classifier.
         #   2. `attrs_string` / `attrs_number` / `attrs_bool` Maps — the
         #      common-case typed attributes (gen_ai.* keys for LLM spans).
-        # We SELECT all three and reconstruct the flat dict on the Python
-        # side, matching the pattern used by the trace-tree fetch above
-        # (~line 1195). Version dedup uses `ORDER BY _version DESC LIMIT 1 BY id`,
-        # not `FINAL`: bare `FINAL` (without use_skip_indexes_if_final=1) disables
-        # the `idx_id` skip index and full-scans the table. `is_deleted = 0` filters
-        # before the version-pick — page ids already came from an is_deleted=0
-        # keyset scan, so a tombstone-latest row can't surface here.
+        # We SELECT all three and reconstruct the flat dict on the Python side,
+        # matching the pattern used by the trace-tree fetch above (~line 1195).
+        # Dedup via `FINAL` + `use_skip_indexes_if_final = 1` (the CHSpanReader
+        # idiom): bare `FINAL` without the setting disables the `idx_id` skip
+        # index and full-scans the table; with it the skip index prunes.
+        # The ~900 KB `call_logs` blob lands in `attrs_string` (collector path,
+        # a JSON string) or in `attributes_extra` (backfill path, a list in the
+        # JSON overflow) — strip it from both at read so it's never transferred.
+        # `raw_log` / `metrics_data` stay (still read downstream).
         page_rows = result.data[:page_size]
         span_ids = [
             str(row.get("span_id", "")) for row in page_rows if row.get("span_id")
@@ -3860,13 +3862,17 @@ class TraceView(BaseModelViewSetMixin, ModelViewSet):
         if span_ids:
             attrs_result = analytics.execute_ch_query(
                 "SELECT id, provider, "
-                "attributes_extra AS span_attributes, "
+                "concat('{', arrayStringConcat(arrayMap("
+                "kv -> concat('\"', kv.1, '\":', kv.2), "
+                "arrayFilter(kv -> kv.1 != 'call_logs', "
+                "JSONExtractKeysAndValuesRaw(attributes_extra))), ','), '}') "
+                "AS span_attributes, "
                 "mapFilter((k, v) -> k != 'call_logs', attrs_string) AS attrs_string, "
                 "attrs_number, attrs_bool "
-                "FROM spans "
+                "FROM spans FINAL "
                 "PREWHERE id IN %(span_ids)s AND project_id = %(project_id)s "
                 "WHERE is_deleted = 0 "
-                "ORDER BY _version DESC LIMIT 1 BY id",
+                "SETTINGS use_skip_indexes_if_final = 1",
                 {"span_ids": tuple(span_ids), "project_id": str(project_id)},
                 timeout_ms=10000,
             )
