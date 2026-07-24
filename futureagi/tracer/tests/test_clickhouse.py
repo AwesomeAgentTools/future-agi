@@ -6908,7 +6908,19 @@ class TestVoiceCallListPhase1bMigration:
             "Phase 1b `FINAL` must set `use_skip_indexes_if_final = 1`, else it "
             "disables the idx_id skip index and full-scans `spans`."
         )
-        assert "is_deleted = 0" in src
+        # The Phase-1b block must NOT carry `is_deleted = 0`: with the skip-index
+        # setting it prunes tombstone granules before the FINAL merge and
+        # resurrects deleted spans (the two-arg ReplacingMergeTree engine already
+        # drops tombstones under FINAL). See `_FINAL_SKIP_INDEX_SETTINGS`. Slice
+        # the block so the page/count queries — which legitimately keep
+        # `is_deleted = 0` — don't trip this.
+        start = src.index("AS span_attributes")
+        phase_1b_block = src[start : start + 400]
+        assert "is_deleted = 0" not in phase_1b_block, (
+            "Phase 1b must NOT pair `is_deleted = 0` with "
+            "`use_skip_indexes_if_final = 1` — resurrection bug "
+            "(see _FINAL_SKIP_INDEX_SETTINGS)."
+        )
 
     def test_phase_1b_selects_typed_map_columns_for_reconstruction(self):
         """The Phase 1b query must SELECT the typed Maps + attributes_extra.
@@ -6919,12 +6931,13 @@ class TestVoiceCallListPhase1bMigration:
         `span_attributes` because nothing fell into the overflow tier.
         """
         src = self._voice_list_source()
-        # attributes_extra is projected (via the call_logs-stripping rebuild) as
-        # span_attributes; the typed Maps come back alongside it.
-        assert "attributes_extra" in src and "AS span_attributes" in src
-        assert "attrs_string" in src
-        assert "attrs_number" in src
-        assert "attrs_bool" in src
+        # Pin fragments unique to the SQL SELECT (not the docstring/comment or the
+        # Python fallback `arow.get("attrs_string")`), so dropping a Map from the
+        # query actually fails this test.
+        assert "AS span_attributes" in src  # attributes_extra rebuild alias
+        assert "AS attrs_string" in src  # mapFilter alias
+        assert "attrs_number, attrs_bool" in src  # SELECT column-list tail
+        assert "attributes_extra" in src  # the rebuild reads the overflow column
 
     def test_phase_1b_python_fallback_merges_typed_maps(self):
         """Python-side: when `attributes_extra` is empty, fall back to Maps.

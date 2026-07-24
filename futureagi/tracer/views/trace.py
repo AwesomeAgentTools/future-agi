@@ -3849,7 +3849,12 @@ class TraceView(BaseModelViewSetMixin, ModelViewSet):
         # matching the pattern used by the trace-tree fetch above (~line 1195).
         # Dedup via `FINAL` + `use_skip_indexes_if_final = 1` (the CHSpanReader
         # idiom): bare `FINAL` without the setting disables the `idx_id` skip
-        # index and full-scans the table; with it the skip index prunes.
+        # index and full-scans the table; with it the skip index prunes. NB: no
+        # `is_deleted = 0` predicate — the two-arg ReplacingMergeTree(_version,
+        # is_deleted) engine already drops tombstones under FINAL, and pairing
+        # that predicate with the setting arms a resurrection bug (the is_deleted
+        # minmax index prunes tombstone granules before the merge). See
+        # `_FINAL_SKIP_INDEX_SETTINGS` in services/clickhouse/v2/span_reader.py.
         # The ~900 KB `call_logs` blob lands in `attrs_string` (collector path,
         # a JSON string) or in `attributes_extra` (backfill path, a list in the
         # JSON overflow) — strip it from both at read so it's never transferred.
@@ -3871,7 +3876,6 @@ class TraceView(BaseModelViewSetMixin, ModelViewSet):
                 "attrs_number, attrs_bool "
                 "FROM spans FINAL "
                 "PREWHERE id IN %(span_ids)s AND project_id = %(project_id)s "
-                "WHERE is_deleted = 0 "
                 "SETTINGS use_skip_indexes_if_final = 1",
                 {"span_ids": tuple(span_ids), "project_id": str(project_id)},
                 timeout_ms=10000,
