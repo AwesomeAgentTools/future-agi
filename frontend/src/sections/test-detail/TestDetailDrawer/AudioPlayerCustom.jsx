@@ -56,20 +56,44 @@ export const StereoMultiTrackPlayer = ({
 
   const assistantUrl = useStereo ? stereoAssistant : recordings?.assistant;
   const customerUrl = useStereo ? stereoCustomer : recordings?.customer;
+
+  // Combined-only providers mix both speakers into one mono track and expose no
+  // stereo or per-channel audio to split, so there is nothing to lay out on two
+  // rows. Render the single mix instead of waiting on two channel tracks that
+  // never resolve — the player gates readiness on every track loading.
+  const combinedOnly =
+    !useStereo && !assistantUrl && !customerUrl && Boolean(recordings?.combined);
+
   const trackUrls = useMemo(
-    () => [
-      {
-        url: customerUrl,
-        color: customerColor,
-        name: "Customer Audio",
-      },
-      {
-        url: assistantUrl,
-        color: assistantColor,
-        name: "Assistant Audio",
-      },
+    () =>
+      combinedOnly
+        ? [
+            {
+              url: recordings?.combined,
+              color: assistantColor,
+              name: "Call Audio",
+            },
+          ]
+        : [
+            {
+              url: customerUrl,
+              color: customerColor,
+              name: "Customer Audio",
+            },
+            {
+              url: assistantUrl,
+              color: assistantColor,
+              name: "Assistant Audio",
+            },
+          ],
+    [
+      combinedOnly,
+      recordings?.combined,
+      customerUrl,
+      assistantUrl,
+      customerColor,
+      assistantColor,
     ],
-    [customerUrl, assistantUrl, customerColor, assistantColor],
   );
 
   if (useStereo && stereoLoading) {
