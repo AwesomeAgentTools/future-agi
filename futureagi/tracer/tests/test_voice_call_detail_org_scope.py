@@ -6,6 +6,11 @@ the user is currently acting in, injected from ``X-Organization-Id``), not the
 organization stored on the user row. A user whose active organization differs
 from their home organization owns projects the user-row check cannot see, and
 every lookup 404s — which strands the drawer on its list-row stub.
+
+Scope note: the test client injects ``request.organization`` straight from the
+header, so these cases pin the view's *scoping* behaviour only. That the header
+itself cannot name an organization the user has no membership in is enforced
+upstream in authentication and covered by ``accounts.tests.test_multi_org_auth``.
 """
 
 import uuid
