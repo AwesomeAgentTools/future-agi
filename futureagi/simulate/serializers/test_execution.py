@@ -17,6 +17,7 @@ from simulate.models import (
 )
 from simulate.serializers.chat_message import ChatMessageSerializer
 from simulate.utils.eval_summary import iter_live_eval_outputs
+from simulate.utils.test_execution_utils import canonical_scenario_column_name
 from tracer.serializers.filters import (
     StrictInputSerializer,
     filter_list_query_param_field,
@@ -451,8 +452,7 @@ class CallExecutionDetailSerializer(serializers.ModelSerializer):
         return row_session_id_map.get(str(row_id)) if row_id else None
 
     def get_recordings(self, obj):
-        """Return provider recording URLs from stored provider payload (no external API calls).
-        Skipped when detail_mode=False (list view) to reduce response size."""
+        """Return combined/stereo/customer/assistant URLs; model fields first, provider_call_data fallback."""
         if not self.context.get("detail_mode", True):
             return {}
 
@@ -467,18 +467,34 @@ class CallExecutionDetailSerializer(serializers.ModelSerializer):
         if hasattr(obj, "provider_call_data") and isinstance(
             obj.provider_call_data, dict
         ):
-            if len(obj.provider_call_data.keys()) == 1:
-                provider_payload = next(iter(obj.provider_call_data.values()))
-            else:
-                # Prefer VAPI payload when present (current tooling support)
-                provider_payload = obj.provider_call_data.get(
-                    ProviderChoices.VAPI.value
-                )
+            provider_payload = obj.provider_call_data.get(
+                ProviderChoices.VAPI.value
+            )
 
-        recordings = None
-        if provider_payload and provider_payload.get("recording"):
-            recordings = provider_payload.get("recording")
-        elif VoiceServiceManager is not None:
+        # Shortcut dict from the provider payload's "recording" sub-object.
+        shortcut = {}
+        if isinstance(provider_payload, dict):
+            raw_shortcut = provider_payload.get("recording")
+            if isinstance(raw_shortcut, dict):
+                shortcut = raw_shortcut
+
+        recordings: dict[str, str] = {}
+        # Model fields (FAGI-rehosted S3 URLs) win, then the provider shortcut.
+        combined = obj.recording_url or shortcut.get("combined")
+        if combined:
+            recordings["combined"] = combined
+        stereo = obj.stereo_recording_url or shortcut.get("stereo")
+        if stereo:
+            recordings["stereo"] = stereo
+        if shortcut.get("customer"):
+            recordings["customer"] = shortcut["customer"]
+        if shortcut.get("assistant"):
+            recordings["assistant"] = shortcut["assistant"]
+
+        # Fall back to the VoiceServiceManager resolution when no URLs are present.
+        if not recordings:
+            if VoiceServiceManager is None:
+                return {}
             vsm = VoiceServiceManager(system_voice_provider=ProviderChoices.VAPI)
             recordings = vsm.get_recording_urls(provider_payload) or {}
 
@@ -834,7 +850,7 @@ class CallExecutionDetailSerializer(serializers.ModelSerializer):
         """Get scenario columns data based on scenario type"""
         # Handle both model instances and dictionaries (from grouping)
         if hasattr(obj, "call_metadata"):
-            call_metadata = obj.call_metadata
+            call_metadata = obj.call_metadata or {}
         else:
             call_metadata = obj.get("call_metadata") if isinstance(obj, dict) else {}
 
@@ -902,12 +918,13 @@ class CallExecutionDetailSerializer(serializers.ModelSerializer):
                         persona_data = {}
                     cell_value = persona_data
 
-                scenario_data[str(dataset_column.id)] = {
+                canonical_name = canonical_scenario_column_name(dataset_column.name)
+                scenario_data[canonical_name] = {
                     "value": cell_value,
                     "visible": True,
                     "dataset_column_id": str(dataset_column.id),
                     "dataset_id": str(row.dataset.id),
-                    "column_name": dataset_column.name,
+                    "column_name": canonical_name,
                     "data_type": dataset_column.data_type,
                 }
         else:

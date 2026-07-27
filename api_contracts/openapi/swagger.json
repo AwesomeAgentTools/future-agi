@@ -18923,6 +18923,12 @@
                             "$ref": "#/definitions/QueueExportAnnotationsResponse"
                         }
                     },
+                    "413": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiTextErrorResponse"
+                        }
+                    },
                     "400": {
                         "description": "",
                         "schema": {
@@ -19904,6 +19910,18 @@
                         }
                     },
                     "404": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiTextErrorResponse"
+                        }
+                    },
+                    "413": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiTooLargeError"
+                        }
+                    },
+                    "503": {
                         "description": "",
                         "schema": {
                             "$ref": "#/definitions/ApiTextErrorResponse"
@@ -32641,8 +32659,60 @@
             "get": {
                 "operationId": "model-hub_eval-templates_usage_list",
                 "summary": "GET /model-hub/eval-templates/<id>/usage/",
-                "description": "Returns usage stats, chart data, and paginated eval logs.\nQuery params: page (0-based), page_size, period (30m|6h|1d|7d|30d|90d|180d|365d)",
-                "parameters": [],
+                "description": "Returns usage stats, chart data, and the paginated usage table.\nQuery params: page (0-based), page_size, period\n(30m|6h|1d|7d|30d|90d|180d|365d), optional start_date/end_date pair\n(overrides period — sent by the FE for Today / Yesterday / Custom).\n\nThe response is rendered through\n``EvalUsageStatsResponseResultSerializer(instance=...).data`` at the\nboundary so shape drift surfaces here instead of shipping silently.",
+                "parameters": [
+                    {
+                        "name": "page",
+                        "in": "query",
+                        "required": false,
+                        "type": "integer",
+                        "default": 0,
+                        "maximum": 10000,
+                        "minimum": 0
+                    },
+                    {
+                        "name": "page_size",
+                        "in": "query",
+                        "required": false,
+                        "type": "integer",
+                        "default": 25,
+                        "maximum": 100,
+                        "minimum": 1
+                    },
+                    {
+                        "name": "period",
+                        "in": "query",
+                        "required": false,
+                        "type": "string",
+                        "enum": [
+                            "30m",
+                            "6h",
+                            "1d",
+                            "7d",
+                            "30d",
+                            "90d",
+                            "180d",
+                            "365d"
+                        ],
+                        "default": "30d"
+                    },
+                    {
+                        "name": "start_date",
+                        "in": "query",
+                        "required": false,
+                        "type": "string",
+                        "format": "date-time",
+                        "x-nullable": true
+                    },
+                    {
+                        "name": "end_date",
+                        "in": "query",
+                        "required": false,
+                        "type": "string",
+                        "format": "date-time",
+                        "x-nullable": true
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "",
@@ -32689,7 +32759,9 @@
                 },
                 "tags": [
                     "model-hub"
-                ]
+                ],
+                "x-runtime-request-validation": true,
+                "x-runtime-response-validation": true
             },
             "parameters": [
                 {
@@ -35993,32 +36065,7 @@
                     "200": {
                         "description": "",
                         "schema": {
-                            "required": [
-                                "count",
-                                "results"
-                            ],
-                            "type": "object",
-                            "properties": {
-                                "count": {
-                                    "type": "integer"
-                                },
-                                "next": {
-                                    "type": "string",
-                                    "format": "uri",
-                                    "x-nullable": true
-                                },
-                                "previous": {
-                                    "type": "string",
-                                    "format": "uri",
-                                    "x-nullable": true
-                                },
-                                "results": {
-                                    "type": "array",
-                                    "items": {
-                                        "$ref": "#/definitions/Feedback"
-                                    }
-                                }
-                            }
+                            "$ref": "#/definitions/FeedbackTemplateResponse"
                         }
                     },
                     "default": {
@@ -51942,10 +51989,7 @@
                     "200": {
                         "description": "",
                         "schema": {
-                            "type": "array",
-                            "items": {
-                                "$ref": "#/definitions/TestExecutionItemResponse"
-                            }
+                            "$ref": "#/definitions/RunTestExecutionsResponse"
                         }
                     },
                     "404": {
@@ -58440,7 +58484,7 @@
         "/tracer/observation-span/root-spans/": {
             "get": {
                 "operationId": "tracer_observation-span_root_spans",
-                "description": "Given a list of trace_ids, return the root span ID for each trace.\nRoot span = the span where parent_span_id IS NULL for that trace.\n\nQuery param: trace_ids (repeated, e.g. ?trace_ids=<id>&trace_ids=<id>)",
+                "description": "Given a list of trace_ids, return the root span ID for each trace.\nRoot span = the span where parent_span_id IS NULL for that trace.\n\nQuery params (repeated): trace_ids (required,\n?trace_ids=<id>&trace_ids=<id>) + optional project_ids (prunes the CH\nscan). Response: { \"result\": { \"<trace_id>\": \"<span_id>\", ... } }",
                 "parameters": [
                     {
                         "name": "page",
@@ -58455,38 +58499,33 @@
                         "description": "Number of results to return per page.",
                         "required": false,
                         "type": "integer"
+                    },
+                    {
+                        "name": "trace_ids",
+                        "in": "query",
+                        "required": true,
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "minLength": 1
+                        }
+                    },
+                    {
+                        "name": "project_ids",
+                        "in": "query",
+                        "required": false,
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "minLength": 1
+                        }
                     }
                 ],
                 "responses": {
                     "200": {
                         "description": "",
                         "schema": {
-                            "required": [
-                                "count",
-                                "results"
-                            ],
-                            "type": "object",
-                            "properties": {
-                                "count": {
-                                    "type": "integer"
-                                },
-                                "next": {
-                                    "type": "string",
-                                    "format": "uri",
-                                    "x-nullable": true
-                                },
-                                "previous": {
-                                    "type": "string",
-                                    "format": "uri",
-                                    "x-nullable": true
-                                },
-                                "results": {
-                                    "type": "array",
-                                    "items": {
-                                        "$ref": "#/definitions/ObservationSpan"
-                                    }
-                                }
-                            }
+                            "$ref": "#/definitions/RootSpansResponse"
                         }
                     },
                     "default": {
@@ -58498,7 +58537,9 @@
                 },
                 "tags": [
                     "tracer"
-                ]
+                ],
+                "x-runtime-request-validation": true,
+                "x-runtime-response-validation": true
             },
             "parameters": []
         },
@@ -62504,32 +62545,19 @@
                     "200": {
                         "description": "",
                         "schema": {
-                            "required": [
-                                "count",
-                                "results"
-                            ],
-                            "type": "object",
-                            "properties": {
-                                "count": {
-                                    "type": "integer"
-                                },
-                                "next": {
-                                    "type": "string",
-                                    "format": "uri",
-                                    "x-nullable": true
-                                },
-                                "previous": {
-                                    "type": "string",
-                                    "format": "uri",
-                                    "x-nullable": true
-                                },
-                                "results": {
-                                    "type": "array",
-                                    "items": {
-                                        "$ref": "#/definitions/Trace"
-                                    }
-                                }
-                            }
+                            "$ref": "#/definitions/TraceObserveListResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiErrorResponse"
                         }
                     },
                     "default": {
@@ -62542,7 +62570,8 @@
                 "tags": [
                     "tracer"
                 ],
-                "x-runtime-request-validation": true
+                "x-runtime-request-validation": true,
+                "x-runtime-response-validation": true
             },
             "parameters": []
         },
@@ -77846,9 +77875,10 @@
                 },
                 "response_format": {
                     "title": "Response format",
-                    "description": "LLM output format: 'text' (plain text), 'json' (free-form JSON), 'json_schema' (structured with schema), UUID string (saved schema reference), or object with 'id' field (prompt playground format). See class docstring for details.",
+                    "description": "String or JSON object.",
                     "type": "object",
-                    "default": "text"
+                    "default": "text",
+                    "x-string-or-object": true
                 },
                 "response_schema": {
                     "title": "Response schema",
@@ -85979,7 +86009,9 @@
                 "value": {
                     "title": "Value",
                     "type": "object",
-                    "x-nullable": true
+                    "x-nullable": true,
+                    "x-json-value": true,
+                    "description": "Any valid JSON value."
                 }
             }
         },
@@ -86605,7 +86637,7 @@
                 "required": {
                     "title": "Required",
                     "type": "boolean",
-                    "default": true
+                    "default": false
                 }
             }
         },
@@ -88013,6 +88045,11 @@
                 },
                 "selection": {
                     "$ref": "#/definitions/Selection"
+                },
+                "project_id": {
+                    "title": "Project id",
+                    "type": "string",
+                    "format": "uuid"
                 }
             }
         },
@@ -88141,6 +88178,82 @@
                 },
                 "error": {
                     "$ref": "#/definitions/ApiSelectionTooLargeDetail"
+                }
+            }
+        },
+        "ApiTooLargeError": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "title": "Status",
+                    "type": "boolean",
+                    "default": false
+                },
+                "type": {
+                    "title": "Type",
+                    "type": "string",
+                    "enum": [
+                        "validation_error",
+                        "authentication_error",
+                        "payment_required",
+                        "entitlement_error",
+                        "permission_error",
+                        "not_found",
+                        "conflict",
+                        "client_error",
+                        "rate_limit",
+                        "server_error",
+                        "service_unavailable",
+                        "timeout",
+                        "api_error"
+                    ],
+                    "x-nullable": true
+                },
+                "code": {
+                    "title": "Code",
+                    "type": "string",
+                    "enum": [
+                        "export_too_large",
+                        "items_too_large"
+                    ]
+                },
+                "detail": {
+                    "title": "Detail",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "result": {
+                    "title": "Result",
+                    "type": "string",
+                    "minLength": 1,
+                    "x-nullable": true
+                },
+                "message": {
+                    "title": "Message",
+                    "type": "string",
+                    "minLength": 1,
+                    "x-nullable": true
+                },
+                "error": {
+                    "title": "Error",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "attr": {
+                    "title": "Attr",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "details": {
+                    "title": "Details",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "minLength": 1
+                        }
+                    }
                 }
             }
         },
@@ -90473,7 +90586,9 @@
                 },
                 "response_format": {
                     "title": "Response format",
-                    "type": "object"
+                    "type": "object",
+                    "x-string-or-object": true,
+                    "description": "String or JSON object."
                 },
                 "tool_choice": {
                     "title": "Tool choice",
@@ -93822,10 +93937,10 @@
                 },
                 "response_format": {
                     "title": "Response format",
-                    "description": "Any valid JSON value.",
+                    "description": "String or JSON object.",
                     "type": "object",
                     "x-nullable": true,
-                    "x-json-value": true
+                    "x-string-or-object": true
                 },
                 "tool_choice": {
                     "title": "Tool choice",
@@ -94185,6 +94300,69 @@
                 }
             }
         },
+        "SyntheticDatasetColumn": {
+            "required": [
+                "name",
+                "data_type",
+                "description",
+                "property"
+            ],
+            "type": "object",
+            "properties": {
+                "name": {
+                    "title": "Name",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "data_type": {
+                    "title": "Data type",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "description": {
+                    "title": "Description",
+                    "type": "string"
+                },
+                "property": {
+                    "title": "Property",
+                    "type": "object"
+                },
+                "skip": {
+                    "title": "Skip",
+                    "type": "boolean"
+                },
+                "is_new": {
+                    "title": "Is new",
+                    "type": "boolean"
+                }
+            }
+        },
+        "SyntheticDatasetPayload": {
+            "required": [
+                "description",
+                "objective",
+                "patterns"
+            ],
+            "type": "object",
+            "properties": {
+                "name": {
+                    "title": "Name",
+                    "type": "string"
+                },
+                "description": {
+                    "title": "Description",
+                    "type": "string"
+                },
+                "objective": {
+                    "title": "Objective",
+                    "type": "string"
+                },
+                "patterns": {
+                    "title": "Patterns",
+                    "type": "string"
+                }
+            }
+        },
         "SyntheticDatasetCreation": {
             "required": [
                 "num_rows",
@@ -94200,13 +94378,11 @@
                 "columns": {
                     "type": "array",
                     "items": {
-                        "type": "string",
-                        "x-nullable": true
+                        "$ref": "#/definitions/SyntheticDatasetColumn"
                     }
                 },
                 "dataset": {
-                    "title": "Dataset",
-                    "type": "object"
+                    "$ref": "#/definitions/SyntheticDatasetPayload"
                 },
                 "kb_id": {
                     "title": "Kb id",
@@ -95478,13 +95654,11 @@
                 "columns": {
                     "type": "array",
                     "items": {
-                        "type": "string",
-                        "x-nullable": true
+                        "$ref": "#/definitions/SyntheticDatasetColumn"
                     }
                 },
                 "dataset": {
-                    "title": "Dataset",
-                    "type": "object"
+                    "$ref": "#/definitions/SyntheticDatasetPayload"
                 },
                 "kb_id": {
                     "title": "Kb id",
@@ -95744,7 +95918,6 @@
                 "reason_column",
                 "is_numeric_eval",
                 "is_numeric_eval_percentage",
-                "eval_tag",
                 "metadata",
                 "choices_map"
             ],
@@ -95819,8 +95992,12 @@
                     "type": "boolean"
                 },
                 "eval_tag": {
-                    "title": "Eval tag",
-                    "type": "object"
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "minLength": 1
+                    },
+                    "default": []
                 },
                 "metadata": {
                     "title": "Metadata",
@@ -96384,12 +96561,11 @@
                 "columns": {
                     "type": "array",
                     "items": {
-                        "type": "object"
+                        "$ref": "#/definitions/SyntheticDatasetColumn"
                     }
                 },
                 "dataset": {
-                    "title": "Dataset",
-                    "type": "object"
+                    "$ref": "#/definitions/SyntheticDatasetPayload"
                 },
                 "kb_id": {
                     "title": "Kb id",
@@ -99379,6 +99555,26 @@
                 }
             }
         },
+        "EvalUsageNumberCell": {
+            "type": "object",
+            "properties": {
+                "cell_value": {
+                    "title": "Cell value",
+                    "type": "number",
+                    "x-nullable": true
+                }
+            }
+        },
+        "EvalUsageStringCell": {
+            "type": "object",
+            "properties": {
+                "cell_value": {
+                    "title": "Cell value",
+                    "type": "string",
+                    "x-nullable": true
+                }
+            }
+        },
         "EvalUsageFeedback": {
             "required": [
                 "id"
@@ -99392,7 +99588,7 @@
                 },
                 "value": {
                     "title": "Value",
-                    "type": "object",
+                    "type": "string",
                     "x-nullable": true
                 },
                 "explanation": {
@@ -99414,58 +99610,151 @@
             },
             "x-nullable": true
         },
-        "EvalUsageLogItem": {
+        "EvalUsageFeedbackCell": {
+            "type": "object",
+            "properties": {
+                "cell_value": {
+                    "$ref": "#/definitions/EvalUsageFeedback"
+                }
+            }
+        },
+        "EvalUsageWarningsCell": {
+            "type": "object",
+            "properties": {
+                "cell_value": {
+                    "type": "array",
+                    "items": {
+                        "type": "object"
+                    },
+                    "x-nullable": true
+                }
+            }
+        },
+        "EvalUsageLogItemDetail": {
+            "type": "object",
+            "properties": {
+                "input_variables": {
+                    "title": "Input variables",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    },
+                    "default": {},
+                    "x-nullable": true
+                },
+                "output": {
+                    "title": "Output",
+                    "type": "object",
+                    "x-nullable": true
+                },
+                "warnings": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "x-nullable": true
+                    },
+                    "default": []
+                },
+                "mappings": {
+                    "title": "Mappings",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    },
+                    "default": {},
+                    "x-nullable": true
+                },
+                "model": {
+                    "title": "Model",
+                    "type": "object",
+                    "x-nullable": true,
+                    "x-string-or-object": true,
+                    "description": "String or JSON object."
+                },
+                "version_id": {
+                    "title": "Version id",
+                    "type": "string",
+                    "minLength": 1,
+                    "x-nullable": true
+                },
+                "version_number": {
+                    "title": "Version number",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "children": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "x-nullable": true
+                    },
+                    "default": []
+                },
+                "aggregation_function": {
+                    "title": "Aggregation function",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "total_children": {
+                    "title": "Total children",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "completed_children": {
+                    "title": "Completed children",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "failed_children": {
+                    "title": "Failed children",
+                    "type": "integer",
+                    "x-nullable": true
+                }
+            }
+        },
+        "EvalUsageTableRow": {
             "required": [
-                "id",
-                "input",
-                "status",
-                "created_at",
-                "detail"
+                "row_id"
             ],
             "type": "object",
             "properties": {
-                "id": {
-                    "title": "Id",
+                "row_id": {
+                    "title": "Row id",
                     "type": "string",
-                    "format": "uuid"
-                },
-                "input": {
-                    "title": "Input",
-                    "type": "string"
-                },
-                "result": {
-                    "title": "Result",
-                    "type": "string"
+                    "minLength": 1
                 },
                 "score": {
-                    "title": "Score",
-                    "type": "number",
-                    "x-nullable": true
+                    "$ref": "#/definitions/EvalUsageNumberCell"
+                },
+                "result": {
+                    "$ref": "#/definitions/EvalUsageStringCell"
+                },
+                "input": {
+                    "$ref": "#/definitions/EvalUsageStringCell"
                 },
                 "reason": {
-                    "title": "Reason",
-                    "type": "string"
-                },
-                "status": {
-                    "title": "Status",
-                    "type": "string",
-                    "minLength": 1
+                    "$ref": "#/definitions/EvalUsageStringCell"
                 },
                 "source": {
-                    "title": "Source",
-                    "type": "string"
+                    "$ref": "#/definitions/EvalUsageStringCell"
                 },
-                "created_at": {
-                    "title": "Created at",
-                    "type": "string",
-                    "minLength": 1
-                },
-                "detail": {
-                    "title": "Detail",
-                    "type": "object"
+                "version": {
+                    "$ref": "#/definitions/EvalUsageStringCell"
                 },
                 "feedback": {
-                    "$ref": "#/definitions/EvalUsageFeedback"
+                    "$ref": "#/definitions/EvalUsageFeedbackCell"
+                },
+                "created_at": {
+                    "$ref": "#/definitions/EvalUsageStringCell"
+                },
+                "status": {
+                    "$ref": "#/definitions/EvalUsageStringCell"
+                },
+                "warnings": {
+                    "$ref": "#/definitions/EvalUsageWarningsCell"
+                },
+                "detail": {
+                    "$ref": "#/definitions/EvalUsageLogItemDetail"
                 },
                 "composite": {
                     "title": "Composite",
@@ -99476,23 +99765,17 @@
                     "type": "boolean",
                     "x-nullable": true
                 }
-            }
+            },
+            "additionalProperties": true
         },
-        "EvalUsageLogs": {
+        "EvalUsagePagination": {
             "required": [
-                "items",
                 "total",
                 "page",
                 "page_size"
             ],
             "type": "object",
             "properties": {
-                "items": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/EvalUsageLogItem"
-                    }
-                },
                 "total": {
                     "title": "Total",
                     "type": "integer"
@@ -99513,6 +99796,7 @@
                 "is_composite",
                 "stats",
                 "chart",
+                "table",
                 "logs"
             ],
             "type": "object",
@@ -99535,8 +99819,14 @@
                         "$ref": "#/definitions/EvalUsageChartPoint"
                     }
                 },
+                "table": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/EvalUsageTableRow"
+                    }
+                },
                 "logs": {
-                    "$ref": "#/definitions/EvalUsageLogs"
+                    "$ref": "#/definitions/EvalUsagePagination"
                 }
             }
         },
@@ -101358,6 +101648,14 @@
                 "multi_choice": {
                     "title": "Multi choice",
                     "type": "boolean"
+                },
+                "choice_scores": {
+                    "title": "Choice scores",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "number"
+                    },
+                    "x-nullable": true
                 }
             }
         },
@@ -102037,6 +102335,70 @@
                 }
             }
         },
+        "FeedbackTemplateResult": {
+            "required": [
+                "eval_name",
+                "user_eval_name"
+            ],
+            "type": "object",
+            "properties": {
+                "output_type": {
+                    "title": "Output type",
+                    "type": "string",
+                    "minLength": 1,
+                    "x-nullable": true
+                },
+                "eval_description": {
+                    "title": "Eval description",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "eval_name": {
+                    "title": "Eval name",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "user_eval_name": {
+                    "title": "User eval name",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "choices": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "multi_choice": {
+                    "title": "Multi choice",
+                    "type": "boolean"
+                },
+                "choice_scores": {
+                    "title": "Choice scores",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "number"
+                    },
+                    "x-nullable": true
+                }
+            }
+        },
+        "FeedbackTemplateResponse": {
+            "required": [
+                "status",
+                "result"
+            ],
+            "type": "object",
+            "properties": {
+                "status": {
+                    "title": "Status",
+                    "type": "boolean"
+                },
+                "result": {
+                    "$ref": "#/definitions/FeedbackTemplateResult"
+                }
+            }
+        },
         "ColumnValuesRequest": {
             "required": [
                 "dataset_id",
@@ -102260,6 +102622,10 @@
                 "choices": {
                     "title": "Choices",
                     "type": "object"
+                },
+                "multi_choice": {
+                    "title": "Multi choice",
+                    "type": "boolean"
                 },
                 "check_internet": {
                     "title": "Check internet",
@@ -105827,13 +106193,15 @@
                 },
                 "prompt_config_snapshot": {
                     "title": "Prompt config snapshot",
-                    "type": "string",
+                    "description": "\nGet prompt_config_snapshot with backward compatibility for modelDetail.\nIf modelDetail is missing from configuration, generate it from the model name.\n",
+                    "type": "object",
                     "readOnly": true
                 },
                 "template_name": {
                     "title": "Template name",
                     "type": "string",
-                    "readOnly": true
+                    "readOnly": true,
+                    "minLength": 1
                 },
                 "original_template": {
                     "title": "Original template",
@@ -105844,11 +106212,12 @@
                 "metadata": {
                     "title": "Metadata",
                     "type": "object",
+                    "readOnly": true,
                     "x-nullable": true
                 },
                 "variable_names": {
                     "title": "Variable names",
-                    "type": "string",
+                    "type": "object",
                     "readOnly": true
                 },
                 "evaluation_results": {
@@ -105859,6 +106228,7 @@
                 "evaluation_configs": {
                     "title": "Evaluation configs",
                     "type": "object",
+                    "readOnly": true,
                     "x-nullable": true
                 },
                 "created_at": {
@@ -105888,7 +106258,7 @@
                 },
                 "labels": {
                     "title": "Labels",
-                    "type": "string",
+                    "type": "object",
                     "readOnly": true
                 },
                 "placeholders": {
@@ -106482,8 +106852,9 @@
                 },
                 "response_format": {
                     "title": "Response format",
-                    "description": "JSON schema for response format if required. Defaults to None.",
-                    "type": "object"
+                    "description": "String or JSON object.",
+                    "type": "object",
+                    "x-string-or-object": true
                 },
                 "tool_choice": {
                     "title": "Tool choice",
@@ -110635,12 +111006,13 @@
                 },
                 "provider": {
                     "title": "Provider",
-                    "description": "Voice provider. One of: vapi, retell, eleven_labs, others.",
+                    "description": "Voice provider. One of: vapi, retell, eleven_labs, bland, others.",
                     "type": "string",
                     "enum": [
                         "vapi",
                         "retell",
                         "eleven_labs",
+                        "bland",
                         "others"
                     ],
                     "default": "vapi"
@@ -113216,10 +113588,8 @@
                 },
                 "description": {
                     "title": "Description",
-                    "description": "Description of the test run",
                     "type": "string",
                     "readOnly": true,
-                    "minLength": 1,
                     "x-nullable": true
                 },
                 "agent_definition": {
@@ -113233,20 +113603,12 @@
                 "agent_version": {
                     "title": "Agent version",
                     "type": "object",
-                    "additionalProperties": {
-                        "type": "string",
-                        "x-nullable": true
-                    },
                     "readOnly": true,
                     "x-nullable": true
                 },
                 "agent_definition_detail": {
                     "title": "Agent definition detail",
                     "type": "object",
-                    "additionalProperties": {
-                        "type": "string",
-                        "x-nullable": true
-                    },
                     "readOnly": true,
                     "x-nullable": true
                 },
@@ -113278,10 +113640,6 @@
                 "prompt_template_detail": {
                     "title": "Prompt template detail",
                     "type": "object",
-                    "additionalProperties": {
-                        "type": "string",
-                        "x-nullable": true
-                    },
                     "readOnly": true,
                     "x-nullable": true
                 },
@@ -113296,10 +113654,6 @@
                 "prompt_version_detail": {
                     "title": "Prompt version detail",
                     "type": "object",
-                    "additionalProperties": {
-                        "type": "string",
-                        "x-nullable": true
-                    },
                     "readOnly": true,
                     "x-nullable": true
                 },
@@ -113317,11 +113671,7 @@
                 "scenarios_detail": {
                     "type": "array",
                     "items": {
-                        "type": "object",
-                        "additionalProperties": {
-                            "type": "string",
-                            "x-nullable": true
-                        }
+                        "type": "object"
                     },
                     "readOnly": true
                 },
@@ -113347,10 +113697,6 @@
                 "simulator_agent_detail": {
                     "title": "Simulator agent detail",
                     "type": "object",
-                    "additionalProperties": {
-                        "type": "string",
-                        "x-nullable": true
-                    },
                     "readOnly": true,
                     "x-nullable": true
                 },
@@ -115763,13 +116109,7 @@
                 "model": {
                     "title": "Model",
                     "type": "string",
-                    "enum": [
-                        "turing_large",
-                        "turing_small",
-                        "protect",
-                        "protect_flash",
-                        "turing_flash"
-                    ],
+                    "maxLength": 255,
                     "x-nullable": true
                 },
                 "status": {
@@ -116073,9 +116413,71 @@
                 },
                 "kb_id": {
                     "title": "Kb id",
-                    "description": "UUID of a knowledge base to use for grounding. Pass null to clear.",
+                    "description": "UUID of a knowledge base to use for grounding. Pass null to clear. Switching template_id without providing an explicit kb_id will clear the KB association.",
                     "type": "string",
                     "format": "uuid",
+                    "x-nullable": true
+                },
+                "template_id": {
+                    "title": "Template id",
+                    "description": "UUID of the evaluation template to switch to.",
+                    "type": "string",
+                    "format": "uuid"
+                },
+                "filters": {
+                    "description": "Updated canonical filter list to restrict which test results are evaluated.",
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "column_id": {
+                                "type": "string",
+                                "description": "Column or attribute id to filter on."
+                            },
+                            "display_name": {
+                                "type": "string",
+                                "description": "Optional UI label for chips and saved views."
+                            },
+                            "source": {
+                                "type": "string",
+                                "description": "Optional source surface for mixed-source filters, for example traces, datasets, or simulation."
+                            },
+                            "output_type": {
+                                "type": "string",
+                                "description": "Optional metric output type metadata used by eval and annotation filters."
+                            },
+                            "filter_config": {
+                                "type": "object",
+                                "properties": {
+                                    "filter_type": {
+                                        "type": "string",
+                                        "description": "Canonical field type, for example text, number, boolean, datetime, categorical, thumbs, annotator, or array."
+                                    },
+                                    "filter_op": {
+                                        "type": "string",
+                                        "description": "Canonical operator from api_contracts/filter_contract.json, for example equals, not_equals, in, not_in, between, not_between, is_null, or is_not_null."
+                                    },
+                                    "filter_value": {
+                                        "description": "Scalar, list, range tuple, boolean, or null depending on filter_op and filter_type."
+                                    },
+                                    "col_type": {
+                                        "type": "string",
+                                        "description": "Column family such as SYSTEM_METRIC, SPAN_ATTRIBUTE, EVAL_METRIC, ANNOTATION, or NORMAL."
+                                    }
+                                },
+                                "required": [
+                                    "filter_type",
+                                    "filter_op"
+                                ],
+                                "additionalProperties": false
+                            }
+                        },
+                        "required": [
+                            "column_id",
+                            "filter_config"
+                        ],
+                        "additionalProperties": false
+                    },
                     "x-nullable": true
                 },
                 "name": {
@@ -116338,6 +116740,37 @@
                     "type": "string",
                     "readOnly": true,
                     "minLength": 1
+                }
+            }
+        },
+        "RunTestExecutionsResponse": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "title": "Count",
+                    "type": "integer",
+                    "readOnly": true
+                },
+                "next": {
+                    "title": "Next",
+                    "type": "string",
+                    "readOnly": true,
+                    "minLength": 1,
+                    "x-nullable": true
+                },
+                "previous": {
+                    "title": "Previous",
+                    "type": "string",
+                    "readOnly": true,
+                    "minLength": 1,
+                    "x-nullable": true
+                },
+                "results": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/TestExecutionItemResponse"
+                    },
+                    "readOnly": true
                 }
             }
         },
@@ -117225,6 +117658,23 @@
                 }
             }
         },
+        "DatasetColumnConfigEntry": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "title": "Name",
+                    "type": "string",
+                    "readOnly": true,
+                    "minLength": 1
+                },
+                "type": {
+                    "title": "Type",
+                    "type": "string",
+                    "readOnly": true,
+                    "minLength": 1
+                }
+            }
+        },
         "ScenarioDetailResponse": {
             "type": "object",
             "properties": {
@@ -117358,6 +117808,15 @@
                     "title": "Dataset rows",
                     "type": "integer",
                     "readOnly": true
+                },
+                "dataset_column_config": {
+                    "title": "Dataset column config",
+                    "type": "object",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/DatasetColumnConfigEntry"
+                    },
+                    "readOnly": true,
+                    "x-nullable": true
                 }
             }
         },
@@ -118920,13 +119379,7 @@
                 "model": {
                     "title": "Model",
                     "type": "string",
-                    "enum": [
-                        "turing_large",
-                        "turing_small",
-                        "protect",
-                        "protect_flash",
-                        "turing_flash"
-                    ],
+                    "maxLength": 255,
                     "x-nullable": true
                 },
                 "eval_group": {
@@ -119955,6 +120408,60 @@
                             },
                             "description": "Observation span type(s), for example llm, tool, or chain."
                         },
+                        "filters": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "column_id": {
+                                        "type": "string",
+                                        "description": "Column or attribute id to filter on."
+                                    },
+                                    "display_name": {
+                                        "type": "string",
+                                        "description": "Optional UI label for chips and saved views."
+                                    },
+                                    "source": {
+                                        "type": "string",
+                                        "description": "Optional source surface for mixed-source filters, for example traces, datasets, or simulation."
+                                    },
+                                    "output_type": {
+                                        "type": "string",
+                                        "description": "Optional metric output type metadata used by eval and annotation filters."
+                                    },
+                                    "filter_config": {
+                                        "type": "object",
+                                        "properties": {
+                                            "filter_type": {
+                                                "type": "string",
+                                                "description": "Canonical field type, for example text, number, boolean, datetime, categorical, thumbs, annotator, or array."
+                                            },
+                                            "filter_op": {
+                                                "type": "string",
+                                                "description": "Canonical operator from api_contracts/filter_contract.json, for example equals, not_equals, in, not_in, between, not_between, is_null, or is_not_null."
+                                            },
+                                            "filter_value": {
+                                                "description": "Scalar, list, range tuple, boolean, or null depending on filter_op and filter_type."
+                                            },
+                                            "col_type": {
+                                                "type": "string",
+                                                "description": "Column family such as SYSTEM_METRIC, SPAN_ATTRIBUTE, EVAL_METRIC, ANNOTATION, or NORMAL."
+                                            }
+                                        },
+                                        "required": [
+                                            "filter_type",
+                                            "filter_op"
+                                        ],
+                                        "additionalProperties": false
+                                    }
+                                },
+                                "required": [
+                                    "column_id",
+                                    "filter_config"
+                                ],
+                                "additionalProperties": false
+                            }
+                        },
                         "span_attributes_filters": {
                             "type": "array",
                             "items": {
@@ -120248,6 +120755,60 @@
                                 "type": "string"
                             },
                             "description": "Observation span type(s), for example llm, tool, or chain."
+                        },
+                        "filters": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "column_id": {
+                                        "type": "string",
+                                        "description": "Column or attribute id to filter on."
+                                    },
+                                    "display_name": {
+                                        "type": "string",
+                                        "description": "Optional UI label for chips and saved views."
+                                    },
+                                    "source": {
+                                        "type": "string",
+                                        "description": "Optional source surface for mixed-source filters, for example traces, datasets, or simulation."
+                                    },
+                                    "output_type": {
+                                        "type": "string",
+                                        "description": "Optional metric output type metadata used by eval and annotation filters."
+                                    },
+                                    "filter_config": {
+                                        "type": "object",
+                                        "properties": {
+                                            "filter_type": {
+                                                "type": "string",
+                                                "description": "Canonical field type, for example text, number, boolean, datetime, categorical, thumbs, annotator, or array."
+                                            },
+                                            "filter_op": {
+                                                "type": "string",
+                                                "description": "Canonical operator from api_contracts/filter_contract.json, for example equals, not_equals, in, not_in, between, not_between, is_null, or is_not_null."
+                                            },
+                                            "filter_value": {
+                                                "description": "Scalar, list, range tuple, boolean, or null depending on filter_op and filter_type."
+                                            },
+                                            "col_type": {
+                                                "type": "string",
+                                                "description": "Column family such as SYSTEM_METRIC, SPAN_ATTRIBUTE, EVAL_METRIC, ANNOTATION, or NORMAL."
+                                            }
+                                        },
+                                        "required": [
+                                            "filter_type",
+                                            "filter_op"
+                                        ],
+                                        "additionalProperties": false
+                                    }
+                                },
+                                "required": [
+                                    "column_id",
+                                    "filter_config"
+                                ],
+                                "additionalProperties": false
+                            }
                         },
                         "span_attributes_filters": {
                             "type": "array",
@@ -122379,7 +122940,8 @@
                     "type": "string",
                     "enum": [
                         "vapi",
-                        "retell"
+                        "retell",
+                        "bland"
                     ]
                 },
                 "api_key": {
@@ -122423,7 +122985,8 @@
                     "type": "string",
                     "enum": [
                         "vapi",
-                        "retell"
+                        "retell",
+                        "bland"
                     ]
                 },
                 "assistant_id": {
@@ -122903,6 +123466,27 @@
                 },
                 "result": {
                     "$ref": "#/definitions/ObserveGraphDataResult"
+                }
+            }
+        },
+        "RootSpansResponse": {
+            "required": [
+                "result"
+            ],
+            "type": "object",
+            "properties": {
+                "status": {
+                    "title": "Status",
+                    "type": "boolean",
+                    "default": true
+                },
+                "result": {
+                    "title": "Result",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string",
+                        "minLength": 1
+                    }
                 }
             }
         },
@@ -125342,6 +125926,160 @@
                 "tags": {
                     "title": "Tags",
                     "type": "object"
+                }
+            }
+        },
+        "TraceObserveListMetadata": {
+            "required": [
+                "total_rows"
+            ],
+            "type": "object",
+            "properties": {
+                "total_rows": {
+                    "title": "Total rows",
+                    "type": "integer"
+                }
+            }
+        },
+        "TraceObserveColumnConfig": {
+            "required": [
+                "id",
+                "name",
+                "is_visible"
+            ],
+            "type": "object",
+            "properties": {
+                "id": {
+                    "title": "Id",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "name": {
+                    "title": "Name",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "is_visible": {
+                    "title": "Is visible",
+                    "type": "boolean"
+                },
+                "group_by": {
+                    "title": "Group by",
+                    "type": "string",
+                    "minLength": 1,
+                    "x-nullable": true
+                },
+                "output_type": {
+                    "title": "Output type",
+                    "type": "string",
+                    "minLength": 1,
+                    "x-nullable": true
+                },
+                "reverse_output": {
+                    "title": "Reverse output",
+                    "type": "boolean",
+                    "x-nullable": true
+                },
+                "annotation_label_type": {
+                    "title": "Annotation label type",
+                    "type": "string",
+                    "minLength": 1,
+                    "x-nullable": true
+                },
+                "choices": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "x-nullable": true
+                    },
+                    "x-nullable": true
+                },
+                "settings": {
+                    "title": "Settings",
+                    "type": "object",
+                    "x-nullable": true,
+                    "x-json-value": true,
+                    "description": "Any valid JSON value."
+                },
+                "choices_map": {
+                    "title": "Choices map",
+                    "type": "object",
+                    "x-nullable": true,
+                    "x-json-value": true,
+                    "description": "Any valid JSON value."
+                },
+                "eval_template_id": {
+                    "title": "Eval template id",
+                    "type": "string",
+                    "minLength": 1,
+                    "x-nullable": true
+                },
+                "annotators": {
+                    "title": "Annotators",
+                    "type": "object",
+                    "x-nullable": true,
+                    "x-json-value": true,
+                    "description": "Any valid JSON value."
+                },
+                "source_field": {
+                    "title": "Source field",
+                    "type": "string",
+                    "minLength": 1,
+                    "x-nullable": true
+                },
+                "parent_eval_id": {
+                    "title": "Parent eval id",
+                    "type": "string",
+                    "minLength": 1,
+                    "x-nullable": true
+                }
+            }
+        },
+        "TraceObserveListResult": {
+            "required": [
+                "metadata",
+                "table",
+                "config"
+            ],
+            "type": "object",
+            "properties": {
+                "metadata": {
+                    "$ref": "#/definitions/TraceObserveListMetadata"
+                },
+                "table": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": "object",
+                            "x-nullable": true,
+                            "x-json-value": true,
+                            "description": "Any valid JSON value."
+                        }
+                    }
+                },
+                "config": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/TraceObserveColumnConfig"
+                    }
+                }
+            }
+        },
+        "TraceObserveListResponse": {
+            "required": [
+                "status",
+                "result"
+            ],
+            "type": "object",
+            "properties": {
+                "status": {
+                    "title": "Status",
+                    "type": "boolean"
+                },
+                "result": {
+                    "$ref": "#/definitions/TraceObserveListResult"
                 }
             }
         },

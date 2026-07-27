@@ -582,7 +582,6 @@ class QueueItemSerializer(serializers.ModelSerializer):
                     source_id,
                     organization=organization,
                     workspace=workspace,
-                    allow_ch_fallback=True,
                 )
                 if source_obj:
                     # Store the soft id, not the FK object: a CH-resolved source
@@ -682,6 +681,10 @@ class AddItemsSerializer(StrictInputSerializer):
         required=False,
     )
     selection = SelectionSerializer(required=False)
+    # The project the enumerated items belong to (the add dialog is project-scoped, like
+    # filter mode). Lets the server scope the source-resolution reads to one tenant on
+    # the ClickHouse PK prefix; optional so existing clients keep working.
+    project_id = serializers.UUIDField(required=False)
 
     def validate_items(self, value):
         if not value:
@@ -752,7 +755,9 @@ class QueueDefaultRequestSerializer(StrictInputSerializer):
 
 class QueueLabelRequestSerializer(StrictInputSerializer):
     label_id = serializers.UUIDField()
-    required = serializers.BooleanField(required=False, default=True)
+    # Default off: adding a label makes it available to annotate with, not
+    # required. Required labels are a gated feature the caller opts into.
+    required = serializers.BooleanField(required=False, default=False)
 
 
 class QueueExportColumnMappingSerializer(StrictInputSerializer):

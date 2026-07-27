@@ -116,6 +116,7 @@ EVAL_TASK_FILTERS_SCHEMA = {
             "items": {"type": "string"},
             "description": "Observation span type(s), for example llm, tool, or chain.",
         },
+        "filters": FILTER_LIST_SCHEMA,
         "span_attributes_filters": FILTER_LIST_SCHEMA,
     },
     "additionalProperties": False,
@@ -516,10 +517,11 @@ class EvalTaskFiltersField(serializers.JSONField):
                     f"{key} must be a list of non-empty strings."
                 )
 
-        if "span_attributes_filters" in value:
-            value["span_attributes_filters"] = FilterListField().run_validation(
-                value["span_attributes_filters"]
-            )
+        for filter_list_key in ("filters", "span_attributes_filters"):
+            if filter_list_key in value:
+                value[filter_list_key] = FilterListField().run_validation(
+                    value[filter_list_key]
+                )
 
         return value
 

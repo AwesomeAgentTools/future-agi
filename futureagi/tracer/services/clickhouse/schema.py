@@ -72,9 +72,11 @@ _LEGACY_CDC_CHAIN_NAMES = (
     "tracer_trace",
     "tracer_enduser",
     "trace_session",
-    "tracer_eval_logger",
     "eval_metrics_hourly",
 )
+# tracer_eval_logger is deliberately NOT retired with the chain: the eval-config
+# discovery reads still query it (CH25_EVAL_LOGGER_TABLE), so the boot apply keeps
+# creating it and the PeerDB CDC mirror keeps filling it.
 
 # The legacy v1 ``spans`` DDL in this module conflicts with the v2 spans
 # schema applied by ``tracer/services/clickhouse/v2/schema/002_spans_v2.sql``.
@@ -328,6 +330,8 @@ CREATE TABLE IF NOT EXISTS tracer_eval_logger (
     -- Work-item state (mirror of EvalLogger.status / config_hash)
     status LowCardinality(String) DEFAULT 'completed',
     config_hash Nullable(String),
+    skipped_reason Nullable(String),
+    attempts Int32 DEFAULT 0,
 
     -- Explanation / metadata
     eval_explanation Nullable(String),
@@ -342,11 +346,16 @@ CREATE TABLE IF NOT EXISTS tracer_eval_logger (
 
     -- Soft-delete
     deleted UInt8 DEFAULT 0,
-    deleted_at Nullable(DateTime64(3)),
+    deleted_at Nullable(DateTime64(6)),
 
     -- Timestamps
-    created_at DateTime64(3),
-    updated_at DateTime64(3),
+    -- DateTime64(6) REQUIRED: PeerDB (v0.36.x) normalize writes epoch-micros
+    -- regardless of destination precision. With DateTime64(3) every synced row
+    -- landed ~year 58356 (1000x off), exploding the toYYYYMM partition key so
+    -- ReplacingMergeTree FINAL never deduped (2026-07-18 us2 incident). All
+    -- other PeerDB-mirrored tables already use (6).
+    created_at DateTime64(6),
+    updated_at DateTime64(6),
 
     -- PeerDB CDC meta-columns
     _peerdb_synced_at DateTime64(6),
@@ -1927,6 +1936,14 @@ POST_DDL_ALTERS: list[str] = [
     "status LowCardinality(String) DEFAULT 'completed'",
     "ALTER TABLE tracer_eval_logger ADD COLUMN IF NOT EXISTS "
     "config_hash Nullable(String)",
+    # skipped_reason / attempts exist on the PG source (EvalLogger work-item
+    # columns) and are in the PeerDB normalize INSERT column list; without them
+    # the CH normalize fails with "No such column ..." and the mirror never
+    # drains.
+    "ALTER TABLE tracer_eval_logger ADD COLUMN IF NOT EXISTS "
+    "skipped_reason Nullable(String)",
+    "ALTER TABLE tracer_eval_logger ADD COLUMN IF NOT EXISTS "
+    "attempts Int32 DEFAULT 0",
     # Strip the legacy 365d TTL from the v1 hourly rollup tables. The CREATE
     # strings above no longer declare TTL, but existing prod clusters carry
     # the original TTL on the live tables — these ALTERs remove it.

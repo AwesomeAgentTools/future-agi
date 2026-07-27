@@ -111,8 +111,12 @@ except ImportError:
     PhoneNumberService = None
     decide_processing_skip = None
 from simulate.temporal.activities.xl import (
+    PATH_MISSING,
     TRANSCRIPT_DOT_ALIASES,
-    _build_simulation_context_map,
+    assert_recording_slot_available,
+    build_simulation_context_map,
+    stringify_leaf,
+    walk_subject_path,
 )
 from simulate.utils.eval_summary import derive_kpi_output_type
 from simulate.utils.processing_outcomes import (
@@ -4615,13 +4619,6 @@ class TestExecutor:
                     transcript_data["voice_recording"] = s3_url
                     recording_object["combined"] = s3_url
 
-                if recording_object:
-                    call_execution.provider_call_data.get(
-                        self.system_voice_provider.value
-                    )["recording"] = recording_object
-                    fields_to_update.append("provider_call_data")
-                    needs_save = True
-
             # Save the call_execution if any URLs were converted
             if needs_save:
                 call_execution.save(update_fields=fields_to_update)
@@ -4690,7 +4687,9 @@ class TestExecutor:
                         f"Using fallback agent_version (latest_version) for call_execution {call_execution.id}"
                     )
 
-            context_map = _build_simulation_context_map(call_execution, agent_version)
+            context_map, subjects = build_simulation_context_map(
+                call_execution, agent_version
+            )
 
             logger.info(
                 f"Eval mapping validation for call_execution {call_execution.id}: "
@@ -4768,6 +4767,10 @@ class TestExecutor:
                                 f"in call_execution {call_execution.id}, using empty string"
                             )
                             updated_mapping[key] = ""
+                    elif (
+                        walked := walk_subject_path(subjects, value)
+                    ) is not PATH_MISSING:
+                        updated_mapping[key] = stringify_leaf(walked)
                     else:
                         # Build informative error message with column, dataset, and scenario details
                         column_name = None
@@ -4849,6 +4852,14 @@ class TestExecutor:
                         ] = StatusType.FAILED.value
                         call_execution.save(update_fields=["eval_outputs"])
                         raise ValueError(error_message)
+
+            # A recording variable that resolved empty (e.g. stereo on a
+            # combined-only provider) fails here with an actionable message
+            # instead of an opaque "No input received" from the eval engine.
+            for map_key, map_value in mapping.items():
+                assert_recording_slot_available(
+                    map_key, map_value, updated_mapping.get(map_key), transcript_data
+                )
 
             # Prepare config
             config = eval_config.config.copy() if eval_config.config else {}

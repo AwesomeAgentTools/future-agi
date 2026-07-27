@@ -116,10 +116,16 @@ from model_hub.models.develop_dataset import (
 from model_hub.models.develop_optimisation import (
     OptimizationDataset,
 )
-from model_hub.models.evals_metric import EvalTemplate, Feedback, UserEvalMetric
+from model_hub.models.evals_metric import (
+    EvalTemplate,
+    EvalTemplateVersion,
+    Feedback,
+    UserEvalMetric,
+)
 from model_hub.models.experiments import ExperimentDatasetTable, ExperimentsTable
 from model_hub.models.optimize_dataset import OptimizeDataset
 from model_hub.models.run_prompt import PromptVersion, RunPrompter
+from model_hub.selectors.feedback import resolve_feedback_template_data
 from model_hub.serializers.contracts import (
     MODEL_HUB_ERROR_RESPONSES,
     AddAsNewDatasetRequestSerializer,
@@ -185,6 +191,7 @@ from model_hub.serializers.develop_dataset import (
     CompareDatasetSerializer,
     DatasetSerializer,
     FeedbackSerializer,
+    FeedbackTemplateResponseSerializer,
     FileSerializer,
     KnowledgeBaseFileSerializer,
 )
@@ -225,6 +232,10 @@ from model_hub.services.derived_variable_service import (
 )
 from model_hub.tasks.develop_dataset import ingest_files_to_s3, remove_kb_files
 from model_hub.types import ConversionResult
+from model_hub.utils.annotation_queue_helpers import (
+    TEXT_FILTER_LOOKUPS,
+    or_text_filter_q,
+)
 from model_hub.utils.eval_reasons import (
     MIN_ROWS_FOR_CRITICAL_ISSUES,
     get_explanation_summary,
@@ -250,7 +261,6 @@ from model_hub.utils.synthetic_task_manager import SyntheticTaskManager
 from model_hub.utils.utils import contains_sql, get_diff
 from model_hub.views.eval_runner import EvaluationRunner
 from model_hub.views.run_prompt import PROVIDERS_WITH_JSON
-from model_hub.views.utils.constants import EVAL_OUTPUT_TYPES
 from model_hub.views.utils.evals import process_eval_for_single_row
 from model_hub.views.utils.utils import (
     get_recommendations,
@@ -281,6 +291,7 @@ from tfc.utils.storage import (
     download_json_from_s3,
     get_compare_local_dir,
     get_compare_metadata_path,
+    is_own_storage_url,
     upload_audio_to_s3,
     upload_audio_to_s3_duration,
     upload_compare_json_to_s3,
@@ -692,11 +703,10 @@ class AddRowsFromFile(CreateAPIView):
             if not dataset:
                 return self._gm.not_found(get_error_message("DATASET_NOT_FOUND"))
 
-            # Check file size (10 MB limit, matching UI constraint)
-            from model_hub.services.dataset_validators import MAX_FILE_SIZE_BYTES
+            from model_hub.constants import MAX_FILE_SIZE_BYTES, MAX_FILE_SIZE_MB
 
             if file.size > MAX_FILE_SIZE_BYTES:
-                return self._gm.bad_request("File size exceeds the 10 MB limit")
+                return self._gm.bad_request(f"File size exceeds the {MAX_FILE_SIZE_MB} MB limit")
 
             # Process the file
             data, error = FileProcessor.process_file(file_obj=file)
@@ -809,6 +819,32 @@ class AddRowsFromFile(CreateAPIView):
             else:
                 max_order = -1
 
+            # Per-import validation budget. SSRF is still enforced downstream
+            # at actual GET time by _ssrf_safe_get inside upload_*_to_s3; the
+            # HEAD is only a pre-flight nicety, so we skip it after N calls or
+            # when the URL points at our own S3 (upload_*_to_s3 no-op-links).
+            _MAX_VALIDATIONS = 100
+            validations_used = [0]
+            budget_exhausted_logged = [False]
+
+            def _maybe_validate(url_value, file_type):
+                if DatatypeConverter._is_own_s3_url(url_value):
+                    return
+                if validations_used[0] >= _MAX_VALIDATIONS:
+                    if not budget_exhausted_logged[0]:
+                        logger.warning(
+                            "add_rows_validation_budget_exhausted",
+                            budget=_MAX_VALIDATIONS,
+                            dataset_id=str(dataset_id),
+                        )
+                        budget_exhausted_logged[0] = True
+                    return
+                # Count the attempt BEFORE the call so a slow external host
+                # can't blow the budget by returning errors — otherwise the
+                # counter never advances and every row pays the full timeout.
+                validations_used[0] += 1
+                validate_file_url(url_value, file_type)
+
             for index, row in data.iterrows():
                 new_row = Row.objects.create(
                     id=str(uuid.uuid4()), dataset=dataset, order=max_order + 1 + index
@@ -822,6 +858,8 @@ class AddRowsFromFile(CreateAPIView):
 
                     if column.data_type == DataTypeChoices.IMAGE.value and value:
                         try:
+                            _maybe_validate(str(value), "image")
+
                             # Generate a unique image key using dataset_id
                             image_key = f"images/{dataset_id}/{uuid.uuid4()}"
                             # Upload to S3 and get URL
@@ -835,6 +873,8 @@ class AddRowsFromFile(CreateAPIView):
 
                     elif column.data_type == DataTypeChoices.AUDIO.value and value:
                         try:
+                            _maybe_validate(str(value), "audio")
+
                             audio_key = f"audio/{dataset_id}/{uuid.uuid4()}"
                             audio_url = upload_audio_to_s3(
                                 str(value), os.getenv("S3_FOR_DATA"), audio_key
@@ -1998,36 +2038,15 @@ class GetDatasetTableView(APIView):
                         )
                         continue
 
-                    filter_value = str(filter_value).lower()
-                    text_ops = {
-                        "contains": {"value__icontains": filter_value},
-                        "not_contains": {
-                            "value__icontains": filter_value,
-                            "negate": True,
-                        },
-                        "equals": {"value__iexact": filter_value},
-                        "not_equals": {
-                            "value__iexact": filter_value,
-                            "negate": True,
-                        },
-                        "starts_with": {"value__istartswith": filter_value},
-                        "ends_with": {"value__iendswith": filter_value},
-                    }
-
-                    if filter_op not in text_ops:
+                    condition = or_text_filter_q("value", filter_op, filter_value)
+                    if condition is None:
                         message = (
-                            "Invalid filter operation. \
-                            Allowed operations are: "
-                            + ", ".join(text_ops.keys())
+                            "Invalid filter operation. Allowed operations are: "
+                            + ", ".join(TEXT_FILTER_LOOKUPS)
                         )
                         error_messages.append(message)
                         raise ValueError(message)
-
-                    filter_kwargs = text_ops[filter_op]
-                    if filter_kwargs.pop("negate", False):
-                        cells = cells.filter(~Q(**filter_kwargs), deleted=False)
-                    else:
-                        cells = cells.filter(**filter_kwargs, deleted=False)
+                    cells = cells.filter(condition, deleted=False)
 
                 elif filter_type == "boolean":
                     filter_value = str(filter_value).lower()
@@ -6345,6 +6364,21 @@ class DatatypeConverter:
             # Catch any other unexpected errors
             raise ValueError(f"Failed to convert to JSON: {str(e)}") from e
 
+    _OWN_S3_BUCKETS = tuple(
+        m.strip()
+        for m in os.getenv(
+            "OWN_S3_BUCKETS",
+            "fi-customer-data,fi-customer-data-dev,fi-content,fi-content-dev",
+        ).split(",")
+        if m.strip()
+    )
+
+    @classmethod
+    def _is_own_s3_url(cls, value):
+        return any(
+            is_own_storage_url(value, bucket) for bucket in cls._OWN_S3_BUCKETS
+        )
+
     def _convert_cell_to_image(self, cell):
         """Convert to image - uploads to S3"""
         if self._is_default_empty_value(cell.value, self.new_data_type):
@@ -6352,7 +6386,6 @@ class DatatypeConverter:
 
         try:
             image_value = cell.value
-            is_s3_url = False
 
             # Handle JSON array with single element (e.g., from images -> image conversion)
             if isinstance(image_value, str) and image_value.strip().startswith("["):
@@ -6360,19 +6393,16 @@ class DatatypeConverter:
                     parsed = json.loads(image_value)
                     if isinstance(parsed, list) and len(parsed) == 1:
                         image_value = parsed[0]
-                        is_s3_url = (
-                            isinstance(image_value, str)
-                            and "fi-customer-data" in image_value
-                        )
                 except (json.JSONDecodeError, TypeError):
                     pass
 
-            # Always validate the URL, even if extracted from a JSON array
-            validate_file_url(str(image_value), "image")
-
-            # Skip re-upload only if it's already in our S3 bucket
-            if is_s3_url:
+            # Our own stored objects are linked as-is: re-validating them is
+            # redundant, and the HEAD would be SSRF-blocked outright on
+            # MinIO/private storage endpoints. External URLs are validated.
+            if self._is_own_s3_url(str(image_value)):
                 return image_value, {}
+
+            validate_file_url(str(image_value), "image")
 
             image_key = f"images/{self.dataset_id}/{uuid.uuid4()}"
             image_url = upload_image_to_s3(
@@ -6406,6 +6436,12 @@ class DatatypeConverter:
             uploaded_urls = []
             for img_value in images_list:
                 if img_value:
+                    # Same own-storage skip as the single-image path.
+                    if self._is_own_s3_url(str(img_value)):
+                        uploaded_urls.append(img_value)
+                        continue
+                    validate_file_url(str(img_value), "image")
+
                     image_key = f"images/{self.dataset_id}/{uuid.uuid4()}"
                     image_url = upload_image_to_s3(
                         str(img_value),
@@ -6871,7 +6907,8 @@ class GetEvalsListView(APIView):
         # correct behaviour at request time.
 
         if search_text:
-            eval_templates = eval_templates.filter(name__icontains=search_text)
+            from model_hub.utils.eval_list import normalize_search_for_name
+            eval_templates = eval_templates.filter(normalize_search_for_name(search_text))
 
         if validated_data.get("eval_tags"):
             eval_templates = eval_templates.filter(
@@ -7000,7 +7037,8 @@ class GetEvalsListView(APIView):
             )
 
         if search_text:
-            user_evals = user_evals.filter(name__icontains=search_text)
+            from model_hub.utils.eval_list import normalize_search_for_name
+            user_evals = user_evals.filter(normalize_search_for_name(search_text))
 
         if validated_data.get("eval_tags"):
             user_evals = user_evals.filter(
@@ -7051,7 +7089,8 @@ class GetEvalsListView(APIView):
         )
 
         if search_text:
-            eval_templates = eval_templates.filter(Q(name__icontains=search_text))
+            from model_hub.utils.eval_list import normalize_search_for_name
+            eval_templates = eval_templates.filter(normalize_search_for_name(search_text))
 
         if validated_data.get("eval_tags"):
             eval_templates = eval_templates.filter(
@@ -7110,7 +7149,8 @@ class GetEvalsListView(APIView):
             organization=organization, deleted=False, visible_ui=True
         )
         if search_text:
-            eval_templates = eval_templates.filter(Q(name__icontains=search_text))
+            from model_hub.utils.eval_list import normalize_search_for_name
+            eval_templates = eval_templates.filter(normalize_search_for_name(search_text))
 
         if validated_data.get("eval_tags"):
             eval_templates = eval_templates.filter(
@@ -7230,6 +7270,7 @@ class GetEvalConfigView(APIView):
                     template.config.get("config_params_option", {})
                 ),
                 "param_modalities": template.config.get("param_modalities", {}),
+                "multi_choice": bool(getattr(template, "multi_choice", False)),
                 "kb_id": None,
                 "error_localizer": template.error_localizer_enabled,
                 "api_key_available": (
@@ -7300,6 +7341,7 @@ class GetEvalConfigView(APIView):
                 ),
                 "param_modalities": template.config.get("param_modalities", {}),
                 "choices": choices,
+                "multi_choice": bool(getattr(template, "multi_choice", False)),
                 "check_internet": template.config.get("check_internet", False),
             }
 
@@ -7916,6 +7958,9 @@ class EditAndRunUserEvalView(APIView):
                         choices=template.choices,
                         multi_choice=template.multi_choice,
                         error_localizer_enabled=template.error_localizer_enabled,
+                        output_type_normalized=template.output_type_normalized,
+                        choice_scores=template.choice_scores,
+                        pass_threshold=template.pass_threshold,
                     )
                     new_config = template.config
                     runtime_config = normalize_eval_runtime_config(
@@ -7944,13 +7989,25 @@ class EditAndRunUserEvalView(APIView):
                     new_config = normalize_eval_runtime_config(
                         eval_metric.template.config, new_config
                     )
+                    from model_hub.utils.eval_prompt_variables import (
+                        sync_required_keys_from_prompt,
+                    )
+
+                    sync_required_keys_from_prompt(
+                        new_config.get("config"),
+                        mapping=new_config.get("mapping", {}),
+                    )
                     from model_hub.utils.eval_validators import (
                         get_required_mapping_keys_for_template,
                         validate_required_key_mapping,
                     )
+                    required_mapping_keys = (
+                        new_config.get("config", {}).get("required_keys")
+                        or get_required_mapping_keys_for_template(eval_metric.template)
+                    )
                     missing_keys = validate_required_key_mapping(
                         new_config.get("mapping", {}),
-                        get_required_mapping_keys_for_template(eval_metric.template),
+                        required_mapping_keys,
                     )
                     if missing_keys:
                         return self._gm.bad_request(
@@ -8252,6 +8309,9 @@ class AddUserEvalView(CreateAPIView):
                         choices=template.choices,
                         multi_choice=template.multi_choice,
                         error_localizer_enabled=template.error_localizer_enabled,
+                        output_type_normalized=template.output_type_normalized,
+                        choice_scores=template.choice_scores,
+                        pass_threshold=template.pass_threshold,
                     )
                     new_config = template.config
                     runtime_config = normalize_eval_runtime_config(
@@ -11107,6 +11167,10 @@ class FeedbackViewSet(viewsets.ModelViewSet):
         kwargs["partial"] = True
         return self.update(request, *args, **kwargs)
 
+    @swagger_auto_schema(
+        method="get",
+        responses={200: FeedbackTemplateResponseSerializer},
+    )
     @action(detail=False, methods=["GET"])
     def get_template(self, request):
         """
@@ -11140,41 +11204,9 @@ class FeedbackViewSet(viewsets.ModelViewSet):
             return self._gm.not_found(get_error_message("EVAL_TEMP_NOT_FOUND"))
 
         try:
-            template_data = {
-                "output_type": eval_template.config.get("output"),
-                "eval_description": eval_template.description,
-                "eval_name": eval_template.name,
-                "user_eval_name": user_eval_metric.name,
-            }
-
-            if template_data["output_type"] == EVAL_OUTPUT_TYPES["PASS_FAIL"]:
-                template_data["choices"] = ["Passed", "Failed"]
-
-            elif template_data["output_type"] == EVAL_OUTPUT_TYPES["CHOICES"]:
-                if (
-                    user_eval_metric.config
-                    and isinstance(user_eval_metric.config, dict)
-                    and "config" in user_eval_metric.config
-                    and "choices" in user_eval_metric.config["config"]
-                    and user_eval_metric.config["config"]["choices"]
-                ):
-                    template_data["choices"] = user_eval_metric.config["config"][
-                        "choices"
-                    ]
-                    template_data["multi_choice"] = user_eval_metric.config[
-                        "config"
-                    ].get("multi_choice", False)
-
-                elif hasattr(eval_template, "choices") and eval_template.choices:
-                    template_data["choices"] = eval_template.choices
-                    template_data["multi_choice"] = eval_template.config.get(
-                        "multi_choice", False
-                    )
-
-                else:
-                    template_data["choices"] = []
-                    template_data["multi_choice"] = False
-
+            template_data = resolve_feedback_template_data(
+                user_eval_metric, eval_template
+            )
             return self._gm.success_response(template_data)
 
         except UserEvalMetric.DoesNotExist:
@@ -11664,8 +11696,11 @@ def run_evaluation_task(evaluation_data):
         metric_ids = evaluation_data["metric_ids"]
         row_ids = evaluation_data["row_ids"]
 
-        # Update status for all metrics
-        metrics = UserEvalMetric.objects.filter(id__in=metric_ids)
+        # Update status for all metrics. select_related avoids an N+1 when
+        # version stamping resolves each metric's pinned/default version.
+        metrics = UserEvalMetric.objects.filter(id__in=metric_ids).select_related(
+            "template", "pinned_version"
+        )
         metric_map = {str(metric.id): metric for metric in list(metrics)}
         metrics.update(status=StatusType.RUNNING.value)
 
@@ -11767,6 +11802,26 @@ def run_evaluation_task(evaluation_data):
                             "dataset_id", str(metric.dataset_id)
                         )
                     runner_source_configs.setdefault("source", "dataset")
+                    # Stamp which eval version will run — pinned wins, else
+                    # the template default (resolve_for_metric).
+                    try:
+                        version = EvalTemplateVersion.objects.resolve_for_metric(
+                            metric
+                        )
+                        if version:
+                            runner_source_configs.setdefault(
+                                "version_id", str(version.id)
+                            )
+                            runner_source_configs.setdefault(
+                                "version_number", version.version_number
+                            )
+                    except Exception:
+                        logger.warning(
+                            "version_tracking_failed",
+                            path="dataset_batch_eval",
+                            metric_id=str(metric_id),
+                            exc_info=True,
+                        )
                     runner_args["source_configs"] = runner_source_configs
 
                     evaluation_runner = EvaluationRunner(
@@ -14226,6 +14281,9 @@ class AddCompareExperimentEvalView(APIView):
                     criteria=template.criteria,
                     choices=template.choices,
                     multi_choice=template.multi_choice,
+                    output_type_normalized=template.output_type_normalized,
+                    choice_scores=template.choice_scores,
+                    pass_threshold=template.pass_threshold,
                 )
                 new_config = template.config
                 try:
@@ -14516,7 +14574,8 @@ class GetCompareEvalsListView(APIView):
         ).select_related("template")
 
         if search_text:
-            user_evals = user_evals.filter(name__icontains=search_text)
+            from model_hub.utils.eval_list import normalize_search_for_name
+            user_evals = user_evals.filter(normalize_search_for_name(search_text))
 
         # Count occurrences of eval names across datasets
         eval_name_count = defaultdict(int)
