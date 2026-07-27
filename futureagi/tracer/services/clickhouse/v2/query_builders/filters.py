@@ -315,6 +315,15 @@ class ClickHouseFilterBuilderV2(ClickHouseFilterBuilder):
     _ENDUSER_DIM_ID_COL = "end_user_id"
     _ENDUSER_DIM_NOT_DELETED = "is_deleted = 0"
 
+    def _span_membership_date_filter(self) -> str:
+        # The CH25 spans table is partitioned by toDate(start_time) with
+        # toStartOfHour(start_time) in the primary key and no index on
+        # created_at, so the inherited created_at bound prunes nothing there —
+        # membership subqueries scanned the project's entire span history.
+        if not self.span_date_scope:
+            return ""
+        return " AND start_time >= %(start_date)s - INTERVAL 1 DAY"
+
     def translate(self, filters):  # type: ignore[override]
         # `translate` returns a WHERE fragment that gets stitched into a larger
         # SELECT statement by callers. Do NOT append SETTINGS here — that
