@@ -1093,9 +1093,10 @@ class TestActivateAccountRateLimit:
         cache.set(f"activate_account_rate:{ip}", 9, timeout=60)
 
         response = api_client.get(url, REMOTE_ADDR=ip)
-        # The10th attempt (count=9, incremented to10) should proceed
-        # (valid token →200, invalid →400, but NOT429)
-        assert response.status_code != status.HTTP_429_TOO_MANY_REQUESTS
+        assert response.status_code == status.HTTP_200_OK
+        user.refresh_from_db()
+        assert user.is_active is True
+        assert cache.get(f"activate_account_rate:{ip}") == 10
 
     def test_rate_limit_increments_on_each_attempt(self, api_client, db):
         """Each activation attempt increments the rate counter."""
@@ -1133,10 +1134,12 @@ class TestActivateAccountReplay:
     """Replay tests for GET /accounts/activate/<uidb64>/<token>/."""
 
     def _inactive_user(self, db):
+        from uuid import uuid4
+
         from accounts.models import User
 
         return User.objects.create_user(
-            email="replay-activate@test.com",
+            email=f"replay-activate-{uuid4().hex}@test.com",
             password="testpassword123",
             name="Replay Activate",
             is_active=False,
@@ -1180,17 +1183,25 @@ class TestActivateAccountReplay:
         """Activation replay does not create a second organization."""
         from django.core.cache import cache
 
+        from accounts.models import Organization
+
         cache.clear()
         user = self._inactive_user(db)
         url = self._activation_url(user)
+        organizations_before = Organization.objects.count()
 
-        api_client.get(url)  # First: succeeds
+        first_response = api_client.get(url)
+        assert first_response.status_code == status.HTTP_200_OK
         user.refresh_from_db()
         org_id = user.organization_id
+        assert org_id is not None
+        assert Organization.objects.count() == organizations_before + 1
 
-        api_client.get(url)  # Replay: fails
+        replay_response = api_client.get(url)
+        assert replay_response.status_code == status.HTTP_400_BAD_REQUEST
         user.refresh_from_db()
         assert user.organization_id == org_id
+        assert Organization.objects.count() == organizations_before + 1
 
 
 @pytest.mark.integration
