@@ -963,6 +963,7 @@ class TestFetchAndPersistCallResultActivity:
                 stereo_recording_url=None,
                 customer_recording_url=None,
                 assistant_recording_url=None,
+                provider_call_data=None,
             )
             mock_vsm.extract_and_persist_recordings = AsyncMock(
                 return_value=mock_recordings
@@ -1057,6 +1058,7 @@ class TestFetchAndPersistCallResultActivity:
                 stereo_recording_url=None,
                 customer_recording_url=None,
                 assistant_recording_url=None,
+                provider_call_data=None,
             )
             mock_vsm.extract_and_persist_recordings = AsyncMock(
                 return_value=mock_recordings
