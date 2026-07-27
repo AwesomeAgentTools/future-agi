@@ -15,6 +15,14 @@
 -- cannot use it. Same layout as the OpenTelemetry ClickHouse exporter's
 -- idx_span_attr_value and SigNoz's idx_numberTagMapValues.
 --
+-- The string index is built over LOWERCASED values: text span-attribute
+-- filters are case-insensitive (`lower(attrs_string[k]) = 'v'`), and a skip
+-- index only engages when the query references the indexed expression
+-- exactly. ClickHouseFilterBuilderV2._span_attr_inner emits the matching
+-- `has(arrayMap(x -> lower(x), mapValues(attrs_string)), 'v')` companion
+-- predicate for equality/IN. lower() here and the Python-side .lower() on
+-- the constant must stay in step or the index silently disengages.
+--
 -- attrs_bool deliberately gets no value index: its value space is {0,1}, so
 -- every granule contains both and nothing could ever be skipped.
 --
@@ -25,7 +33,7 @@
 -- system.mutations, abortable with KILL MUTATION, reversible via DROP INDEX.
 
 ALTER TABLE spans
-    ADD INDEX IF NOT EXISTS idx_attrs_str_values mapValues(attrs_string)
+    ADD INDEX IF NOT EXISTS idx_attrs_str_values arrayMap(x -> lower(x), mapValues(attrs_string))
     TYPE bloom_filter(0.01) GRANULARITY 1;
 
 ALTER TABLE spans

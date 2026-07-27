@@ -395,9 +395,16 @@ class TestAttrValueBloomIndexFile:
     def test_adds_value_blooms_for_string_and_number_maps(self, statements):
         adds = [s for s in statements if "ADD INDEX" in s]
         assert len(adds) == 2
-        by_expr = "\n".join(adds)
-        assert "mapValues(attrs_string)" in by_expr
-        assert "mapValues(attrs_number)" in by_expr
+        # string values are indexed LOWERCASED — text filters compare via
+        # lower(), so the index expression must match the companion
+        # predicate ClickHouseFilterBuilderV2._span_attr_inner emits
+        assert any(
+            "arrayMap(x -> lower(x), mapValues(attrs_string))" in s for s in adds
+        )
+        # number values are indexed raw — number filters never case-fold
+        assert any(
+            "mapValues(attrs_number)" in s and "arrayMap" not in s for s in adds
+        )
         for s in adds:
             assert "IF NOT EXISTS" in s
             assert "TYPE bloom_filter(0.01)" in s

@@ -51,8 +51,20 @@ SPAN_ATTR_FILTER = {
 
 
 def _membership_subquery(sql: str) -> str:
-    assert "trace_id IN (" in sql, f"no membership subquery emitted:\n{sql}"
-    return sql.split("trace_id IN (")[1]
+    """Return the balanced text of the ``trace_id IN (...)`` subquery only,
+    so negative assertions can't accidentally match outer WHERE clauses."""
+    marker = "trace_id IN ("
+    assert marker in sql, f"no membership subquery emitted:\n{sql}"
+    start = sql.index(marker) + len(marker)
+    depth = 1
+    for i in range(start, len(sql)):
+        if sql[i] == "(":
+            depth += 1
+        elif sql[i] == ")":
+            depth -= 1
+            if depth == 0:
+                return sql[start:i]
+    raise AssertionError(f"unbalanced membership subquery:\n{sql}")
 
 
 class TestV2MembershipSubqueryBounds:
@@ -69,8 +81,10 @@ class TestV2MembershipSubqueryBounds:
         sql, params = builder.build()
         sub = _membership_subquery(sql)
         assert "start_time >= %(start_date)s - INTERVAL 1 DAY" in sub
+        assert "start_time < %(end_date)s + INTERVAL 1 DAY" in sub
         assert "created_at >=" not in sub
         assert "start_date" in params
+        assert "end_date" in params
 
     def test_system_metric_membership_bounds_on_start_time(self):
         builder = TraceListQueryBuilderV2(
@@ -96,6 +110,7 @@ class TestV2MembershipSubqueryBounds:
         sql, _ = builder.build()
         sub = _membership_subquery(sql)
         assert "start_time >= %(start_date)s - INTERVAL 1 DAY" in sub
+        assert "start_time < %(end_date)s + INTERVAL 1 DAY" in sub
         assert "created_at >=" not in sub
 
 
@@ -110,6 +125,86 @@ class TestTimeSeriesAttrFilterScope:
         sub = _membership_subquery(sql)
         assert "project_id = %(project_id)s" in sub
         assert "start_time >= %(start_date)s - INTERVAL 1 DAY" in sub
+        assert "start_time < %(end_date)s + INTERVAL 1 DAY" in sub
         assert "1 = 1" not in sub
         assert params["project_id"] == PROJECT_ID
         assert "start_date" in params
+
+
+STR_EQ_FILTER = {
+    "column_id": "session_name",
+    "filter_config": {
+        "col_type": "SPAN_ATTRIBUTE",
+        "filter_type": "text",
+        "filter_op": "equals",
+        "filter_value": "Checkout Flow",
+    },
+}
+
+
+def _v2_sql(attr_filter):
+    builder = TraceListQueryBuilderV2(
+        project_id=PROJECT_ID,
+        page_number=0,
+        page_size=10,
+        filters=[DATETIME_FILTER, attr_filter],
+        sort_params=[],
+        eval_config_ids=[],
+        annotation_label_ids=[],
+    )
+    return builder.build()
+
+
+def _with_op(op, value):
+    f = {
+        "column_id": "session_name",
+        "filter_config": dict(STR_EQ_FILTER["filter_config"]),
+    }
+    f["filter_config"]["filter_op"] = op
+    f["filter_config"]["filter_value"] = value
+    return f
+
+
+class TestLoweredStringValueCompanion:
+    """Text equality/IN must emit a companion predicate matching
+    idx_attrs_str_values (bloom over arrayMap(x -> lower(x),
+    mapValues(attrs_string))) — the lower()-wrapped comparison alone can
+    never engage a skip index. The companion is implied by the real
+    predicate, so result sets are unchanged."""
+
+    def test_equals_emits_lowered_has_companion(self):
+        sql, params = _v2_sql(STR_EQ_FILTER)
+        assert "has(arrayMap(x -> lower(x), mapValues(attrs_string))" in sql
+        # the companion constant is lowercased like the equality constant
+        assert "checkout flow" in [v for v in params.values() if isinstance(v, str)]
+
+    def test_in_emits_lowered_hasany_companion(self):
+        sql, params = _v2_sql(_with_op("in", ["Checkout Flow", "ONBOARDING"]))
+        assert "hasAny(arrayMap(x -> lower(x), mapValues(attrs_string)), [" in sql
+        flat = [v for v in params.values() if isinstance(v, str)]
+        assert "checkout flow" in flat
+        assert "onboarding" in flat
+
+    def test_not_equals_has_no_companion(self):
+        # a has() companion on a negation would invert semantics — must
+        # never be emitted
+        sql, _ = _v2_sql(_with_op("not_equals", "Checkout Flow"))
+        assert "arrayMap(x -> lower(x)" not in sql
+
+    def test_contains_has_no_companion(self):
+        # plain bloom does exact membership; substring ops get no companion
+        sql, _ = _v2_sql(_with_op("contains", "heckout"))
+        assert "arrayMap(x -> lower(x)" not in sql
+
+    def test_number_equality_unchanged(self):
+        sql, _ = _v2_sql(SPAN_ATTR_FILTER)
+        assert "arrayMap(x -> lower(x)" not in sql
+
+    def test_v1_builder_emits_no_companion(self):
+        from tracer.services.clickhouse.query_builders.filters import (
+            ClickHouseFilterBuilder,
+        )
+
+        fb = ClickHouseFilterBuilder(table="spans", project_id=PROJECT_ID)
+        sql, _ = fb.translate([STR_EQ_FILTER])
+        assert "arrayMap" not in sql
