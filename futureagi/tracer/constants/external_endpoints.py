@@ -12,4 +12,4 @@ class ObservabilityRoutes(str, Enum):
     ## Assistant endpoints
     VAPI_ASSISTANT_URL = "https://api.vapi.ai/assistant"
     RETELL_GET_ASSISTANT_URL = "https://api.retellai.com/get-agent"
-    RETELL_LIST_ASSISTANTS_URL = "https://api.retellai.com/list-agents"
+    RETELL_LIST_AGENTS_URL = "https://api.retellai.com/v2/list-agents"

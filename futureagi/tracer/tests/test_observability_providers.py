@@ -103,8 +103,8 @@ class TestVerifyApiKey:
             timeout=OBSERVABILITY_VERIFY_TIMEOUT_SECONDS,
         )
 
-    @patch("tracer.services.observability_providers.requests.get")
-    def test_retell_verification_request_uses_timeout(self, mock_requests_get):
+    @patch("tracer.services.observability_providers.requests.post")
+    def test_retell_verification_request_uses_timeout(self, mock_requests_post):
         from tracer.constants.external_endpoints import ObservabilityRoutes
         from tracer.services.observability_providers import (
             OBSERVABILITY_VERIFY_TIMEOUT_SECONDS,
@@ -113,7 +113,7 @@ class TestVerifyApiKey:
 
         mock_response = Mock()
         mock_response.status_code = 200
-        mock_requests_get.return_value = mock_response
+        mock_requests_post.return_value = mock_response
 
         result = ObservabilityService.verify_api_key(
             ProviderChoices.RETELL,
@@ -121,9 +121,19 @@ class TestVerifyApiKey:
         )
 
         assert result == 200
-        mock_requests_get.assert_called_once_with(
-            f"{ObservabilityRoutes.RETELL_LIST_ASSISTANTS_URL.value}?limit=1",
+        mock_requests_post.assert_called_once_with(
+            ObservabilityRoutes.RETELL_LIST_AGENTS_URL.value,
+            params={"limit": 1},
             headers={"Authorization": "Bearer retell-api-key"},
+            json={
+                "filter_criteria": {
+                    "channel": {
+                        "type": "string",
+                        "op": "eq",
+                        "value": "voice",
+                    }
+                }
+            },
             timeout=OBSERVABILITY_VERIFY_TIMEOUT_SECONDS,
         )
 
@@ -375,6 +385,87 @@ class TestFetchRetellLogs:
         assert body["filter_criteria"]["call_status"]["type"] == "enum"
         assert body["filter_criteria"]["call_status"]["op"] == "in"
         assert body["filter_criteria"]["call_status"]["value"] == ["ended", "error"]
+
+    @patch("tracer.services.observability_providers.requests.post")
+    @patch.object(
+        __import__(
+            "tracer.services.observability_providers", fromlist=["ObservabilityService"]
+        ).ObservabilityService,
+        "_get_agent_definition",
+    )
+    def test_follows_pagination_cursor(
+        self, mock_get_agent, mock_requests_post
+    ):
+        """Fetches all pages returned by the v3 cursor pagination response."""
+        from tracer.services.observability_providers import ObservabilityService
+
+        mock_agent = Mock()
+        mock_agent.api_key = "valid-retell-key"
+        mock_agent.assistant_id = "agent-123"
+        mock_get_agent.return_value = mock_agent
+
+        first_response = Mock()
+        first_response.json.return_value = {
+            "items": [{"call_id": "call-1"}],
+            "has_more": True,
+            "pagination_key": "next-page",
+        }
+        first_response.raise_for_status = Mock()
+
+        second_response = Mock()
+        second_response.json.return_value = {
+            "items": [{"call_id": "call-2"}],
+            "has_more": False,
+        }
+        second_response.raise_for_status = Mock()
+        mock_requests_post.side_effect = [first_response, second_response]
+
+        mock_provider = Mock()
+        mock_provider.id = "retell-provider-123"
+
+        result = ObservabilityService._fetch_retell_logs(mock_provider)
+
+        assert result == [{"call_id": "call-1"}, {"call_id": "call-2"}]
+        assert mock_requests_post.call_count == 2
+        first_body = mock_requests_post.call_args_list[0].kwargs["json"]
+        second_body = mock_requests_post.call_args_list[1].kwargs["json"]
+        assert "pagination_key" not in first_body
+        assert second_body["pagination_key"] == "next-page"
+
+    @patch("tracer.services.observability_providers.requests.post")
+    @patch.object(
+        __import__(
+            "tracer.services.observability_providers", fromlist=["ObservabilityService"]
+        ).ObservabilityService,
+        "_get_agent_definition",
+    )
+    def test_stops_on_repeated_pagination_cursor(
+        self, mock_get_agent, mock_requests_post
+    ):
+        """Stops without duplicating items if Retell repeats a cursor."""
+        from tracer.services.observability_providers import ObservabilityService
+
+        mock_agent = Mock()
+        mock_agent.api_key = "valid-retell-key"
+        mock_agent.assistant_id = "agent-123"
+        mock_get_agent.return_value = mock_agent
+
+        response = Mock()
+        response.json.return_value = {
+            "items": [{"call_id": "call-1"}],
+            "has_more": True,
+            "pagination_key": "next-page",
+        }
+        response.raise_for_status = Mock()
+        mock_requests_post.return_value = response
+
+        mock_provider = Mock()
+        mock_provider.id = "retell-provider-123"
+
+        result = ObservabilityService._fetch_retell_logs(mock_provider)
+
+        assert result == [{"call_id": "call-1"}]
+        assert mock_requests_post.call_count == 2
 
 
 class TestFetchElevenLabsLogs:
@@ -725,7 +816,7 @@ class TestObservabilityServiceIntegration:
         from tracer.services.observability_providers import ObservabilityService
 
         mock_response = Mock()
-        mock_response.json.return_value = []
+        mock_response.json.return_value = {"items": []}
         mock_response.raise_for_status = Mock()
         mock_post.return_value = mock_response
 

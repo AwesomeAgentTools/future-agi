@@ -29,17 +29,33 @@ class ObservabilityService:
         if provider == ProviderChoices.VAPI:
             api_endpoint = f"{ObservabilityRoutes.VAPI_CALL_URL.value}?limit=0"
         elif provider == ProviderChoices.RETELL:
-            api_endpoint = (
-                f"{ObservabilityRoutes.RETELL_LIST_ASSISTANTS_URL.value}?limit=1"
-            )
+            api_endpoint = ObservabilityRoutes.RETELL_LIST_AGENTS_URL.value
         else:
             raise ValueError(f"Invalid choice for provider: {provider}")
+
         headers = {"Authorization": f"Bearer {api_key}"}
-        response = requests.get(
-            api_endpoint,
-            headers=headers,
-            timeout=OBSERVABILITY_VERIFY_TIMEOUT_SECONDS,
-        )
+        if provider == ProviderChoices.RETELL:
+            response = requests.post(
+                api_endpoint,
+                params={"limit": 1},
+                headers=headers,
+                json={
+                    "filter_criteria": {
+                        "channel": {
+                            "type": "string",
+                            "op": "eq",
+                            "value": "voice",
+                        }
+                    }
+                },
+                timeout=OBSERVABILITY_VERIFY_TIMEOUT_SECONDS,
+            )
+        else:
+            response = requests.get(
+                api_endpoint,
+                headers=headers,
+                timeout=OBSERVABILITY_VERIFY_TIMEOUT_SECONDS,
+            )
         return response.status_code
 
     @staticmethod
@@ -213,14 +229,33 @@ class ObservabilityService:
                 ],
             }
 
-        response = requests.post(
-            ObservabilityRoutes.RETELL_LIST_CALLS_URL.value,
-            headers=headers,
-            json=data,
-            timeout=30,
-        )
-        response.raise_for_status()
-        return response.json().get("items", [])
+        all_logs: list[dict] = []
+        pagination_key = None
+        while True:
+            request_data = dict(data)
+            if pagination_key:
+                request_data["pagination_key"] = pagination_key
+
+            response = requests.post(
+                ObservabilityRoutes.RETELL_LIST_CALLS_URL.value,
+                headers=headers,
+                json=request_data,
+                timeout=30,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            has_more = bool(payload.get("has_more"))
+            next_pagination_key = payload.get("pagination_key")
+            if has_more and pagination_key and next_pagination_key == pagination_key:
+                break
+
+            all_logs.extend(payload.get("items") or [])
+
+            if not has_more or not next_pagination_key:
+                break
+            pagination_key = next_pagination_key
+
+        return all_logs
 
     @staticmethod
     def _list_eleven_labs_conversations(
