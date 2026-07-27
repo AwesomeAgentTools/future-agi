@@ -40,29 +40,6 @@ def _owner_membership(user, organization):
     )
 
 
-@pytest.fixture(autouse=True)
-def _bypass_plan_entitlement_check():
-    """Bypass plan-gating so role update tests don't require a paid plan.
-
-    MemberRoleUpdateAPIView checks ``Entitlements.check_feature("has_custom_roles")``
-    which is only enabled on scale/enterprise plans. Test orgs default to free.
-    Patch the check at its source so both org- and workspace-level role update
-    endpoints see an allowed result.
-    """
-    from unittest.mock import patch
-
-    try:
-        from ee.usage.schemas.events import CheckResult
-    except ImportError:
-        CheckResult = None
-
-    with patch(
-        "ee.usage.services.entitlements.Entitlements.check_feature",
-        return_value=CheckResult(allowed=True),
-    ):
-        yield
-
-
 # Track WorkspaceAwareAPIClient instances created by _make_client so the
 # autouse fixture below can tear down their injected APIView.initial patch
 # after each test. Without this cleanup, the patch leaks into every
@@ -1256,9 +1233,9 @@ class TestOrgRoleUpdateWorkspaceAccess:
 
         first = self._update_role(auth_client, payload)
         assert first.status_code == status.HTTP_200_OK, first.json()
-        assert (
-            first.json()["result"]["changes"].get("revoked_workspaces") == 1
-        ), first.json()
+        assert first.json()["result"]["changes"].get("revoked_workspaces") == 1, (
+            first.json()
+        )
 
         # Replay the exact same payload.
         second = self._update_role(auth_client, payload)
@@ -1271,9 +1248,9 @@ class TestOrgRoleUpdateWorkspaceAccess:
 
         # No spurious revoke on the replay — second_workspace was already
         # revoked, so the revoke filter must skip it.
-        assert (
-            second.json()["result"]["changes"].get("revoked_workspaces", 0) == 0
-        ), second.json()
+        assert second.json()["result"]["changes"].get("revoked_workspaces", 0) == 0, (
+            second.json()
+        )
 
     # Authz scope: the org-wide revoke is new in this PR and must not let an org
     # member who is merely a workspace admin strip a user out of workspaces they

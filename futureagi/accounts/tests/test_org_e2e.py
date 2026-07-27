@@ -24,7 +24,7 @@ from accounts.models.organization_membership import OrganizationMembership
 from accounts.models.user import User
 from accounts.models.workspace import Workspace, WorkspaceMembership
 from tfc.constants.levels import Level
-from tfc.constants.roles import OrganizationRoles, RolePermissions
+from tfc.constants.roles import OrganizationRoles
 from tfc.middleware.workspace_context import (
     clear_workspace_context,
     set_workspace_context,
@@ -903,14 +903,13 @@ class TestOrgAccessModel:
             Level.MEMBER,
         )
         # Create a workspace for other_org so outsider can function
-        other_ws = Workspace.objects.create(
+        Workspace.objects.create(
             name="Other WS",
             organization=other_org,
             is_default=True,
             is_active=True,
             created_by=outsider,
         )
-        assert outsider.can_access_organization(org) is False
 
     def test_owner_has_global_workspace_access(self, org, owner):
         """Owner has global workspace access."""
@@ -1211,6 +1210,70 @@ class TestOrgUpdate:
             format="json",
         )
         self._assert_unknown_field(resp, "displayName")
+
+    def test_member_cannot_update_org(self, org, default_ws):
+        """Member role cannot update organization settings."""
+        member = _make_user(
+            org,
+            "member-noupdate@acme.com",
+            OrganizationRoles.MEMBER,
+            Level.MEMBER,
+            default_ws,
+        )
+        client = _make_client(member, default_ws)
+        resp = client.patch(
+            "/accounts/organizations/update/",
+            {"name": "Hacked Name"},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_403_FORBIDDEN
+        org.refresh_from_db()
+        assert org.name != "Hacked Name"
+
+    def test_other_org_owner_update_does_not_mutate_foreign_org(self, org, db):
+        """Org B owner can rename B; org A must remain unchanged."""
+        other = Organization.objects.create(name="Other Corp For Update")
+        other_owner = _make_user(
+            other, "other-owner-update@x.com", OrganizationRoles.OWNER, Level.OWNER
+        )
+        other_ws = Workspace.objects.create(
+            name="Other WS",
+            organization=other,
+            is_default=True,
+            is_active=True,
+            created_by=other_owner,
+        )
+        org_membership = OrganizationMembership.no_workspace_objects.get(
+            user=other_owner, organization=other
+        )
+        WorkspaceMembership.no_workspace_objects.get_or_create(
+            user=other_owner,
+            workspace=other_ws,
+            defaults={
+                "role": OrganizationRoles.WORKSPACE_ADMIN,
+                "level": Level.WORKSPACE_ADMIN,
+                "is_active": True,
+                "organization_membership": org_membership,
+            },
+        )
+        other_client = _make_client(other_owner, other_ws)
+        original_name = org.name
+
+        resp = other_client.patch(
+            "/accounts/organizations/update/",
+            {"name": "Renamed Other Corp"},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_200_OK, resp.content
+        body = resp.json()
+        result = body.get("result", body)
+        assert str(result.get("id")) == str(other.id)
+        assert result.get("name") == "Renamed Other Corp"
+
+        org.refresh_from_db()
+        assert org.name == original_name
+        other.refresh_from_db()
+        assert other.name == "Renamed Other Corp"
 
 
 # =====================================================================

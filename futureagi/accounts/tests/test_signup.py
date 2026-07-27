@@ -278,7 +278,9 @@ class TestPasswordResetAPI:
             status.HTTP_404_NOT_FOUND,
         ]
 
-    def test_password_reset_confirm_rejects_unknown_request_fields(self, api_client, db):
+    def test_password_reset_confirm_rejects_unknown_request_fields(
+        self, api_client, db
+    ):
         response = api_client.post(
             "/accounts/password-reset-confirm/invalid-uid/invalid-token/",
             {
@@ -493,7 +495,9 @@ class TestDeleteUsersAPI:
 class TestUpdateUserRoles:
     """Tests for role updates in /accounts/update-user/ endpoint."""
 
-    def test_update_user_rejects_unknown_request_fields(self, owner_client, second_user):
+    def test_update_user_rejects_unknown_request_fields(
+        self, owner_client, second_user
+    ):
         response = owner_client.post(
             "/accounts/update-user/",
             {
@@ -888,3 +892,114 @@ class TestAccountTakeoverVulnerabilityFixed:
         attacker_users = UserModel.objects.filter(email=attacker_email)
         for u in attacker_users:
             assert u.id != user.id
+
+
+@pytest.mark.integration
+@pytest.mark.api
+class TestActivateAccountAPI:
+    """Tests for GET /accounts/activate/<uidb64>/<token>/."""
+
+    def _inactive_user(self, db):
+        from accounts.models import User
+
+        return User.objects.create_user(
+            email="inactive-activate@test.com",
+            password="testpassword123",
+            name="Inactive Activate",
+            is_active=False,
+        )
+
+    def _activation_url(self, user):
+        from django.utils.encoding import force_bytes
+        from django.utils.http import urlsafe_base64_encode
+
+        from accounts.views.signup import account_activation_token
+
+        uid = urlsafe_base64_encode(force_bytes(user.pk))
+        token = account_activation_token.make_token(user)
+        return f"/accounts/activate/{uid}/{token}/"
+
+    def test_activate_account_happy_path(self, api_client, db):
+        """Valid activation token activates user and creates owner org."""
+        from django.core.cache import cache
+
+        from accounts.models.organization_membership import OrganizationMembership
+
+        cache.clear()
+        user = self._inactive_user(db)
+        response = api_client.get(self._activation_url(user))
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json()["message"] == "Account successfully activated."
+
+        user.refresh_from_db()
+        assert user.is_active is True
+        assert user.organization is not None
+        assert user.organization_role == "Owner"
+        assert OrganizationMembership.objects.filter(
+            user=user, organization=user.organization, is_active=True, role="Owner"
+        ).exists()
+
+    def test_activate_account_invalid_token(self, api_client, db):
+        """Invalid token is rejected."""
+        from django.core.cache import cache
+        from django.utils.encoding import force_bytes
+        from django.utils.http import urlsafe_base64_encode
+
+        cache.clear()
+        user = self._inactive_user(db)
+        uid = urlsafe_base64_encode(force_bytes(user.pk))
+        response = api_client.get(f"/accounts/activate/{uid}/not-a-valid-token/")
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        user.refresh_from_db()
+        assert user.is_active is False
+
+    def test_activate_account_unknown_user(self, api_client, db):
+        """Unknown uid returns bad request."""
+        from django.core.cache import cache
+        from django.utils.encoding import force_bytes
+        from django.utils.http import urlsafe_base64_encode
+
+        cache.clear()
+        uid = urlsafe_base64_encode(force_bytes("00000000-0000-0000-0000-000000000000"))
+        response = api_client.get(f"/accounts/activate/{uid}/any-token/")
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+
+@pytest.mark.integration
+@pytest.mark.api
+class TestPasswordResetConfirmHappyPath:
+    """Happy-path coverage for POST /accounts/password-reset-confirm/."""
+
+    def test_password_reset_confirm_valid_token(self, api_client, user):
+        """Valid encrypted token resets password and returns success."""
+        from django.contrib.auth.hashers import check_password
+        from django.utils import timezone
+        from django.utils.encoding import force_bytes
+        from django.utils.http import urlsafe_base64_encode
+
+        from accounts.authentication import generate_encrypted_message
+        from accounts.models.auth_token import AuthToken, AuthTokenType
+
+        access = AuthToken.objects.create(
+            user=user,
+            auth_type=AuthTokenType.ACCESS.value,
+            is_active=True,
+            last_used_at=timezone.now(),
+        )
+        token = generate_encrypted_message(
+            {"user_id": str(user.id), "id": str(access.id)}
+        )
+        uidb64 = urlsafe_base64_encode(force_bytes(user.pk))
+        new_password = "BrandNewPass123!"
+
+        response = api_client.post(
+            f"/accounts/password-reset-confirm/{uidb64}/{token}/",
+            {"new_password": new_password, "repeat_password": new_password},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_200_OK, response.content
+
+        user.refresh_from_db()
+        assert check_password(new_password, user.password)
+        access.refresh_from_db()
+        assert access.is_active is False
