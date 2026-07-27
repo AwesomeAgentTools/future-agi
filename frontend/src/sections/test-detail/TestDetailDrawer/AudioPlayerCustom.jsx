@@ -20,11 +20,61 @@ const isUpdatedWithinTwoMinutes = (timestamp) => {
 };
 
 /**
+ * Single audio bar for a call that has exactly one mixed track. Keyed on the
+ * recording shape rather than the provider, so every provider that returns one
+ * URL renders identically.
+ */
+export const SingleTrackPlayer = ({ url }) => (
+  <Stack
+    height={50}
+    width="100%"
+    justifyContent="center"
+    alignItems="center"
+    direction="row"
+  >
+    <AudioPlaybackProvider>
+      <CustomAudioPlayer
+        audioData={{ url }}
+        customLoaderComponent={
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 1.5,
+              width: "100%",
+            }}
+          >
+            <Iconify icon="svg-spinners:bars-scale" width={20} height={20} />
+            <Typography typography="s1" fontWeight="fontWeightMedium">
+              Painting sound waves...
+            </Typography>
+          </Box>
+        }
+      />
+    </AudioPlaybackProvider>
+    <AudioDownloadButton
+      audioUrls={{ mono: url, stereo: "", assistant: "", customer: "" }}
+      singleTrack
+      size="small"
+      sx={{
+        minWidth: "32px",
+        mr: 1,
+        borderRadius: 0.5,
+        bgcolor: "background.paper",
+      }}
+    />
+  </Stack>
+);
+
+SingleTrackPlayer.propTypes = {
+  url: PropTypes.string,
+};
+
+/**
  * Renders MultiTrackAudioPlayer using stereo channel splitting when a stereo
- * URL is available. Falls back to separate mono assistant/customer URLs.
- *
- * Stereo splitting ensures both waveforms share the same duration and timeline,
- * fixing the misaligned waveform issue caused by mono files with different lengths.
+ * URL is available. Falls back to separate mono assistant/customer URLs, and to
+ * the single-track bar when the call has only one mixed recording.
  */
 export const StereoMultiTrackPlayer = ({
   recordings,
@@ -57,44 +107,31 @@ export const StereoMultiTrackPlayer = ({
   const assistantUrl = useStereo ? stereoAssistant : recordings?.assistant;
   const customerUrl = useStereo ? stereoCustomer : recordings?.customer;
 
-  // Combined-only providers mix both speakers into one mono track and expose no
-  // stereo or per-channel audio to split, so there is nothing to lay out on two
-  // rows. Render the single mix instead of waiting on two channel tracks that
-  // never resolve — the player gates readiness on every track loading.
+  // One mono mix and nothing to split into channels: a two-row waveform can
+  // neither be filled nor tell the speakers apart, and the player only becomes
+  // ready once every track loads. Hand it to the single-track bar instead.
   const combinedOnly =
     !useStereo && !assistantUrl && !customerUrl && Boolean(recordings?.combined);
 
   const trackUrls = useMemo(
-    () =>
-      combinedOnly
-        ? [
-            {
-              url: recordings?.combined,
-              color: assistantColor,
-              name: "Call Audio",
-            },
-          ]
-        : [
-            {
-              url: customerUrl,
-              color: customerColor,
-              name: "Customer Audio",
-            },
-            {
-              url: assistantUrl,
-              color: assistantColor,
-              name: "Assistant Audio",
-            },
-          ],
-    [
-      combinedOnly,
-      recordings?.combined,
-      customerUrl,
-      assistantUrl,
-      customerColor,
-      assistantColor,
+    () => [
+      {
+        url: customerUrl,
+        color: customerColor,
+        name: "Customer Audio",
+      },
+      {
+        url: assistantUrl,
+        color: assistantColor,
+        name: "Assistant Audio",
+      },
     ],
+    [customerUrl, assistantUrl, customerColor, assistantColor],
   );
+
+  if (combinedOnly) {
+    return <SingleTrackPlayer url={recordings.combined} />;
+  }
 
   if (useStereo && stereoLoading) {
     return (
@@ -167,62 +204,6 @@ const AudioPlayerCustom = ({ data, onInstance }) => {
           <Typography typography="s2_1">
             No recording found - <i>{data?.ended_reason}</i>
           </Typography>
-        </Stack>
-      );
-    }
-
-    if (data?.call_metadata?.provider === "retell") {
-      return (
-        <Stack
-          height={50}
-          width="100%"
-          justifyContent="center"
-          alignItems="center"
-          direction="row"
-        >
-          <AudioPlaybackProvider>
-            <CustomAudioPlayer
-              audioData={{
-                url: data?.recording_url,
-              }}
-              customLoaderComponent={
-                <Box
-                  sx={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    gap: 1.5,
-                    width: "100%",
-                  }}
-                >
-                  <Iconify
-                    icon="svg-spinners:bars-scale"
-                    width={20}
-                    height={20}
-                  />
-                  <Typography typography="s1" fontWeight="fontWeightMedium">
-                    Painting sound waves...
-                  </Typography>
-                </Box>
-              }
-            />
-          </AudioPlaybackProvider>
-          <AudioDownloadButton
-            audioUrls={{
-              mono: data.recording_url,
-              stereo: "",
-              assistant: "",
-              customer: "",
-            }}
-            singleTrack
-            size="small"
-            sx={{
-              minWidth: "32px",
-              mr: 1,
-              borderRadius: 0.5,
-              bgcolor: "background.paper",
-            }}
-          />
         </Stack>
       );
     }

@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render } from "src/utils/test-utils";
 
-const captured = { trackUrls: null };
+const captured = { trackUrls: null, singleUrl: null };
 
 // Mutable so a case can hand back real split channels; hoisted because the
 // vi.mock factory below is lifted above this file's other statements.
@@ -27,21 +28,46 @@ vi.mock("src/components/multi-track-audio-player/MultiTrackAudioPlayer", () => (
   MemoizedBarsIcon: () => <span data-testid="bars" />,
 }));
 
+vi.mock("src/components/custom-audio/CustomAudioPlayer", () => ({
+  default: (props) => {
+    captured.singleUrl = props.audioData?.url;
+    return <div data-testid="single-track" />;
+  },
+}));
+
+vi.mock(
+  "src/components/custom-audio/context-provider/AudioPlaybackContext",
+  () => ({
+    // eslint-disable-next-line react/prop-types
+    AudioPlaybackProvider: ({ children }) => <div>{children}</div>,
+  }),
+);
+
+// Path is resolved from the component under test, not from this file.
+vi.mock("src/sections/test-detail/AudioDownloadButton", () => ({
+  default: () => <span data-testid="download" />,
+}));
+
 // Imported after the mocks above so the component picks them up.
-import { StereoMultiTrackPlayer } from "../AudioPlayerCustom";
+import AudioPlayerCustom, {
+  StereoMultiTrackPlayer,
+} from "../AudioPlayerCustom";
 
 const COMBINED = "https://example.test/recording.wav";
 
-describe("StereoMultiTrackPlayer track selection", () => {
-  beforeEach(() => {
-    captured.trackUrls = null;
-    Object.assign(stereo, {
-      assistantUrl: "",
-      customerUrl: "",
-      loading: false,
-      error: null,
-    });
+const resetCaptured = () => {
+  captured.trackUrls = null;
+  captured.singleUrl = null;
+  Object.assign(stereo, {
+    assistantUrl: "",
+    customerUrl: "",
+    loading: false,
+    error: null,
   });
+};
+
+describe("StereoMultiTrackPlayer track selection", () => {
+  beforeEach(resetCaptured);
 
   it("splits a stereo recording into two channel tracks", () => {
     Object.assign(stereo, {
@@ -63,18 +89,6 @@ describe("StereoMultiTrackPlayer track selection", () => {
     ]);
   });
 
-  it("renders the single mix when a provider only exposes a combined recording", () => {
-    // The player gates readiness on every track loading, so handing it two
-    // undefined channel tracks leaves it painting waveforms forever.
-    render(
-      <StereoMultiTrackPlayer recordings={{ combined: COMBINED }} id="call-1" />,
-    );
-
-    expect(captured.trackUrls).toHaveLength(1);
-    expect(captured.trackUrls[0].url).toBe(COMBINED);
-    expect(captured.trackUrls.every((t) => Boolean(t.url))).toBe(true);
-  });
-
   it("still splits into customer and assistant rows when channels exist", () => {
     render(
       <StereoMultiTrackPlayer
@@ -93,4 +107,40 @@ describe("StereoMultiTrackPlayer track selection", () => {
       "Assistant Audio",
     ]);
   });
+
+  it("uses the single-track bar when only a combined mix exists", () => {
+    // A two-row waveform can neither be filled nor separate the speakers, and
+    // it never reports ready while a track URL is missing.
+    render(
+      <StereoMultiTrackPlayer recordings={{ combined: COMBINED }} id="call-1" />,
+    );
+
+    expect(captured.singleUrl).toBe(COMBINED);
+    expect(captured.trackUrls).toBeNull();
+  });
+});
+
+describe("AudioPlayerCustom picks the renderer from the recording shape", () => {
+  beforeEach(resetCaptured);
+
+  it.each(["retell", "bland"])(
+    "sends a single-URL %s call to the same single-track bar",
+    (provider) => {
+      render(
+        <QueryClientProvider client={new QueryClient()}>
+          <AudioPlayerCustom
+            data={{
+              module: "project",
+              recording_available: true,
+              call_metadata: { provider },
+              recording: { mono: { combined_url: COMBINED } },
+            }}
+          />
+        </QueryClientProvider>,
+      );
+
+      expect(captured.singleUrl).toBe(COMBINED);
+      expect(captured.trackUrls).toBeNull();
+    },
+  );
 });
