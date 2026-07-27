@@ -1380,6 +1380,7 @@ class TestRunSimulateEvaluationsActivity:
 
 
 @pytest.mark.unit
+@pytest.mark.requires_ee
 def test_tool_evaluation_gate_invariant_bland_has_no_adapter():
     """Locks the invariant the tool-eval gate in _run_tool_evaluation_standalone
     relies on: a provider absent from ToolCallingSupportedProviders (e.g. Bland)
