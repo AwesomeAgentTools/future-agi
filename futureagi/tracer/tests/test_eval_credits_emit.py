@@ -9,25 +9,37 @@ session-level evals with the right shape:
 
 These three paths used to charge legacy billing only; this verifies the
 new emit hits all of them.
+
+In OSS builds, root ``conftest`` installs ``ee.usage.*`` patch-target stubs
+(without flipping ``has_ee`` / ``is_oss``). This file mocks ``emit`` and
+``BillingConfig.get_eval_per_run_fee`` so the dual-write path is exercised
+without a real EE install.
 """
 
 from __future__ import annotations
 
 import pytest
 
-pytest.importorskip("ee.usage.services.config")
-
 # Break the tracer.utils.eval ↔ model_hub.tasks import cycle for test-time
 # imports — see test_eval_task_runtime.py for the rationale.
 import model_hub.tasks  # noqa: F401
 
 from evaluations.engine.runner import EvalResult
+from tfc.constants.api_calls import APICallTypeChoices
 
 
 PROMPT_TOKENS = 100
 COMPLETION_TOKENS = 50
 TOTAL_TOKENS = PROMPT_TOKENS + COMPLETION_TOKENS
 RAW_COST_USD = 0.12345
+
+_CREDIT_EVENT_TYPES = {
+    APICallTypeChoices.TURING_LARGE_EVALUATOR.value,
+    APICallTypeChoices.TURING_SMALL_EVALUATOR.value,
+    APICallTypeChoices.TURING_FLASH_EVALUATOR.value,
+    APICallTypeChoices.PROTECT_EVALUATOR.value,
+    APICallTypeChoices.PROTECT_FLASH_EVALUATOR.value,
+}
 
 
 def _build_result():
@@ -94,16 +106,7 @@ def captured_emit(monkeypatch):
 
 def _credit_event(captured):
     """Pick the ai_credits emit, ignoring tracing/observe events fired elsewhere."""
-    from ee.usage.models.usage import APICallTypeChoices
-
-    credit_event_types = {
-        APICallTypeChoices.TURING_LARGE_EVALUATOR.value,
-        APICallTypeChoices.TURING_SMALL_EVALUATOR.value,
-        APICallTypeChoices.TURING_FLASH_EVALUATOR.value,
-        APICallTypeChoices.PROTECT_EVALUATOR.value,
-        APICallTypeChoices.PROTECT_FLASH_EVALUATOR.value,
-    }
-    matches = [e for e in captured if e.event_type in credit_event_types]
+    matches = [e for e in captured if e.event_type in _CREDIT_EVENT_TYPES]
     assert matches, f"No ai_credits event emitted. Captured: {[e.event_type for e in captured]}"
     assert len(matches) == 1, f"Expected one ai_credits event, got {len(matches)}"
     return matches[0]
@@ -128,7 +131,6 @@ def test_span_eval_emits_ai_credits_with_tokens(
     stub_cost_log,
     captured_emit,
 ):
-    from ee.usage.models.usage import APICallTypeChoices
     from ee.usage.services.config import BillingConfig
     from tracer.utils.eval import OBSERVE, _execute_evaluation
 
@@ -165,7 +167,6 @@ def test_trace_eval_emits_ai_credits_with_tokens(
     stub_cost_log,
     captured_emit,
 ):
-    from ee.usage.models.usage import APICallTypeChoices
     from ee.usage.services.config import BillingConfig
     from tracer.utils.eval import _execute_evaluation_for_trace
 
@@ -201,7 +202,6 @@ def test_session_eval_emits_ai_credits_with_tokens(
     stub_cost_log,
     captured_emit,
 ):
-    from ee.usage.models.usage import APICallTypeChoices
     from ee.usage.services.config import BillingConfig
     from tracer.utils.eval import _execute_evaluation_for_session
 
@@ -255,14 +255,5 @@ def test_eval_failure_does_not_emit_ai_credits(
         run_params={"input": "hello", "output": "world"},
     )
 
-    from ee.usage.models.usage import APICallTypeChoices
-
-    credit_event_types = {
-        APICallTypeChoices.TURING_LARGE_EVALUATOR.value,
-        APICallTypeChoices.TURING_SMALL_EVALUATOR.value,
-        APICallTypeChoices.TURING_FLASH_EVALUATOR.value,
-        APICallTypeChoices.PROTECT_EVALUATOR.value,
-        APICallTypeChoices.PROTECT_FLASH_EVALUATOR.value,
-    }
-    credit_events = [e for e in captured_emit if e.event_type in credit_event_types]
+    credit_events = [e for e in captured_emit if e.event_type in _CREDIT_EVENT_TYPES]
     assert credit_events == []
