@@ -963,6 +963,7 @@ class TestFetchAndPersistCallResultActivity:
                 stereo_recording_url=None,
                 customer_recording_url=None,
                 assistant_recording_url=None,
+                provider_call_data=None,
             )
             mock_vsm.extract_and_persist_recordings = AsyncMock(
                 return_value=mock_recordings
@@ -1057,6 +1058,7 @@ class TestFetchAndPersistCallResultActivity:
                 stereo_recording_url=None,
                 customer_recording_url=None,
                 assistant_recording_url=None,
+                provider_call_data=None,
             )
             mock_vsm.extract_and_persist_recordings = AsyncMock(
                 return_value=mock_recordings
@@ -1375,6 +1377,23 @@ class TestRunSimulateEvaluationsActivity:
         # Activity sets status to ANALYZING before running evals
         await sync_to_async(call_execution.refresh_from_db)()
         assert call_execution.status == CallExecution.CallStatus.ANALYZING
+
+
+@pytest.mark.unit
+@pytest.mark.requires_ee
+def test_tool_evaluation_gate_invariant_bland_has_no_adapter():
+    """Locks the invariant the tool-eval gate in _run_tool_evaluation_standalone
+    relies on: a provider absent from ToolCallingSupportedProviders (e.g. Bland)
+    has no tool-call adapter, so get_tool_call_adapter raises. The gate skips
+    such providers up front instead of letting that raise into the broad except
+    (which silently no-ops tool evaluation). If a Bland adapter is ever added
+    this fails — a reminder to also add Bland to the supported list."""
+    from ee.agenthub.tool_eval_agent.adapters import get_tool_call_adapter
+    from simulate.semantics import ToolCallingSupportedProviders
+
+    assert ProviderChoices.BLAND not in ToolCallingSupportedProviders
+    with pytest.raises(ValueError):
+        get_tool_call_adapter(ProviderChoices.BLAND)
 
 
 @pytest.mark.integration
