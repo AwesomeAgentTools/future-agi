@@ -26,7 +26,7 @@ vi.mock("src/components/multi-track-audio-player/MultiTrackAudioPlayer", () => (
   MemoizedBarsIcon: () => <span data-testid="bars" />,
 }));
 
-// eslint-disable-next-line import/first
+// Imported after the mocks above so the component picks them up.
 import { StereoMultiTrackPlayer } from "../AudioPlayerCustom";
 
 const COMBINED = "https://example.test/recording.wav";
