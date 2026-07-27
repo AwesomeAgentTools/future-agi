@@ -287,15 +287,8 @@ def parse_json_safely(value: Any) -> Tuple[Optional[Any], bool]:
     except (json.JSONDecodeError, ValueError):
         pass
 
-    # Gate the tolerant parsers on JSON structural characters (TH-6975).
-    # `json_repair.loads` is designed to survive broken JSON — it will
-    # hallucinate a list/dict out of any string containing quotes and
-    # commas (e.g. narrative LLM output like `Save Template," and "Create
-    # new template."` becomes a fake list). `ast.literal_eval` has the
-    # same failure mode for prose that happens to look like a Python
-    # literal. Requiring the input to start AND end with matching
-    # `{...}` / `[...]` filters out ~all prose while still admitting the
-    # broken-JSON cases these parsers were added for.
+    # Only invoke tolerant parsers when the value looks like a JSON object/array.
+    # Otherwise json_repair/literal_eval can invent structures from prose.
     first, last = stripped[0], stripped[-1]
     looks_structured = (first == "{" and last == "}") or (
         first == "[" and last == "]"

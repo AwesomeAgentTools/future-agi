@@ -1,12 +1,4 @@
-"""Unit tests for `parse_json_safely` and the derived-variable extractor.
-
-Introduced with TH-6975: the tolerant `json_repair.loads` / `ast.literal_eval`
-fallbacks were treating narrative LLM output as candidate JSON and
-hallucinating dicts / lists out of prose, which surfaced as nonsense
-"sub-variables" in the Variable Mapping dropdown of the Add-Evaluation flow.
-
-Run with: pytest model_hub/tests/test_json_path_resolver.py -v
-"""
+"""Unit tests for `parse_json_safely` and the derived-variable extractor."""
 
 from model_hub.services.derived_variable_service import (
     extract_derived_variables_from_output,
@@ -16,8 +8,6 @@ from model_hub.utils.json_path_resolver import parse_json_safely
 
 class TestParseJsonSafely:
     """Direct coverage for the multi-layer JSON parser."""
-
-    # --- Happy paths for the strict parser (step 1) ---
 
     def test_strict_dict_parses(self):
         data, ok = parse_json_safely('{"a": 1, "b": {"c": 2}}')
@@ -36,41 +26,28 @@ class TestParseJsonSafely:
         assert ok is False
         assert data is None
 
-    # --- TH-6975 regression: prose must NOT be hallucinated into JSON ---
-
-    def test_narrative_with_quotes_and_commas_is_rejected(self):
-        """Exact fragments from the ticket that used to hallucinate a list.
-
-        `json_repair.loads` will happily interpret this as
-        `["Save Template", "and", "Create new template."]`, producing the
-        `col.Save Template,` sub-menu items shown in the ticket video.
-        The structural-char gate blocks it entirely.
-        """
-        for prose in [
-            'Save Template," and "Create new template."',
-            'Test" and "Run',
-            "Test,",
-            "return response in the tool schema",
-            "return_reason}}",
+    def test_non_structural_wrapper_is_rejected(self):
+        # Inputs where json_repair would still return a dict/list without the
+        # structural gate. These must fail so the gate is actually pinned.
+        for raw in [
+            '```json\n{"a":1}\n```',
+            'Here is the result: {"a":1}',
+            '{"a":1} extra text',
+            "\ufeff{\"a\":1}",
+            "[1,2,3] extra text",
         ]:
-            data, ok = parse_json_safely(prose)
-            assert ok is False, f"prose should not parse: {prose!r}"
+            data, ok = parse_json_safely(raw)
+            assert ok is False, f"should not parse: {raw!r}"
             assert data is None
 
     def test_prose_starting_with_curly_but_not_closed_is_rejected(self):
-        # The gate requires matching first/last structural chars — a
-        # sentence that happens to open with `{` won't slip through.
+        # Gate requires matching first/last structural chars; open-only
+        # prose is rejected even though json_repair would invent a list.
         data, ok = parse_json_safely("{ hello world")
         assert ok is False
         assert data is None
 
-    def test_prose_ending_with_close_brace_only_is_rejected(self):
-        data, ok = parse_json_safely("goodbye }")
-        assert ok is False
-        assert data is None
-
     def test_broken_json_with_trailing_comma_still_repairs(self):
-        # Broken-JSON survivor path #2. Starts + ends structural.
         data, ok = parse_json_safely('{"a": 1, "b": 2,}')
         assert ok is True
         assert data == {"a": 1, "b": 2}
@@ -79,8 +56,6 @@ class TestParseJsonSafely:
         data, ok = parse_json_safely("{'a': 1, 'b': 2}")
         assert ok is True
         assert data == {"a": 1, "b": 2}
-
-    # --- Boundaries the pre-fix code already handled — keep them green ---
 
     def test_empty_string_returns_none(self):
         data, ok = parse_json_safely("")
@@ -117,19 +92,11 @@ class TestParseJsonSafely:
 
 
 class TestExtractDerivedVariablesRegression:
-    """Full extractor regression — this is the surface the FE dropdown
-    reads. Pre-fix, a prose cell yielded fake `column.<fragment>` paths."""
-
-    def test_prose_output_yields_no_derived_paths(self):
-        # The exact category of value that used to produce the ticket's
-        # `llm_test_2.return_reason}}` mapping — a plain-text LLM answer
-        # that happens to contain quotes and commas.
+    def test_embedded_json_in_prose_yields_no_derived_paths(self):
+        # Without the structural gate, json_repair extracts {"a": 1} from
+        # this string and the dropdown would show llm_test_2.a.
         result = extract_derived_variables_from_output(
-            output=(
-                'To create a new template, click "Save Template," and then '
-                '"Create new template." Set the model to gpt-4 and return '
-                "the response in the tool schema."
-            ),
+            output='Here is the result: {"a":1}',
             column_name="llm_test_2",
         )
         assert result["is_json"] is False
@@ -138,9 +105,15 @@ class TestExtractDerivedVariablesRegression:
         assert result["schema"] == {}
         assert result["raw_sample"] is None
 
+    def test_markdown_fenced_json_yields_no_derived_paths(self):
+        result = extract_derived_variables_from_output(
+            output='```json\n{"a":1}\n```',
+            column_name="llm_test_2",
+        )
+        assert result["is_json"] is False
+        assert result["paths"] == []
+
     def test_structured_json_output_still_yields_paths(self):
-        # Guard against over-correction: real structured output must still
-        # produce the expected `column.path` variables.
         result = extract_derived_variables_from_output(
             output='{"answer": "42", "reason": {"kind": "final"}}',
             column_name="llm_test_2",
@@ -153,8 +126,6 @@ class TestExtractDerivedVariablesRegression:
         assert "llm_test_2.reason.kind" in result["full_variables"]
 
     def test_repairable_json_output_still_yields_paths(self):
-        # Broken-but-recognizable JSON (trailing comma) must still repair
-        # into paths — the tolerant parser is retained for this case.
         result = extract_derived_variables_from_output(
             output='{"answer": "42", "score": 0.9,}',
             column_name="llm_test_2",
