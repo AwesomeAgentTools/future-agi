@@ -60,8 +60,17 @@ def _bypass_plan_entitlement_check_for_accounts_tests():
         yield
         return
 
+    from ee.usage.services.entitlements import Entitlements
+
+    original_check_feature = Entitlements.check_feature
+
+    def check_feature(org_id, feature):
+        if feature == "has_custom_roles":
+            return CheckResult(allowed=True)
+        return original_check_feature(org_id, feature)
+
     with patch(
         "ee.usage.services.entitlements.Entitlements.check_feature",
-        return_value=CheckResult(allowed=True),
+        side_effect=check_feature,
     ):
         yield
