@@ -143,4 +143,24 @@ describe("AudioPlayerCustom picks the renderer from the recording shape", () => 
       expect(captured.trackUrls).toBeNull();
     },
   );
+
+  it("routes a call that names no provider anywhere", () => {
+    // The observability detail payload carries `call_metadata: {}` and no
+    // top-level provider, so the recording shape is the only signal available.
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <AudioPlayerCustom
+          data={{
+            module: "project",
+            recording_available: true,
+            call_metadata: {},
+            recording: { mono: { combined_url: COMBINED } },
+          }}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(captured.singleUrl).toBe(COMBINED);
+    expect(captured.trackUrls).toBeNull();
+  });
 });
