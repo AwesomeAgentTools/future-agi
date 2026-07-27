@@ -1789,6 +1789,12 @@ class AnnotateDetailSerializer(serializers.Serializer):
         labels = instance["labels"]
         annotations = instance["annotations"]
         progress = instance["progress"]
+        # Same page cache the view built, under the key ``get_source_preview``
+        # already uses. content and preview resolve the SAME tracer source, so
+        # without it they each did their own CH point-read (TH-7104).
+        ch_cache = self.context.get("ch_source_cache")
+        if ch_cache is None:
+            ch_cache = CollectorSourceCache.for_items([item])
 
         return {
             "item": {
@@ -1826,8 +1832,8 @@ class AnnotateDetailSerializer(serializers.Serializer):
                         "user"
                     )
                 ],
-                "source_content": resolve_source_content(item),
-                "source_preview": resolve_source_preview(item),
+                "source_content": resolve_source_content(item, ch_cache=ch_cache),
+                "source_preview": resolve_source_preview(item, ch_cache=ch_cache),
                 "review_notes": item.review_notes,
                 "reviewed_by_name": (
                     item.reviewed_by.name if item.reviewed_by else None
