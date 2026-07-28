@@ -1,5 +1,6 @@
 import structlog
 from concurrent.futures import ThreadPoolExecutor
+from django.conf import settings
 from django.http import Http404
 from django.utils import timezone
 from rest_framework.decorators import action
@@ -942,6 +943,53 @@ class DashboardViewSet(BaseModelViewSetMixin, ModelViewSet):
     # Filter values — unified with source-based routing
     # ------------------------------------------------------------------
 
+    # Fixed lookback for all value scans — `spans` is partitioned by
+    # toDate(start_time), so this is what prunes. Unbounded scans read up to
+    # 70 GiB on the largest tenant and timed out on 23% of calls.
+    # Settings-overridable so ops can shrink it without a deploy.
+    FILTER_VALUES_DEFAULT_LOOKBACK_DAYS = 7
+
+    def _filter_values_window(self, column="start_time"):
+        """Fixed `start_time` lookback; returns `(clause, params)`.
+
+        Unconditional — no unbounded fallback: break-mode does not convert
+        memory (241) or byte-guard (307) errors, and this endpoint must never
+        fail. Keys with only older values list/search as empty.
+        """
+        lookback_days = getattr(
+            settings,
+            "FILTER_VALUES_DEFAULT_LOOKBACK_DAYS",
+            self.FILTER_VALUES_DEFAULT_LOOKBACK_DAYS,
+        )
+        return (
+            f"AND {column} >= now() - INTERVAL %(win_lookback_days)s DAY ",
+            {"win_lookback_days": lookback_days},
+        )
+
+    @staticmethod
+    def _like_pattern(search):
+        """`%search%` with the user's LIKE metacharacters escaped."""
+        escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        return f"%{escaped}%"
+
+    # On budget overrun, return instead of raising Code 159 (-> HTTP 400).
+    # With ORDER BY in the SQL a truncated scan returns ZERO rows (measured),
+    # not a partial list — the picker renders empty and the user searches.
+    _FILTER_VALUES_CH_SETTINGS = {"timeout_overflow_mode": "break"}
+
+    @classmethod
+    def _run_windowed_filter_values(
+        cls, analytics, build_sql, ch_params, window, timeout_ms
+    ):
+        """Run one windowed, break-bounded filter-value scan."""
+        clause, window_params = window
+        return analytics.execute_ch_query(
+            build_sql(clause),
+            {**ch_params, **window_params},
+            timeout_ms=timeout_ms,
+            settings=cls._FILTER_VALUES_CH_SETTINGS,
+        )
+
     @action(detail=False, methods=["get"])
     def filter_values(self, request):
         """Return distinct values for a given metric/attribute, for filter value picker."""
@@ -1105,44 +1153,55 @@ class DashboardViewSet(BaseModelViewSetMixin, ModelViewSet):
                         col_expr = f"toString({ts_resolved})"
                         limit = 20 if search else 500
                         if search:
-                            ch_params["search_pattern"] = f"%{search}%"
+                            ch_params["search_pattern"] = self._like_pattern(search)
                         search_clause = (
                             f"AND {col_expr} ILIKE %(search_pattern)s "
                             if search
                             else ""
                         )
-                        sql = (
-                            f"SELECT DISTINCT {col_expr} AS val "
-                            f"FROM spans AS sp "
-                            f"{ts_remap_join} "
-                            f"WHERE sp.project_id IN %(project_ids)s "
-                            f"AND sp.is_deleted = 0 "
-                            f"AND {col_expr} NOT IN ('', '{null_uuid}') "
-                            f"{search_clause}"
-                            f"ORDER BY val "
-                            f"LIMIT {limit}"
-                        )
+                        window = self._filter_values_window("sp.start_time")
+
+                        def build_sql(win):
+                            return (
+                                f"SELECT DISTINCT {col_expr} AS val "
+                                f"FROM spans AS sp "
+                                f"{ts_remap_join} "
+                                f"WHERE sp.project_id IN %(project_ids)s "
+                                f"AND sp.is_deleted = 0 "
+                                f"{win}"
+                                f"AND {col_expr} NOT IN ('', '{null_uuid}') "
+                                f"{search_clause}"
+                                f"ORDER BY val "
+                                f"LIMIT {limit}"
+                            )
                     else:
                         limit = 20 if search else 500
                         if search:
-                            ch_params["search_pattern"] = f"%{search}%"
+                            ch_params["search_pattern"] = self._like_pattern(search)
                         search_clause = (
                             f"AND toString({col_expr}) ILIKE %(search_pattern)s "
                             if search
                             else ""
                         )
-                        sql = (
-                            f"SELECT DISTINCT {col_expr} AS val "
-                            f"FROM spans "
-                            f"WHERE project_id IN %(project_ids)s "
-                            f"AND is_deleted = 0 "
-                            f"AND {col_expr} NOT IN ('', '{null_uuid}') "
-                            f"{root_only_clause}"
-                            f"{search_clause}"
-                            f"ORDER BY val "
-                            f"LIMIT {limit}"
-                        )
-                    result = analytics.execute_ch_query(sql, ch_params, timeout_ms=5000)
+                        window = self._filter_values_window()
+
+                        def build_sql(win):
+                            return (
+                                f"SELECT DISTINCT {col_expr} AS val "
+                                f"FROM spans "
+                                f"WHERE project_id IN %(project_ids)s "
+                                f"AND is_deleted = 0 "
+                                f"{win}"
+                                f"AND {col_expr} NOT IN ('', '{null_uuid}') "
+                                f"{root_only_clause}"
+                                f"{search_clause}"
+                                f"ORDER BY val "
+                                f"LIMIT {limit}"
+                            )
+
+                    result = self._run_windowed_filter_values(
+                        analytics, build_sql, ch_params, window, timeout_ms=5000
+                    )
                     values = [row["val"] for row in result.data]
                 except Exception as e:
                     logger.warning(
@@ -1285,24 +1344,63 @@ class DashboardViewSet(BaseModelViewSetMixin, ModelViewSet):
                 # the endpoint returns 400 — see the failure on
                 # conversation.recording.mono.assistant / ended_reason for
                 # heavy voice projects.
-                sql = (
-                    "SELECT DISTINCT attrs_string[%(attr_key)s] AS val "
-                    "FROM spans "
-                    "WHERE project_id IN %(project_ids)s "
-                    "AND is_deleted = 0 "
-                    "AND mapContains(attrs_string, %(attr_key)s) "
-                    "AND attrs_string[%(attr_key)s] != '' "
-                    "ORDER BY val "
-                    "LIMIT 500"
-                )
-                result = analytics.execute_ch_query(
-                    sql,
-                    {"project_ids": project_ids, "attr_key": metric_name},
-                    timeout_ms=15000,
-                )
-                values = [
-                    {"value": row["val"], "label": row["val"]} for row in result.data
-                ]
+                attr_limit = 20 if search else 500
+                attr_params: dict = {
+                    "project_ids": project_ids,
+                    "attr_key": metric_name,
+                }
+                attr_search_clause = ""
+                if search:
+                    attr_params["search_pattern"] = self._like_pattern(search)
+                    # Companion for idx_attrs_str_ngram (023): the ILIKE on a
+                    # map element alone never engages the index. Implied by
+                    # the ILIKE, so results are unchanged. Must stay
+                    # byte-identical to the index DDL expression.
+                    attr_params["search_pattern_lower"] = self._like_pattern(
+                        search
+                    ).lower()
+                    attr_search_clause = (
+                        "AND attrs_string[%(attr_key)s] ILIKE %(search_pattern)s "
+                        "AND arrayStringConcat(arrayMap(x -> lower(x), "
+                        "mapValues(attrs_string))) LIKE %(search_pattern_lower)s "
+                    )
+
+                def build_sql(win):
+                    return (
+                        "SELECT DISTINCT attrs_string[%(attr_key)s] AS val "
+                        "FROM spans "
+                        "WHERE project_id IN %(project_ids)s "
+                        "AND is_deleted = 0 "
+                        f"{win}"
+                        "AND mapContains(attrs_string, %(attr_key)s) "
+                        "AND attrs_string[%(attr_key)s] != '' "
+                        f"{attr_search_clause}"
+                        "ORDER BY val "
+                        f"LIMIT {attr_limit}"
+                    )
+
+                # Never 400: break absorbs timeouts; residual CH errors
+                # (241/307/connectivity) degrade to an empty list, matching
+                # the system_metric path.
+                try:
+                    result = self._run_windowed_filter_values(
+                        analytics,
+                        build_sql,
+                        attr_params,
+                        self._filter_values_window(),
+                        timeout_ms=15000,
+                    )
+                    values = [
+                        {"value": row["val"], "label": row["val"]}
+                        for row in result.data
+                    ]
+                except Exception as e:
+                    logger.warning(
+                        "filter_values_ch_query_failed",
+                        metric_name=metric_name,
+                        error=str(e)[:200],
+                    )
+                    values = []
             else:
                 values = []
 
