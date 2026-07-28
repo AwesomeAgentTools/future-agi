@@ -548,6 +548,11 @@ class QueueItemSerializer(serializers.ModelSerializer):
         }.get(status, status)
 
     def get_comment_count(self, obj):
+        # Annotated by QueueItemViewSet.get_queryset; the query is the fallback
+        # for callers that serialize an item they fetched themselves.
+        annotated = getattr(obj, "annotated_comment_count", None)
+        if annotated is not None:
+            return annotated
         return QueueItemReviewComment.objects.filter(
             queue_item=obj,
             action=QueueItemReviewComment.ACTION_COMMENT,
@@ -555,6 +560,9 @@ class QueueItemSerializer(serializers.ModelSerializer):
         ).count()
 
     def get_open_feedback_count(self, obj):
+        annotated = getattr(obj, "annotated_open_feedback_count", None)
+        if annotated is not None:
+            return annotated
         return QueueItemReviewThread.objects.filter(
             queue_item=obj,
             blocking=True,

@@ -2894,27 +2894,29 @@ def _review_workflow_entitlement_denial(request):
     return None
 
 
-def _queue_count_subquery(model, **filters):
-    """Live rows of *model* for the outer queue, as a correlated scalar subquery.
+def _related_count_subquery(manager, fk_field, **filters):
+    """Live rows of *manager* pointing at the outer row, as a correlated scalar
+    subquery: one indexed aggregate on ``fk_field``, never a join the outer
+    GROUP BY has to de-duplicate, and never a query per rendered row.
 
-    One indexed aggregate per count on the child's ``queue_id`` — never a join
-    the outer GROUP BY has to de-duplicate.
+    The CALLER picks the manager, because the correct one differs by call site
+    and the difference is invisible in tests:
 
-    ``no_workspace_objects``, NOT ``objects``: ``BaseModelManager`` folds the
-    ambient thread-local workspace into every queryset it builds, and ``QueueItem``
-    carries a ``workspace`` FK. Through ``objects`` these counts would silently
-    shrink to the request's workspace — a semantics change the joined ``Count()``
-    they replace never had — and would drag a correlated ``accounts_workspace``
-    join into each of the four subqueries per row. The queue is already
-    workspace-scoped by ``get_queryset``; its item count is a property of the
-    queue, not of who is looking at it.
+    * ``no_workspace_objects`` reproduces a joined ``Count()`` — a JOIN carries
+      no workspace predicate, so the aggregate it replaces never had one.
+    * ``objects`` reproduces a per-object ``Model.objects.filter(...).count()``
+      — ``BaseModelManager`` folds the ambient thread-local workspace in, so
+      that count always did have one.
+
+    Picking the wrong one changes counts only under a non-default workspace,
+    which neither the API test client nor ``manage.py`` ever sets — so it will
+    not fail a test, it will just be wrong in production.
     """
+    lookups = {fk_field: OuterRef("pk"), "deleted": False, **filters}
     return Coalesce(
         Subquery(
-            model.no_workspace_objects.filter(
-                queue=OuterRef("pk"), deleted=False, **filters
-            )
-            .values("queue")
+            manager.filter(**lookups)
+            .values(fk_field)
             .annotate(count=Count("id"))
             .values("count")[:1]
         ),
@@ -3011,11 +3013,19 @@ class AnnotationQueueViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelVie
             # multiplier, so the page spills to disk and takes seconds
             # (TH-7104). Each subquery is an indexed aggregate on queue_id.
             queryset = queryset.annotate(
-                label_count=_queue_count_subquery(AnnotationQueueLabel),
-                annotator_count=_queue_count_subquery(AnnotationQueueAnnotator),
-                item_count=_queue_count_subquery(QueueItem),
-                completed_count=_queue_count_subquery(
-                    QueueItem, status=QueueItemStatus.COMPLETED.value
+                label_count=_related_count_subquery(
+                    AnnotationQueueLabel.no_workspace_objects, "queue"
+                ),
+                annotator_count=_related_count_subquery(
+                    AnnotationQueueAnnotator.no_workspace_objects, "queue"
+                ),
+                item_count=_related_count_subquery(
+                    QueueItem.no_workspace_objects, "queue"
+                ),
+                completed_count=_related_count_subquery(
+                    QueueItem.no_workspace_objects,
+                    "queue",
+                    status=QueueItemStatus.COMPLETED.value,
                 ),
             )
 
@@ -4655,6 +4665,28 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
                         deleted=False
                     ).select_related("user"),
                     to_attr="active_assignments",
+                ),
+            )
+            # comment_count / open_feedback_count were a .count() per rendered
+            # item — two extra queries per row, so a page cost 2N+12 queries and
+            # ?limit=1000 cost 2012 (TH-7104). Annotated here they cost nothing
+            # extra. ``objects``, not ``no_workspace_objects``: the per-object
+            # counts these replace went through the workspace-filtering manager,
+            # so keeping it preserves their semantics exactly.
+            .annotate(
+                annotated_comment_count=_related_count_subquery(
+                    QueueItemReviewComment.objects,
+                    "queue_item",
+                    action=QueueItemReviewComment.ACTION_COMMENT,
+                ),
+                annotated_open_feedback_count=_related_count_subquery(
+                    QueueItemReviewThread.objects,
+                    "queue_item",
+                    blocking=True,
+                    status__in=[
+                        QueueItemReviewThread.STATUS_OPEN,
+                        QueueItemReviewThread.STATUS_REOPENED,
+                    ],
                 ),
             )
         )

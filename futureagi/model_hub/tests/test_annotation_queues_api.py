@@ -36,7 +36,7 @@ from model_hub.models.choices import (
     QueueItemStatus,
 )
 from model_hub.models.develop_annotations import AnnotationsLabels
-from model_hub.views.annotation_queues import _queue_count_subquery
+from model_hub.views.annotation_queues import _related_count_subquery
 from tfc.constants.levels import Level
 from tfc.constants.roles import OrganizationRoles
 from tfc.ee_gating import EEResource, FeatureUnavailable
@@ -353,7 +353,11 @@ class TestListQueues:
             try:
                 return (
                     AnnotationQueue.no_workspace_objects.filter(pk=queue.pk)
-                    .annotate(item_count=_queue_count_subquery(QueueItem))
+                    .annotate(
+                        item_count=_related_count_subquery(
+                            QueueItem.no_workspace_objects, "queue"
+                        )
+                    )
                     .first()
                     .item_count
                 )
