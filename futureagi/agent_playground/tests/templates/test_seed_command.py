@@ -70,6 +70,9 @@ class TestSeedNodeTemplatesCommand:
 
     def test_dry_run_creates_nothing(self, db):
         """--dry-run prints info but creates no records."""
+        # The seed migration already ran during test-db setup, so start from
+        # a clean slate to isolate this test's own assertion.
+        NodeTemplate.no_workspace_objects.all().delete()
         call_command("seed_node_templates", dry_run=True)
         assert not NodeTemplate.no_workspace_objects.filter(name="llm_prompt").exists()
 
@@ -86,5 +89,6 @@ class TestSeedNodeTemplatesCommand:
 
     def test_template_filter_unknown(self, db):
         """--template with unknown name prints error and creates nothing."""
+        NodeTemplate.no_workspace_objects.all().delete()
         call_command("seed_node_templates", template="nonexistent")
         assert NodeTemplate.no_workspace_objects.count() == 0
