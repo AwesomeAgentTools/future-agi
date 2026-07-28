@@ -876,9 +876,13 @@ class TestTraceSessionOverlayWritePath:
         expected_group = (survivor_id,)
         assert bound_session_ids == [expected_group, expected_group]
 
-    def test_retrieve_clickhouse_applies_time_window_to_span_scans(
+    def test_retrieve_clickhouse_scans_spans_scoped_to_session_group(
         self, observe_project
     ):
+        """A by-id session-detail retrieve scans spans scoped to the session
+        group (``trace_session_id IN session_group_ids``), not clipped to the
+        request's created_at window — the detail view shows the whole session.
+        """
         requested_id = str(uuid.uuid4())
         captured_span_scan_params = []
         analytics = mock.Mock()
@@ -886,21 +890,28 @@ class TestTraceSessionOverlayWritePath:
         def execute_ch_query(query, params, timeout_ms):
             if "WHERE any_id IN %(ids)s" in query:
                 return mock.Mock(data=[])
+            # Session-id canonicalization scan (_expand_session_group): no
+            # aliases, so the requested id stands alone.
+            if "FROM trace_session_id_remap" in query:
+                return mock.Mock(data=[])
             if "FROM spans" in query and (
                 "count(DISTINCT trace_id)" in query or "GROUP BY trace_id" in query
             ):
-                assert "start_time >= %(start_date)s" in query
-                assert "start_time < %(end_date)s" in query
+                # Both span scans are scoped to the session group, with no
+                # created_at time window applied.
+                assert "trace_session_id IN %(session_group_ids)s" in query
+                assert "start_date" not in query
                 captured_span_scan_params.append(params)
                 if "count(DISTINCT trace_id)" in query:
                     return mock.Mock(
                         data=[
                             {
-                                "start_time": None,
-                                "end_time": None,
+                                "session_start": None,
+                                "session_end": None,
                                 "total_cost": 0,
                                 "total_tokens": 0,
                                 "total_traces": 0,
+                                "end_user_id": "",
                             }
                         ]
                     )
@@ -909,8 +920,6 @@ class TestTraceSessionOverlayWritePath:
 
         analytics.execute_ch_query.side_effect = execute_ch_query
 
-        start = datetime(2026, 1, 1)
-        end = datetime(2026, 1, 31, 23, 59, 59)
         query_data = {
             "page_number": 0,
             "page_size": 10,
@@ -942,10 +951,10 @@ class TestTraceSessionOverlayWritePath:
             )
 
         assert response.status_code == status.HTTP_200_OK
+        # Both the session-aggregate and the paginated-trace span scans ran.
         assert len(captured_span_scan_params) == 2
         for params in captured_span_scan_params:
-            assert params["start_date"] == start
-            assert params["end_date"] == end
+            assert params["session_group_ids"] == (requested_id,)
 
     def test_overlay_write_composes_with_slice_2a_name_read(
         self, auth_client, observe_project, trace_session

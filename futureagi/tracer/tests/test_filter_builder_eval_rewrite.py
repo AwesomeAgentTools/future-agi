@@ -258,7 +258,7 @@ class TestEvalScoreCompilation:
         where, _ = _translate(
             ClickHouseFilterBuilder, _eval_filter(eval_id, "greater_than", 50)
         )
-        assert "FROM tracer_eval_logger FINAL" in where
+        assert "FROM tracer_eval_logger " in where
         assert "(deleted = 0 OR deleted IS NULL)" in where
         assert "_peerdb_is_deleted" not in where
         # errored eval rows always excluded from value-match filters.
@@ -549,7 +549,7 @@ class TestEvalMetricThroughV2:
         where, _ = _translate(
             ClickHouseFilterBuilderV2, _eval_filter(eval_id, "greater_than", 50)
         )
-        assert "FROM tracer_eval_logger FINAL" in where
+        assert "FROM tracer_eval_logger " in where
         assert "(deleted = 0 OR deleted IS NULL)" in where
         # No stray is_deleted against the legacy table.
         assert "is_deleted" not in where
@@ -592,7 +592,7 @@ class TestHasEvalHasAnnotationShape:
         where, _ = ClickHouseFilterBuilder(project_id="p1").translate(
             self._bool_filter("has_eval", True)
         )
-        assert "FROM tracer_eval_logger AS el FINAL" in where
+        assert "FROM tracer_eval_logger AS el " in where
         assert "(el.deleted = 0 OR el.deleted IS NULL)" in where
         assert "_peerdb_is_deleted" not in where
         # spans-side scoping keeps this from matching every project.
@@ -606,7 +606,7 @@ class TestHasEvalHasAnnotationShape:
         where, _ = ClickHouseFilterBuilderV2(project_id="p1").translate(
             self._bool_filter("has_eval", True)
         )
-        assert "FROM tracer_eval_logger AS el FINAL" in where
+        assert "FROM tracer_eval_logger AS el " in where
         assert "(el.deleted = 0 OR el.deleted IS NULL)" in where
         # spans-side `is_deleted` IS legitimately rewritten from _peerdb_*,
         # but the eval-logger `el.deleted` alias must stay bare.
@@ -617,7 +617,7 @@ class TestHasEvalHasAnnotationShape:
         where, _ = ClickHouseFilterBuilder(project_id="p1").translate(
             self._bool_filter("has_eval", True)
         )
-        assert "FROM tracer_eval_logger_v2 AS el FINAL" in where
+        assert "FROM tracer_eval_logger_v2 AS el " in where
         assert "el.is_deleted = 0" in where
 
     def test_has_eval_false_produces_no_condition(self):

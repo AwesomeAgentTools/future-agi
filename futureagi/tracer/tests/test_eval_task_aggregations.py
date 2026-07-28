@@ -87,6 +87,23 @@ def _row(*, span, cfg, task, **kwargs):
     )
 
 
+def _fresh_span(base):
+    """A new span sharing base's trace/project — one eval row per span, so
+    live rows don't collide on the eval_logger_live_span_uniq
+    (task, span, cfg) partial unique constraint."""
+    import uuid
+
+    return ObservationSpan.objects.create(
+        id=f"span_{uuid.uuid4().hex[:16]}",
+        project=base.project,
+        trace=base.trace,
+        name="agg span",
+        observation_type="llm",
+        start_time=base.start_time,
+        end_time=base.end_time,
+    )
+
+
 # ── eval_aggregation ───────────────────────────────────────────────────
 
 
@@ -111,7 +128,7 @@ class TestEvalAggregation:
         cfg = _config(project=project, template=tpl, name="Faithfulness")
         task = _task(project=project)
         for v in (0.4, 0.6, 0.8):
-            _row(span=observation_span, cfg=cfg, task=task, output_float=v)
+            _row(span=_fresh_span(observation_span), cfg=cfg, task=task, output_float=v)
 
         body = self._get(auth_client, task).json()["result"]
         agg = body["eval_aggregation"]["Faithfulness"]
@@ -130,7 +147,7 @@ class TestEvalAggregation:
         cfg = _config(project=project, template=tpl, name="Toxicity Check")
         task = _task(project=project)
         for v in (True, True, True, False):
-            _row(span=observation_span, cfg=cfg, task=task, output_bool=v)
+            _row(span=_fresh_span(observation_span), cfg=cfg, task=task, output_bool=v)
 
         agg = self._get(auth_client, task).json()["result"]["eval_aggregation"][
             "Toxicity Check"
@@ -150,7 +167,12 @@ class TestEvalAggregation:
         task = _task(project=project)
         # 4 rows: A, B, AC, A → A in 3/4, B in 1/4, C in 1/4
         for lst in (["A"], ["B"], ["A", "C"], ["A"]):
-            _row(span=observation_span, cfg=cfg, task=task, output_str_list=lst)
+            _row(
+                span=_fresh_span(observation_span),
+                cfg=cfg,
+                task=task,
+                output_str_list=lst,
+            )
 
         agg = self._get(auth_client, task).json()["result"]["eval_aggregation"][
             "Sentiment"
@@ -212,12 +234,12 @@ class TestEvalAggregation:
         )
         cfg = _config(project=project, template=tpl, name="Faithfulness")
         task = _task(project=project)
-        _row(span=observation_span, cfg=cfg, task=task, output_float=0.5)
-        _row(span=observation_span, cfg=cfg, task=task, output_float=0.5)
+        _row(span=_fresh_span(observation_span), cfg=cfg, task=task, output_float=0.5)
+        _row(span=_fresh_span(observation_span), cfg=cfg, task=task, output_float=0.5)
         # Adding an error row with a spurious output_float must not shift
         # the mean — the row is excluded entirely.
         _row(
-            span=observation_span,
+            span=_fresh_span(observation_span),
             cfg=cfg,
             task=task,
             error=True,
@@ -240,12 +262,12 @@ class TestEvalAggregation:
         )
         cfg = _config(project=project, template=tpl, name="Toxicity")
         task = _task(project=project)
-        _row(span=observation_span, cfg=cfg, task=task, output_bool=True)
-        _row(span=observation_span, cfg=cfg, task=task, output_bool=True)
+        _row(span=_fresh_span(observation_span), cfg=cfg, task=task, output_bool=True)
+        _row(span=_fresh_span(observation_span), cfg=cfg, task=task, output_bool=True)
         # A soft-deleted False row would drop pass-rate to 66% if counted;
         # excluding it keeps it at 100%.
         _row(
-            span=observation_span,
+            span=_fresh_span(observation_span),
             cfg=cfg,
             task=task,
             output_bool=False,
@@ -415,7 +437,11 @@ class TestSpanAggregation:
         )
         cfg = _config(project=project, template=tpl, name="Faithfulness")
         task = _task(project=project)
-        older = _row(span=observation_span, cfg=cfg, task=task, output_float=0.1)
+        # The superseded eval row is soft-deleted (re-eval upserts it), so only
+        # the latest live row survives the (task, span, cfg) unique constraint.
+        older = _row(
+            span=observation_span, cfg=cfg, task=task, output_float=0.1, deleted=True
+        )
         newer = _row(span=observation_span, cfg=cfg, task=task, output_float=0.9)
         # bump `older` further into the past so created_at ordering is
         # deterministic regardless of intra-test timing.
