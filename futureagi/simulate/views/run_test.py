@@ -3380,7 +3380,7 @@ class CallExecutionDetailView(APIView):
         except Http404:
             return self.gm.not_found("Call execution not found")
         except CallExecution.DoesNotExist:
-            return self.gm.bad_request("Call execution not found")
+            return self.gm.not_found("Call execution not found")
         except Exception as e:
             logger.exception(
                 "error_updating_call_execution_status",
@@ -3432,7 +3432,7 @@ class CallExecutionLogsView(APIView):
                     **call_execution_filters,
                 ).first()
                 if not call_execution:
-                    return self.gm.bad_request("Call execution not found.")
+                    return self.gm.not_found("Call execution not found.")
             else:
                 call_execution = get_object_or_404(
                     CallExecution,
