@@ -152,10 +152,10 @@ jobs:
           }
           # $COMMON_PATHS is intentionally unquoted: it must word-split into
           # one argument per yq path handed to bump().
+          # Only the active GCP regions are bumped by the pipeline; us/aws is the
+          # decommissioned AWS deployment and is intentionally left untouched.
           # shellcheck disable=SC2086
-          bump us/aws/deployment/values.yaml  $COMMON_PATHS
-          # shellcheck disable=SC2086
-          bump eu/gcp/deployment/values.yaml  $COMMON_PATHS
+          bump eu/gcp/deployment/values.yaml  $COMMON_PATHS .fiCollector.image.tag
           # shellcheck disable=SC2086
           bump us/gcp/deployment/values.yaml  $COMMON_PATHS .fiCollector.image.tag
       - name: Open bump PR
