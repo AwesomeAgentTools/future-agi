@@ -120,7 +120,7 @@ jobs:
         .temporal_worker_default.image.tag .temporal_worker_tasks_s.image.tag
         .temporal_worker_tasks_l.image.tag .temporal_worker_tasks_xl.image.tag
         .temporal_worker_trace.image.tag .temporal_worker_agent_compass.image.tag
-        .agentcc_gateway.image.tag .codeExecutor.image.tag
+        .agentcc_gateway.image.tag .codeExecutor.image.tag .embedding.image.tag
     steps:
       - uses: actions/create-github-app-token@v2
         id: app-token
