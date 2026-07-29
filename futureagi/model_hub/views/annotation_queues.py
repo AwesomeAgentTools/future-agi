@@ -135,6 +135,7 @@ from model_hub.utils.annotation_queue_helpers import (
     filter_available_source_ids_for_annotation,
     get_fk_field_name,
     is_source_available_for_annotation,
+    preview_payload_for_source,
     resolve_source_content,
     resolve_source_object,
     resolve_source_objects_bulk,
@@ -4989,6 +4990,9 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
                     organization=organization,
                     workspace=workspace or queue.workspace,
                     project_id=getattr(source_obj, "project_id", None),
+                    # Captured from the source we already resolved above, so the
+                    # items grid never re-reads CH to render this row (TH-7211).
+                    source_preview=preview_payload_for_source(source_type, source_obj),
                     order=max_order,
                     **{f"{fk_field}_id": source_pk},
                 )
@@ -5100,6 +5104,7 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
             available_ids,
             unavailable_count,
             unavailable_error,
+            previews_by_id,
         ) = filter_available_source_ids_for_annotation(
             source_type,
             resolved_ids,
@@ -5136,6 +5141,9 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
                 organization=request.organization,
                 workspace=getattr(request, "workspace", None) or queue.workspace,
                 project_id=project_id,
+                # Built from the roots the availability check already read, so
+                # the grid never re-reads CH to render this row (TH-7211).
+                source_preview=previews_by_id.get(tid),
                 order=max_order + i,
                 **{f"{fk_field}_id": tid},
             )
