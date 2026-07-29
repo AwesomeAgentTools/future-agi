@@ -1569,11 +1569,15 @@ class RunTestKPIsView(APIView):
             if choice_metric_ids:
                 simulate_eval_configs = SimulateEvalConfig.objects.filter(
                     id__in=list(choice_metric_ids)
-                )
+                ).select_related("eval_template")
                 config_choices_map = {}
                 for sec in simulate_eval_configs:
                     cfg = (sec.config or {}).get("config", {})
-                    choices = cfg.get("choices", [])
+                    # Scored-choices evals carry no config.choices; the labels
+                    # live in the template's choice_scores map.
+                    choices = cfg.get("choices") or list(
+                        (getattr(sec.eval_template, "choice_scores", None) or {}).keys()
+                    )
                     if choices:
                         config_choices_map[str(sec.id)] = choices
 

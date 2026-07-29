@@ -537,6 +537,96 @@ class TestGetKpiEvalMetricsQuery:
         # avg of 3, 5, 7 = 5.0
         assert float(numeric_rows[0][3]) == 5.0
 
+    def test_choice_dict_single_aggregation(self, test_execution, scenario):
+        """Scored-choices single-pick dict {"score":..,"choice":..} counts by
+        its choice label (regression: dict outputs previously emitted no row)."""
+        metric_id = str(uuid.uuid4())
+
+        for i, label in enumerate(["positive", "positive", "negative"]):
+            CallExecution.objects.create(
+                test_execution=test_execution,
+                scenario=scenario,
+                phone_number=f"+8100000{i:03d}",
+                status="completed",
+                eval_outputs={
+                    metric_id: {
+                        "name": "Sentiment",
+                        "output": {"score": 0.7, "choice": label},
+                        "output_type": "choices",
+                    },
+                },
+            )
+
+        query, params = get_kpi_eval_metrics_query(test_execution.id)
+        with connection.cursor() as cursor:
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+
+        choice_rows = [r for r in rows if r[2] == "choices" and r[4] is not None]
+        choice_map = {r[4]: r[5] for r in choice_rows}
+        assert choice_map.get("positive") == 2
+        assert choice_map.get("negative") == 1
+
+    def test_choice_dict_multi_aggregation(self, test_execution, scenario):
+        """Scored-choices multi-pick dict {"score":..,"choices":[..]} unnests
+        each label into the distribution."""
+        metric_id = str(uuid.uuid4())
+
+        for i, labels in enumerate([["joy", "love"], ["joy"]]):
+            CallExecution.objects.create(
+                test_execution=test_execution,
+                scenario=scenario,
+                phone_number=f"+8200000{i:03d}",
+                status="completed",
+                eval_outputs={
+                    metric_id: {
+                        "name": "Emotions",
+                        "output": {"score": 0.5, "choices": labels},
+                        "output_type": "choices",
+                    },
+                },
+            )
+
+        query, params = get_kpi_eval_metrics_query(test_execution.id)
+        with connection.cursor() as cursor:
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+
+        choice_rows = [r for r in rows if r[2] == "choices" and r[4] is not None]
+        choice_map = {r[4]: r[5] for r in choice_rows}
+        assert choice_map.get("joy") == 2
+        assert choice_map.get("love") == 1
+
+    def test_score_dict_aggregation(self, test_execution, scenario):
+        """Score + choice_scores dict {"score":..,"choice":..} averages on the
+        ->>'score' field (regression: dict outputs previously averaged to NULL)."""
+        metric_id = str(uuid.uuid4())
+
+        for i, score in enumerate([0.8, 0.6]):
+            CallExecution.objects.create(
+                test_execution=test_execution,
+                scenario=scenario,
+                phone_number=f"+8300000{i:03d}",
+                status="completed",
+                eval_outputs={
+                    metric_id: {
+                        "name": "Helpfulness",
+                        "output": {"score": score, "choice": "Good"},
+                        "output_type": "score",
+                    },
+                },
+            )
+
+        query, params = get_kpi_eval_metrics_query(test_execution.id)
+        with connection.cursor() as cursor:
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+
+        score_rows = [r for r in rows if r[2] == "score"]
+        assert len(score_rows) == 1
+        # avg of 0.8*100, 0.6*100 = 70.0
+        assert float(score_rows[0][3]) == 70.0
+
     def test_fully_errored_pass_fail_emits_zero_row(self, test_execution, scenario):
         """Pass/Fail metric where every entry errored still shows up as a
         scalar row with NULL avg, so the handler renders a 0% bar instead
