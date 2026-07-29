@@ -11,6 +11,7 @@ import {
 import { Outlet, useLocation, useNavigate, useParams } from "react-router";
 import { ErrorBoundary } from "react-error-boundary";
 import { logger } from "src/utils/logger";
+import { isChunkError } from "src/utils/lazyWithRetry";
 
 import { useObserveHeader } from "../project/context/ObserveHeaderContext";
 import { useUrlState } from "src/routes/hooks/use-url-state";
@@ -50,22 +51,34 @@ const TabContentLoader = () => (
 
 const TAB_ERROR_MESSAGE = "Could not load this tab";
 
-const TabContentError = ({ resetErrorBoundary }) => (
-  <Box sx={{ p: 2, backgroundColor: "background.paper" }}>
-    <Alert
-      severity="error"
-      action={
-        <Button color="inherit" size="small" onClick={resetErrorBoundary}>
-          Retry
-        </Button>
-      }
-    >
-      {TAB_ERROR_MESSAGE}
-    </Alert>
-  </Box>
-);
+const TabContentError = ({ error, resetErrorBoundary }) => {
+  // Chunk load errors bubble to the app-level boundary's silent reload.
+  if (isChunkError(error)) throw error;
+
+  // A full reload actually changes state, unlike resetErrorBoundary() alone.
+  const handleRetry = () => {
+    resetErrorBoundary();
+    window.location.reload();
+  };
+
+  return (
+    <Box sx={{ p: 2, backgroundColor: "background.paper" }}>
+      <Alert
+        severity="error"
+        action={
+          <Button color="inherit" size="small" onClick={handleRetry}>
+            Retry
+          </Button>
+        }
+      >
+        {TAB_ERROR_MESSAGE}
+      </Alert>
+    </Box>
+  );
+};
 
 TabContentError.propTypes = {
+  error: PropTypes.instanceOf(Error),
   resetErrorBoundary: PropTypes.func.isRequired,
 };
 

@@ -61,6 +61,10 @@ const CrashingTab = () => {
   throw new Error("Invalid time value");
 };
 
+const CrashingChunkTab = () => {
+  throw new Error("Loading chunk 42 failed after several retries");
+};
+
 const NavigateTo = ({ to }) => {
   const navigate = useNavigate();
   return (
@@ -100,6 +104,30 @@ const renderObservePage = () => {
   );
 };
 
+const renderObservePageWithTab = (TabComponent) => {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <ErrorBoundary fallback={<div>whole app crashed</div>}>
+        <MemoryRouter
+          initialEntries={["/dashboard/observe/proj-1/llm-tracing"]}
+        >
+          <Routes>
+            <Route
+              path="/dashboard/observe/:observeId"
+              element={<ObservePage />}
+            >
+              <Route path="llm-tracing" element={<TabComponent />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </ErrorBoundary>
+    </QueryClientProvider>,
+  );
+};
+
 describe("ObservePage tab containment", () => {
   let consoleError;
 
@@ -130,6 +158,15 @@ describe("ObservePage tab containment", () => {
     await waitFor(() =>
       expect(screen.getByText("sessions tab")).toBeInTheDocument(),
     );
+    expect(
+      screen.queryByText("Could not load this tab"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("lets a chunk-load error bubble past the tab boundary to the app-level one", () => {
+    renderObservePageWithTab(CrashingChunkTab);
+
+    expect(screen.getByText("whole app crashed")).toBeInTheDocument();
     expect(
       screen.queryByText("Could not load this tab"),
     ).not.toBeInTheDocument();

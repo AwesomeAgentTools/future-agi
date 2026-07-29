@@ -220,9 +220,10 @@ const ObserveListView = forwardRef(
           size: 160,
           enableSorting: false,
           cell: ({ getValue, row }) => {
-            const val = getValue() || row.original?.updated_at;
-            const color = getHealthColor(val, theme);
-            const parsed = toValidDate(val);
+            // Validity-aware fallback: an unparseable last_active must not win over a valid updated_at.
+            const parsed =
+              toValidDate(getValue()) ?? toValidDate(row.original?.updated_at);
+            const color = getHealthColor(parsed, theme);
             if (!parsed) return null;
             return (
               <Box sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>

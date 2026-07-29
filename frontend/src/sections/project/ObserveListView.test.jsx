@@ -141,6 +141,25 @@ describe("ObserveListView", () => {
       );
       expect(screen.getByText("2 minutes ago")).toBeInTheDocument();
     });
+
+    it("falls back to a valid updated_at when last_active is a truthy but unparseable string", async () => {
+      respondWith([
+        project({
+          name: "Zero Date With Valid Fallback",
+          last_active: "0000-00-00 00:00:00",
+          updated_at: minutesAgo(9 * 24 * 60),
+        }),
+      ]);
+
+      const { container } = renderList();
+
+      await waitFor(() =>
+        expect(
+          screen.getByText("Zero Date With Valid Fallback"),
+        ).toBeInTheDocument(),
+      );
+      expect(lastActiveCell(container, "p1")).toHaveTextContent("9 days ago");
+    });
   });
 
   describe("health colour", () => {
