@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.23.1](https://github.com/future-agi/future-agi/compare/v1.23.0...v1.23.1) (2026-07-29)
+
+
+### Bug Fixes
+
+* **ci:** exempt release-please branches from branch-name check ([8ff6658](https://github.com/future-agi/future-agi/commit/8ff6658d3b029adc13a6d92789db237a7c238ad7))
+* **release:** bump only GCP regions in deployment, not us/aws ([9a2635a](https://github.com/future-agi/future-agi/commit/9a2635a71b712db6db26ee55e5f5bf4ceb5cb463))
+* **release:** bump only the active GCP regions, not decommissioned us/aws ([83b8b30](https://github.com/future-agi/future-agi/commit/83b8b30291c371f72b1f8a0fb9d3139e69e46e45))
+* **release:** include serving (embedding) in the deployment bump ([3e2b644](https://github.com/future-agi/future-agi/commit/3e2b6449551868598ff035d6859188365a5c40e5))
+* **simulate:** render scored choices eval labels instead of [object Object] ([#1854](https://github.com/future-agi/future-agi/issues/1854)) ([fe2b579](https://github.com/future-agi/future-agi/commit/fe2b57997f60336a529784d90ada0b18b7a7acc5))
+
 ## [1.23.0](https://github.com/future-agi/future-agi/compare/v1.22.76...v1.23.0) (2026-07-28)
 
 
