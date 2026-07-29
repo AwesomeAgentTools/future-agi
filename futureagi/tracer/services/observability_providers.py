@@ -14,6 +14,7 @@ logger = structlog.get_logger(__name__)
 VAPI_PAGE_LIMIT = 100
 VAPI_MAX_PAGES = 10
 OBSERVABILITY_VERIFY_TIMEOUT_SECONDS = 30
+RETELL_CALL_HYDRATION_BOUND = 250
 
 
 class ObservabilityService:
@@ -201,6 +202,37 @@ class ObservabilityService:
         return all_logs
 
     @staticmethod
+    def _fetch_retell_call_detail(
+        call: dict[str, Any], headers: dict[str, str]
+    ) -> dict[str, Any]:
+        """Hydrate a lean v3 list item with fields available only from Get Call.
+
+        Raises:
+            ValueError: if call has no call_id or response is not a dict.
+            requests.RequestException: on HTTP or network failure.
+            TypeError: if response JSON is not a dict.
+        """
+        call_id = call.get("call_id")
+        if not call_id:
+            raise ValueError("Retell call detail: missing call_id")
+
+        response = requests.get(
+            f"{ObservabilityRoutes.RETELL_GET_CALL_URL.value}/{call_id}",
+            headers=headers,
+            timeout=30,
+        )
+        response.raise_for_status()
+        detail = response.json()
+
+        if not isinstance(detail, dict):
+            raise TypeError(
+                f"Retell call detail response must be a dict, "
+                f"got {type(detail).__name__}"
+            )
+
+        return {**call, **detail}
+
+    @staticmethod
     def _fetch_retell_logs(
         provider: ObservabilityProvider,
         start_time: datetime | None = None,
@@ -225,10 +257,12 @@ class ObservabilityService:
         }
         agent_assistant_id = getattr(agent, "assistant_id", None) if agent else None
         data: dict[str, Any] = {
-            "limit": 1000,
+            "limit": RETELL_CALL_HYDRATION_BOUND,
             "filter_criteria": {
                 # Using assistant_id as the agent identifier
-                "agent": [{"agent_id": agent_assistant_id}] if agent_assistant_id else [],
+                "agent": (
+                    [{"agent_id": agent_assistant_id}] if agent_assistant_id else []
+                ),
                 "call_status": {
                     "type": "enum",
                     "op": "in",
@@ -237,7 +271,7 @@ class ObservabilityService:
             },
         }
         if start_time and end_time:
-            data["filter_criteria"]["start_timestamp"] = {
+            data["filter_criteria"]["end_timestamp"] = {
                 "type": "range",
                 "op": "bt",
                 "value": [
@@ -248,6 +282,7 @@ class ObservabilityService:
 
         all_logs: list[dict] = []
         pagination_key = None
+        seen_pagination_keys: set[str] = set()
         while True:
             request_data = dict(data)
             if pagination_key:
@@ -263,14 +298,35 @@ class ObservabilityService:
             payload = response.json()
             has_more = bool(payload.get("has_more"))
             next_pagination_key = payload.get("pagination_key")
-            if has_more and pagination_key and next_pagination_key == pagination_key:
-                break
-
             all_logs.extend(payload.get("items") or [])
 
-            if not has_more or not next_pagination_key:
+            if len(all_logs) > RETELL_CALL_HYDRATION_BOUND or (
+                has_more and len(all_logs) >= RETELL_CALL_HYDRATION_BOUND
+            ):
+                raise RuntimeError(
+                    "Retell pagination did not complete within the "
+                    f"{RETELL_CALL_HYDRATION_BOUND}-call hydration bound "
+                    f"(has_more={has_more}, collected={len(all_logs)})."
+                )
+
+            if not has_more:
                 break
+            if not next_pagination_key:
+                raise RuntimeError(
+                    "Retell pagination reported has_more without a pagination_key"
+                )
+            if next_pagination_key in seen_pagination_keys:
+                raise RuntimeError(
+                    f"Retell pagination repeated cursor {next_pagination_key!r}"
+                )
+            seen_pagination_keys.add(next_pagination_key)
             pagination_key = next_pagination_key
+
+        if all_logs:
+            all_logs = [
+                ObservabilityService._fetch_retell_call_detail(call, headers)
+                for call in all_logs
+            ]
 
         return all_logs
 
@@ -477,9 +533,7 @@ class ObservabilityService:
         if not api_key:
             logger.warning(
                 "missing_api_key_for_provider",
-                provider_id=str(provider.id),
                 provider_name=provider_name,
-                message=f"Missing API key for {provider_name} provider. Skipping log fetch.",
             )
             return None
         return api_key
@@ -519,7 +573,10 @@ class ObservabilityService:
         recording_url = (
             sa.get("recording_url")
             or sa.get("conversation.recording.mono.combined")
-            or (raw_log.get("artifact") or {}).get("recording", {}).get("mono", {}).get("combinedUrl")
+            or (raw_log.get("artifact") or {})
+            .get("recording", {})
+            .get("mono", {})
+            .get("combinedUrl")
             or raw_log.get("recordingUrl")
         )
         stereo_recording_url = (
@@ -917,54 +974,35 @@ class ObservabilityService:
         elif provider == ProviderChoices.TWILIO:
             processed = ObservabilityService._process_twilio_raw(raw_log)
         else:  # VAPI, and the default for any still-unrecognized label
-            processed = ObservabilityService._process_vapi_logs(raw_log, span_attributes)
+            processed = ObservabilityService._process_vapi_logs(
+                raw_log, span_attributes
+            )
 
         if span_attributes:
             from tracer.utils.vapi_recording import VapiRecordingService
 
-            mono_s3 = (
-                span_attributes.get("recording_url")
-                or span_attributes.get("conversation.recording.mono.combined")
+            mono_s3 = span_attributes.get("recording_url") or span_attributes.get(
+                "conversation.recording.mono.combined"
             )
-            stereo_s3 = (
-                span_attributes.get("stereo_recording_url")
-                or span_attributes.get("conversation.recording.stereo")
-            )
-            logger.info(
-                "process_raw_logs: rehost decision",
-                provider=provider,
-                mono_s3=mono_s3,
-                mono_s3_is_fagi=(
-                    VapiRecordingService.is_fagi_s3_url(mono_s3) if mono_s3 else None
-                ),
-                processed_recording_url=processed.get("recording_url"),
-                processed_recording_url_is_fagi=(
-                    VapiRecordingService.is_fagi_s3_url(processed.get("recording_url"))
-                    if processed.get("recording_url")
-                    else None
-                ),
-                stereo_s3=stereo_s3,
-                stereo_s3_is_fagi=(
-                    VapiRecordingService.is_fagi_s3_url(stereo_s3) if stereo_s3 else None
-                ),
-                processed_stereo_url=processed.get("stereo_recording_url"),
-                processed_stereo_url_is_fagi=(
-                    VapiRecordingService.is_fagi_s3_url(processed.get("stereo_recording_url"))
-                    if processed.get("stereo_recording_url")
-                    else None
-                ),
-                fagi_buckets=list(VapiRecordingService._FAGI_S3_BUCKETS),
-            )
-            if mono_s3 and VapiRecordingService.is_fagi_s3_url(mono_s3) and not VapiRecordingService.is_fagi_s3_url(
-                processed.get("recording_url")
+            stereo_s3 = span_attributes.get(
+                "stereo_recording_url"
+            ) or span_attributes.get("conversation.recording.stereo")
+            if (
+                mono_s3
+                and VapiRecordingService.is_fagi_s3_url(mono_s3)
+                and not VapiRecordingService.is_fagi_s3_url(
+                    processed.get("recording_url")
+                )
             ):
                 processed["recording_url"] = mono_s3
-                logger.info("process_raw_logs: mono_s3 rehosted", mono_s3=mono_s3)
-            if stereo_s3 and VapiRecordingService.is_fagi_s3_url(stereo_s3) and not VapiRecordingService.is_fagi_s3_url(
-                processed.get("stereo_recording_url")
+            if (
+                stereo_s3
+                and VapiRecordingService.is_fagi_s3_url(stereo_s3)
+                and not VapiRecordingService.is_fagi_s3_url(
+                    processed.get("stereo_recording_url")
+                )
             ):
                 processed["stereo_recording_url"] = stereo_s3
-                logger.info("process_raw_logs: stereo_s3 rehosted", stereo_s3=stereo_s3)
 
         return processed
 
@@ -974,9 +1012,7 @@ class ObservabilityService:
         metadata = raw_log.get("metadata") or {}
         started_at = None
         if start_unix := metadata.get("start_time_unix_secs"):
-            started_at = datetime.fromtimestamp(
-                start_unix, tz=timezone.utc
-            ).isoformat()
+            started_at = datetime.fromtimestamp(start_unix, tz=timezone.utc).isoformat()
 
         transcripts = [
             {

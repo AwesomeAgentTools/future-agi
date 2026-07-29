@@ -2746,6 +2746,7 @@ class TraceView(BaseModelViewSetMixin, ModelViewSet):
           AND trace_id = %(trace_id)s
           AND is_deleted = 0
           AND parent_span_id IS NOT NULL
+          AND parent_span_id != ''
         ORDER BY start_time ASC
         LIMIT 1 BY id
         """

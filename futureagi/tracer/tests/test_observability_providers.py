@@ -440,7 +440,9 @@ class TestFetchRetellLogs:
         assert body["filter_criteria"]["call_status"]["type"] == "enum"
         assert body["filter_criteria"]["call_status"]["op"] == "in"
         assert body["filter_criteria"]["call_status"]["value"] == ["ended", "error"]
+        assert body["limit"] == 250
 
+    @patch("tracer.services.observability_providers.requests.get")
     @patch("tracer.services.observability_providers.requests.post")
     @patch.object(
         __import__(
@@ -449,7 +451,7 @@ class TestFetchRetellLogs:
         "_get_agent_definition",
     )
     def test_follows_pagination_cursor(
-        self, mock_get_agent, mock_requests_post
+        self, mock_get_agent, mock_requests_post, mock_requests_get
     ):
         """Fetches all pages returned by the v3 cursor pagination response."""
         from tracer.services.observability_providers import ObservabilityService
@@ -475,18 +477,56 @@ class TestFetchRetellLogs:
         second_response.raise_for_status = Mock()
         mock_requests_post.side_effect = [first_response, second_response]
 
+        def get_call_detail(url, **kwargs):
+            call_id = url.rsplit("/", 1)[-1]
+            detail_response = Mock()
+            detail_response.json.return_value = {
+                "call_id": call_id,
+                "transcript_with_tool_calls": [
+                    {
+                        "role": "agent",
+                        "content": f"transcript for {call_id}",
+                        "words": [{"start": 0.0, "end": 1.0}],
+                    }
+                ],
+                "recording_url": f"https://recordings.example/{call_id}.wav",
+            }
+            detail_response.raise_for_status = Mock()
+            return detail_response
+
+        mock_requests_get.side_effect = get_call_detail
+
         mock_provider = Mock()
         mock_provider.id = "retell-provider-123"
 
         result = ObservabilityService._fetch_retell_logs(mock_provider)
 
-        assert result == [{"call_id": "call-1"}, {"call_id": "call-2"}]
+        assert [call["call_id"] for call in result] == ["call-1", "call-2"]
+        assert result[0]["transcript_with_tool_calls"][0]["content"] == (
+            "transcript for call-1"
+        )
+        assert result[0]["recording_url"] == ("https://recordings.example/call-1.wav")
+
+        processed = ObservabilityService._process_retell_logs(result[0])
+        assert processed["transcript_available"] is True
+        assert processed["transcript"][0]["content"] == "transcript for call-1"
+        assert processed["recording_available"] is True
         assert mock_requests_post.call_count == 2
         first_body = mock_requests_post.call_args_list[0].kwargs["json"]
         second_body = mock_requests_post.call_args_list[1].kwargs["json"]
         assert "pagination_key" not in first_body
         assert second_body["pagination_key"] == "next-page"
+        assert {call.args[0] for call in mock_requests_get.call_args_list} == {
+            "https://api.retellai.com/v2/get-call/call-1",
+            "https://api.retellai.com/v2/get-call/call-2",
+        }
+        assert all(
+            call.kwargs["headers"]["Authorization"] == "Bearer valid-retell-key"
+            and call.kwargs["timeout"] == 30
+            for call in mock_requests_get.call_args_list
+        )
 
+    @patch("tracer.services.observability_providers.requests.get")
     @patch("tracer.services.observability_providers.requests.post")
     @patch.object(
         __import__(
@@ -494,10 +534,10 @@ class TestFetchRetellLogs:
         ).ObservabilityService,
         "_get_agent_definition",
     )
-    def test_stops_on_repeated_pagination_cursor(
-        self, mock_get_agent, mock_requests_post
+    def test_raises_on_repeated_pagination_cursor(
+        self, mock_get_agent, mock_requests_post, mock_requests_get
     ):
-        """Stops without duplicating items if Retell repeats a cursor."""
+        """Fails the poll rather than accepting a partial result on a cursor loop."""
         from tracer.services.observability_providers import ObservabilityService
 
         mock_agent = Mock()
@@ -517,10 +557,227 @@ class TestFetchRetellLogs:
         mock_provider = Mock()
         mock_provider.id = "retell-provider-123"
 
-        result = ObservabilityService._fetch_retell_logs(mock_provider)
+        with pytest.raises(RuntimeError, match="repeated cursor"):
+            ObservabilityService._fetch_retell_logs(mock_provider)
 
-        assert result == [{"call_id": "call-1"}]
         assert mock_requests_post.call_count == 2
+        mock_requests_get.assert_not_called()
+
+    @patch("tracer.services.observability_providers.requests.get")
+    @patch("tracer.services.observability_providers.requests.post")
+    @patch.object(
+        __import__(
+            "tracer.services.observability_providers", fromlist=["ObservabilityService"]
+        ).ObservabilityService,
+        "_get_agent_definition",
+    )
+    def test_raises_when_has_more_omits_pagination_cursor(
+        self, mock_get_agent, mock_requests_post, mock_requests_get
+    ):
+        """Fails the poll when Retell claims another page without a cursor."""
+        from tracer.services.observability_providers import ObservabilityService
+
+        mock_agent = Mock()
+        mock_agent.api_key = "valid-retell-key"
+        mock_agent.assistant_id = "agent-123"
+        mock_get_agent.return_value = mock_agent
+
+        response = Mock()
+        response.json.return_value = {
+            "items": [{"call_id": "call-1"}],
+            "has_more": True,
+        }
+        response.raise_for_status = Mock()
+        mock_requests_post.return_value = response
+
+        mock_provider = Mock()
+        mock_provider.id = "retell-provider-123"
+
+        with pytest.raises(RuntimeError, match="without a pagination_key"):
+            ObservabilityService._fetch_retell_logs(mock_provider)
+
+        mock_requests_post.assert_called_once()
+        mock_requests_get.assert_not_called()
+
+
+    @patch("tracer.services.observability_providers.requests.get")
+    def test_raises_when_get_call_json_is_invalid(self, mock_requests_get):
+        """Hydration JSON errors propagate instead of accepting the lean list item."""
+        from tracer.services.observability_providers import ObservabilityService
+
+        list_item = {"call_id": "call-1", "call_status": "ended"}
+        mock_response = Mock()
+        mock_response.raise_for_status = Mock()
+        mock_response.json.side_effect = ValueError("invalid JSON")
+        mock_requests_get.return_value = mock_response
+
+        with pytest.raises(ValueError, match="invalid JSON"):
+            ObservabilityService._fetch_retell_call_detail(
+                list_item, {"Authorization": "Bearer valid-retell-key"}
+            )
+
+    @patch("tracer.services.observability_providers.requests.get")
+    def test_raises_when_get_call_missing_id(self, mock_requests_get):
+        """Hydration raises ValueError when the call entry has no call_id."""
+        from tracer.services.observability_providers import ObservabilityService
+
+        list_item = {"call_status": "ended"}
+
+        with pytest.raises(ValueError, match="missing call_id"):
+            ObservabilityService._fetch_retell_call_detail(
+                list_item, {"Authorization": "Bearer valid-retell-key"}
+            )
+        mock_requests_get.assert_not_called()
+
+    @patch("tracer.services.observability_providers.requests.get")
+    def test_raises_when_get_call_returns_non_dict(self, mock_requests_get):
+        """Hydration raises TypeError when the response JSON is not a dict."""
+        from tracer.services.observability_providers import ObservabilityService
+
+        list_item = {"call_id": "call-1", "call_status": "ended"}
+        mock_response = Mock()
+        mock_response.json.return_value = ["not", "a", "dict"]
+        mock_response.raise_for_status = Mock()
+        mock_requests_get.return_value = mock_response
+
+        with pytest.raises(TypeError, match="must be a dict"):
+            ObservabilityService._fetch_retell_call_detail(
+                list_item, {"Authorization": "Bearer valid-retell-key"}
+            )
+
+    @patch("tracer.services.observability_providers.requests.get")
+    @patch("tracer.services.observability_providers.requests.post")
+    @patch.object(
+        __import__(
+            "tracer.services.observability_providers", fromlist=["ObservabilityService"]
+        ).ObservabilityService,
+        "_get_agent_definition",
+    )
+    def test_filters_by_end_timestamp(
+        self, mock_get_agent, mock_requests_post, mock_requests_get
+    ):
+        """Uses end_timestamp (not start_timestamp) filter when times are provided."""
+        from datetime import UTC, datetime, timedelta
+
+        from tracer.services.observability_providers import ObservabilityService
+
+        mock_agent = Mock()
+        mock_agent.api_key = "valid-retell-key"
+        mock_agent.assistant_id = "agent-123"
+        mock_get_agent.return_value = mock_agent
+
+        mock_response = Mock()
+        mock_response.json.return_value = {"items": []}
+        mock_response.raise_for_status = Mock()
+        mock_requests_post.return_value = mock_response
+
+        mock_provider = Mock()
+        mock_provider.id = "retell-provider-123"
+
+        now = datetime.now(tz=UTC)
+        start = now - timedelta(hours=2)
+        end = now
+
+        result = ObservabilityService._fetch_retell_logs(
+            mock_provider, start_time=start, end_time=end
+        )
+
+        assert result == []
+        body = mock_requests_post.call_args.kwargs["json"]
+        assert "end_timestamp" in body["filter_criteria"]
+        assert "start_timestamp" not in body["filter_criteria"]
+        ts_range = body["filter_criteria"]["end_timestamp"]
+        assert ts_range["type"] == "range"
+        assert ts_range["op"] == "bt"
+        assert ts_range["value"] == [
+            int(start.timestamp() * 1000),
+            int(end.timestamp() * 1000),
+        ]
+
+    @patch("tracer.services.observability_providers.requests.get")
+    @patch("tracer.services.observability_providers.requests.post")
+    @patch.object(
+        __import__(
+            "tracer.services.observability_providers", fromlist=["ObservabilityService"]
+        ).ObservabilityService,
+        "_get_agent_definition",
+    )
+    def test_raises_on_over_bound_has_more(
+        self, mock_get_agent, mock_requests_post, mock_requests_get
+    ):
+        """When has_more=True at the hydration bound, raises before issuing Get Call requests."""
+        from tracer.services.observability_providers import (
+            RETELL_CALL_HYDRATION_BOUND,
+            ObservabilityService,
+        )
+
+        mock_agent = Mock()
+        mock_agent.api_key = "valid-retell-key"
+        mock_agent.assistant_id = "agent-123"
+        mock_get_agent.return_value = mock_agent
+
+        # Return equal to bound with has_more=True (window exceeds limit)
+        response = Mock()
+        boundsize_payload = [
+            {"call_id": f"call-{i}"} for i in range(RETELL_CALL_HYDRATION_BOUND)
+        ]
+        response.json.return_value = {
+            "items": boundsize_payload,
+            "has_more": True,
+        }
+        response.raise_for_status = Mock()
+        mock_requests_post.return_value = response
+
+        mock_provider = Mock()
+        mock_provider.id = "retell-provider-123"
+
+        with pytest.raises(RuntimeError) as exc_info:
+            ObservabilityService._fetch_retell_logs(mock_provider)
+
+        assert "hydration bound" in str(exc_info.value).lower()
+        # No detail GET calls should have been made
+        mock_requests_get.assert_not_called()
+
+    @patch("tracer.services.observability_providers.requests.get")
+    @patch("tracer.services.observability_providers.requests.post")
+    @patch.object(
+        __import__(
+            "tracer.services.observability_providers", fromlist=["ObservabilityService"]
+        ).ObservabilityService,
+        "_get_agent_definition",
+    )
+    def test_raises_when_response_exceeds_hydration_bound(
+        self, mock_get_agent, mock_requests_post, mock_requests_get
+    ):
+        """Never hydrates more than the per-poll Retell call bound."""
+        from tracer.services.observability_providers import (
+            RETELL_CALL_HYDRATION_BOUND,
+            ObservabilityService,
+        )
+
+        mock_agent = Mock()
+        mock_agent.api_key = "valid-retell-key"
+        mock_agent.assistant_id = "agent-123"
+        mock_get_agent.return_value = mock_agent
+
+        response = Mock()
+        response.json.return_value = {
+            "items": [
+                {"call_id": f"call-{index}"}
+                for index in range(RETELL_CALL_HYDRATION_BOUND + 1)
+            ],
+            "has_more": False,
+        }
+        response.raise_for_status = Mock()
+        mock_requests_post.return_value = response
+
+        mock_provider = Mock()
+        mock_provider.id = "retell-provider-123"
+
+        with pytest.raises(RuntimeError, match="hydration bound"):
+            ObservabilityService._fetch_retell_logs(mock_provider)
+
+        mock_requests_get.assert_not_called()
 
 
 class TestFetchElevenLabsLogs:
@@ -887,6 +1144,40 @@ class TestObservabilityServiceIntegration:
 class TestFetchLogsForProviderAuthErrors:
     """Tests for fetch_logs_for_provider handling of HTTP 401/403 errors."""
 
+    @patch("tracer.utils.observability_provider.process_and_store_logs")
+    @patch("tracer.utils.observability_provider._update_last_fetched_at")
+    @patch("tracer.utils.observability_provider.ObservabilityService.get_call_logs")
+    @patch("tracer.utils.observability_provider.ObservabilityProvider.objects")
+    def test_retell_provider_polls_after_initial_fetch(
+        self,
+        mock_provider_objects,
+        mock_get_call_logs,
+        mock_update_last_fetched_at,
+        mock_process_and_store_logs,
+    ):
+        from tracer.utils.observability_provider import fetch_logs_for_provider
+
+        previous_fetch = Mock()
+        end_time = Mock()
+        mock_provider = Mock()
+        mock_provider.provider = ProviderChoices.RETELL
+        mock_provider.last_fetched_at = previous_fetch
+        mock_provider_objects.get.return_value = mock_provider
+        mock_get_call_logs.return_value = []
+
+        result = fetch_logs_for_provider(
+            provider_id="test-provider-id", end_time=end_time
+        )
+
+        assert result == []
+        mock_get_call_logs.assert_called_once_with(
+            provider=mock_provider,
+            start_time=previous_fetch,
+            end_time=end_time,
+        )
+        mock_update_last_fetched_at.assert_called_once_with(mock_provider, end_time)
+        mock_process_and_store_logs.assert_called_once_with([], mock_provider)
+
     @patch("tracer.utils.observability_provider.ObservabilityService.get_call_logs")
     @patch("tracer.utils.observability_provider.ObservabilityProvider.objects")
     def test_returns_none_on_401_without_sentry_exception(
@@ -969,7 +1260,7 @@ class TestFetchLogsForProviderAuthErrors:
             assert result is None
             mock_logger.exception.assert_called_once()
             mock_logger.error.assert_not_called()
-
+SWAP.BLK 1297:
     @patch("tracer.utils.observability_provider.ObservabilityService.get_call_logs")
     @patch("tracer.utils.observability_provider.ObservabilityProvider.objects")
     def test_logs_provider_id_and_status_code_on_auth_error(
@@ -995,3 +1286,4 @@ class TestFetchLogsForProviderAuthErrors:
             assert call_kwargs["provider_id"] == "test-provider-id"
             assert call_kwargs["provider_type"] == ProviderChoices.RETELL
             assert call_kwargs["status_code"] == 401
+
