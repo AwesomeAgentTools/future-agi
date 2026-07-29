@@ -1,6 +1,6 @@
 FROM futureagi/future-agi-base:v1.0.0
 
-COPY . .
+COPY futureagi/ .
 
 # Install Node.js for sandboxed JavaScript eval execution
 RUN apt-get update -qq && \
