@@ -80,15 +80,30 @@ def backfill_queue_item_source_previews(
             base = base.filter(queue_id=queue_id)
 
         # Group so each CH read is scoped to one tenant on the spans PK prefix.
+        # DISTINCT in the DB: without it this streams one row per matching item
+        # into Python just to dedup them into a set.
         groups = sorted(
-            {
-                (pid, stype)
-                for pid, stype in base.values_list("project_id", "source_type")
-            },
+            base.values_list("project_id", "source_type").distinct(),
             key=lambda g: (str(g[0]), g[1]),
         )
 
         for project_id, source_type in groups:
+            if project_id is None:
+                # project_id is nullable (pre-denormalization rows). Reading this
+                # group means an unscoped, cross-tenant ``spans FINAL`` — the exact
+                # shape this whole change exists to avoid. Leave them NULL; they
+                # keep rendering via the live fallback.
+                n = group_count = base.filter(
+                    project_id=None, source_type=source_type
+                ).count()
+                skipped += n
+                logger.info(
+                    "queue_item_preview_backfill_skipped_null_project",
+                    source_type=source_type,
+                    count=group_count,
+                )
+                emit(f"  project=None {source_type}: skipped={n} (unscoped read)")
+                continue
             group_qs = base.filter(project_id=project_id, source_type=source_type)
             # Stamped rows leave the queryset (the isnull guard), so the window
             # does not need to advance for them. Rows we deliberately skip DO
@@ -98,8 +113,35 @@ def backfill_queue_item_source_previews(
                 chunk = list(group_qs.order_by("id")[offset : offset + chunk_size])
                 if not chunk:
                     break
+                # One handler for the whole chunk: a PG failure on the write must
+                # skip this chunk exactly like a CH failure on the read, instead
+                # of escaping to the outer handler and killing every remaining
+                # group.
                 try:
                     cache = CollectorSourceCache.for_items(chunk)
+
+                    to_update = []
+                    chunk_skipped = 0
+                    for item in chunk:
+                        payload = resolve_source_preview(item, ch_cache=cache)
+                        # A source that no longer resolves comes back as the
+                        # ``deleted`` sentinel. Don't freeze that into the cache —
+                        # leave it NULL so the live path keeps telling the truth.
+                        if (
+                            not payload
+                            or payload.get("deleted")
+                            or payload.get("error")
+                        ):
+                            chunk_skipped += 1
+                            continue
+                        item.source_preview = payload
+                        to_update.append(item)
+
+                    if to_update:
+                        QueueItem.all_objects.bulk_update(
+                            to_update, ["source_preview"], batch_size=chunk_size
+                        )
+                        stamped += len(to_update)
                 except Exception as exc:
                     failed += len(chunk)
                     logger.warning(
@@ -111,24 +153,6 @@ def backfill_queue_item_source_previews(
                     )
                     break
 
-                to_update = []
-                chunk_skipped = 0
-                for item in chunk:
-                    payload = resolve_source_preview(item, ch_cache=cache)
-                    # A source that no longer resolves comes back as the
-                    # ``deleted`` sentinel. Don't freeze that into the cache —
-                    # leave it NULL so the live path keeps telling the truth.
-                    if not payload or payload.get("deleted") or payload.get("error"):
-                        chunk_skipped += 1
-                        continue
-                    item.source_preview = payload
-                    to_update.append(item)
-
-                if to_update:
-                    QueueItem.all_objects.bulk_update(
-                        to_update, ["source_preview"], batch_size=chunk_size
-                    )
-                    stamped += len(to_update)
                 skipped += chunk_skipped
                 offset += chunk_skipped
                 if sleep:

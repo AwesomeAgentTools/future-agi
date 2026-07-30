@@ -2626,6 +2626,145 @@ class TestQueueItemSourcePreviewCapture:
             f"_trace_preview_payload so this is a drift.\ncaptured={captured}\nlive={live}"
         )
 
+    def test_span_and_session_captures_match_the_live_path(
+        self,
+        organization,
+        workspace,
+        observe_project,
+        root_conversation_span,
+    ):
+        """Parity for the other two CH-backed builders.
+
+        The trace test above only covers ``_trace_preview_payload``; the
+        "shared builders can't drift" argument needs the span and session
+        builders pinned too, or half the surface is unguarded.
+        """
+        from model_hub.utils.annotation_queue_helpers import (
+            preview_payload_for_source,
+            resolve_source_object,
+            resolve_source_preview,
+        )
+
+        span_type = QueueItemSourceType.OBSERVATION_SPAN.value
+        source_obj = resolve_source_object(
+            span_type,
+            str(root_conversation_span.id),
+            organization=organization,
+            workspace=workspace,
+        )
+        assert source_obj is not None, "span source did not resolve from CH"
+        captured = preview_payload_for_source(span_type, source_obj)
+
+        item = QueueItem(
+            source_type=span_type,
+            observation_span_id=str(root_conversation_span.id),
+            project=observe_project,
+        )
+        live = resolve_source_preview(item)
+
+        assert captured == live, (
+            "add-time capture and live render disagree for observation_span; "
+            f"they share _span_preview_payload.\ncaptured={captured}\nlive={live}"
+        )
+
+    def test_filter_mode_add_captures_the_preview(
+        self,
+        auth_client,
+        organization,
+        workspace,
+        user,
+        observe_project,
+        observe_trace,
+        root_conversation_span,
+        thumbs_label,
+    ):
+        """The filter add-path must stamp source_preview, not just the enumerated one.
+
+        Filter mode is how voice items actually enter a queue in bulk, and it
+        takes its payload from ``previews_by_id`` rather than resolving a source
+        itself — so a regression to ``.get(tid) -> None`` would silently drop
+        every row back to a live ClickHouse read with nothing failing.
+        """
+        queue = _queue(
+            "TH-7211 filter capture",
+            organization,
+            workspace,
+            user,
+            project=observe_project,
+        )
+        AnnotationQueueLabel.objects.create(queue=queue, label=thumbs_label)
+
+        resp = auth_client.post(
+            f"/model-hub/annotation-queues/{queue.id}/items/add-items/",
+            {
+                "selection": {
+                    "mode": "filter",
+                    "source_type": QueueItemSourceType.TRACE.value,
+                    "project_id": str(observe_project.id),
+                    "filter": [],
+                }
+            },
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_200_OK, resp.data
+
+        item = QueueItem.all_objects.filter(
+            queue=queue, source_type=QueueItemSourceType.TRACE.value, deleted=False
+        ).first()
+        assert item is not None, f"filter add created no trace item: {resp.data}"
+        assert item.source_preview, (
+            "filter-mode add left source_preview NULL — previews_by_id is not "
+            "reaching the QueueItem, so the grid falls back to a live CH read"
+        )
+        assert item.source_preview["type"] == "trace"
+
+    def test_backfill_leaves_unresolvable_sources_null(
+        self,
+        organization,
+        workspace,
+        user,
+        observe_project,
+        thumbs_label,
+    ):
+        """The sentinel guard: a source CH can't resolve must stay NULL.
+
+        Freezing a ``deleted`` sentinel into the cache would make the grid
+        permanently claim the source is gone even if the read later succeeds.
+        """
+        from model_hub.management.commands.backfill_queue_item_source_preview import (
+            backfill_queue_item_source_previews,
+        )
+
+        queue = _queue(
+            "TH-7211 backfill sentinel",
+            organization,
+            workspace,
+            user,
+            project=observe_project,
+        )
+        AnnotationQueueLabel.objects.create(queue=queue, label=thumbs_label)
+        # A trace id with no ClickHouse row behind it.
+        item = QueueItem.objects.create(
+            queue=queue,
+            source_type=QueueItemSourceType.TRACE.value,
+            trace_id=uuid.uuid4(),
+            project=observe_project,
+            organization=organization,
+            workspace=workspace,
+            status=QueueItemStatus.PENDING.value,
+        )
+        QueueItem.all_objects.filter(id=item.id).update(source_preview=None)
+
+        stamped, skipped, failed = backfill_queue_item_source_previews(
+            queue_id=queue.id
+        )
+
+        assert stamped == 0, "an unresolvable source must not be stamped"
+        assert skipped == 1
+        assert failed == 0
+        item.refresh_from_db()
+        assert item.source_preview is None
+
     def test_uncaptured_rows_still_render_via_the_live_path(
         self,
         auth_client,
