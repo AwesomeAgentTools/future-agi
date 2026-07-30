@@ -123,6 +123,38 @@ def test_every_column_is_named_for_the_outer_projection(label, call):
     assert ", ''," not in projection
 
 
+# ── the constant vs the live table ─────────────────────────────────────────────
+
+
+@pytest.mark.django_db
+def test_sorting_key_matches_the_live_spans_table():
+    """``_SORTING_KEY`` must equal the real ``spans`` ORDER BY.
+
+    Everything else here is self-consistent: ``_DEDUP_KEY`` is derived from the
+    constant and the equivalence test builds its own table from it too, so all
+    of it stays green if the production ORDER BY changes underneath — while the
+    dedup silently over- or under-collapses. This is the one assertion tied to
+    the actual table.
+    """
+    from tracer.services.clickhouse.v2 import get_reader
+    from tracer.services.clickhouse.v2.span_reader import _SORTING_KEY
+
+    with get_reader() as reader:
+        rows = reader._client.query(
+            "SELECT sorting_key FROM system.tables WHERE name = 'spans' "
+            "AND database = currentDatabase()"
+        ).result_rows
+    assert rows, "spans table not found — cannot verify the dedup key"
+
+    normalise = lambda s: ",".join(p.strip() for p in s.split(","))  # noqa: E731
+    live = normalise(rows[0][0])
+    assert normalise(_SORTING_KEY) == live, (
+        "_SORTING_KEY has drifted from the spans ORDER BY. The LIMIT 1 BY dedup "
+        "collapses on this key, so a mismatch silently returns the wrong row "
+        f"version.\n  constant: {_SORTING_KEY}\n  live    : {live}"
+    )
+
+
 # ── semantics against a real ReplacingMergeTree ────────────────────────────────
 
 

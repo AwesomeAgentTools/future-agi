@@ -228,9 +228,32 @@ _FINAL_SKIP_INDEX_SETTINGS = {"use_skip_indexes_if_final": 1}
 # project's span volume, not the number of ids asked for. On dev: a 500-id heavy
 # read is 2,358ms / 3.4GiB peak under FINAL vs 123ms / 67MiB here, same rows
 # (TH-7226). Opt-in per caller — this reader also backs feed / dataset / evals.
-_SORTING_KEY = (
-    "project_id, observation_type, service_name, "
-    "toStartOfHour(start_time), trace_id, id"
+#
+# This MUST equal the live table's ORDER BY — a shorter key over-collapses, a
+# different one under-collapses, and either is silent. `test_sorting_key_matches
+# _the_live_spans_table` pins it against system.tables so drift fails a test
+# rather than a production read.
+_SORTING_KEY_PARTS: tuple[str, ...] = (
+    "project_id",
+    "observation_type",
+    "service_name",
+    "toStartOfHour(start_time)",
+    "trace_id",
+    "id",
+)
+_SORTING_KEY = ", ".join(_SORTING_KEY_PARTS)
+
+# Two key columns are unavailable under their own names inside the dedup
+# subquery: project_id is exposed to callers as project_id_str, and service_name
+# is not in the read set at all. Both are re-selected under private aliases, and
+# the LIMIT 1 BY clause is DERIVED from the key above rather than restated, so
+# the two cannot drift apart.
+_DEDUP_KEY_ALIASES = {
+    "project_id": "_dedup_project",
+    "service_name": "_dedup_service",
+}
+_DEDUP_KEY = ", ".join(
+    _DEDUP_KEY_ALIASES.get(part, part) for part in _SORTING_KEY_PARTS
 )
 
 
@@ -258,16 +281,15 @@ def _dedup_sql(where: str, order_by: str, *, include_heavy: bool) -> str:
     a row whose newest version is deleted resurrects as its older live version.
     """
     projection = ", ".join(_output_name(col) for col in _READ_COLUMNS)
+    aliases = ", ".join(
+        f"{col} AS {alias}" for col, alias in _DEDUP_KEY_ALIASES.items()
+    )
     return (
         f"SELECT {projection} FROM ("
-        # project_id is exposed as project_id_str and service_name isn't in the
-        # read set — both needed raw for the key, so re-selected privately.
-        f" SELECT {_named_select(include_heavy)},"
-        f" project_id AS _dedup_project, service_name AS _dedup_service"
+        f" SELECT {_named_select(include_heavy)}, {aliases}"
         f" FROM spans WHERE {where}"
         f" ORDER BY _version DESC"
-        f" LIMIT 1 BY _dedup_project, observation_type, _dedup_service,"
-        f" toStartOfHour(start_time), trace_id, id"
+        f" LIMIT 1 BY {_DEDUP_KEY}"
         f") WHERE is_deleted = 0 {order_by}"
     )
 
