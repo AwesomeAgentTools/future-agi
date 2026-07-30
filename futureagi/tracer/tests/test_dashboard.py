@@ -1014,6 +1014,67 @@ class TestMetricsEndpoint:
     @pytest.mark.django_db
     @patch("tracer.views.dashboard.is_clickhouse_enabled", return_value=True)
     @patch("tracer.views.dashboard.AnalyticsQueryService")
+    def test_filter_values_search_of_ngram_size_scans_unbounded(
+        self,
+        mock_analytics_cls,
+        _mock_ch_enabled,
+        auth_client,
+        observe_project,
+    ):
+        """A >=4-char search drops the lookback: the ngram index can prune it,
+        and old values stay findable via search."""
+        mock_result = MagicMock()
+        mock_result.data = [{"val": "gpt-4o-mini"}]
+        mock_analytics_cls.return_value.execute_ch_query.return_value = mock_result
+
+        auth_client.get(
+            "/tracer/dashboard/filter_values/"
+            "?metric_name=model_name&metric_type=custom_attribute"
+            f"&project_ids={observe_project.id}&source=traces"
+            "&search=gpt-"
+        )
+
+        sql_arg, params = (
+            mock_analytics_cls.return_value.execute_ch_query.call_args[0][0],
+            mock_analytics_cls.return_value.execute_ch_query.call_args[0][1],
+        )
+        assert "start_time >=" not in sql_arg
+        assert "win_lookback_days" not in params
+        assert "ILIKE %(search_pattern)s" in sql_arg
+
+    @pytest.mark.django_db
+    @patch("tracer.views.dashboard.is_clickhouse_enabled", return_value=True)
+    @patch("tracer.views.dashboard.AnalyticsQueryService")
+    def test_filter_values_short_search_stays_windowed(
+        self,
+        mock_analytics_cls,
+        _mock_ch_enabled,
+        auth_client,
+        observe_project,
+    ):
+        """Under 4 chars the ngram index cannot prune, so the scan keeps the
+        lookback — an unbounded un-indexed scan would be all cost, no gain."""
+        mock_result = MagicMock()
+        mock_result.data = []
+        mock_analytics_cls.return_value.execute_ch_query.return_value = mock_result
+
+        auth_client.get(
+            "/tracer/dashboard/filter_values/"
+            "?metric_name=model_name&metric_type=custom_attribute"
+            f"&project_ids={observe_project.id}&source=traces"
+            "&search=gpt"
+        )
+
+        sql_arg, params = (
+            mock_analytics_cls.return_value.execute_ch_query.call_args[0][0],
+            mock_analytics_cls.return_value.execute_ch_query.call_args[0][1],
+        )
+        assert "start_time >= now() - INTERVAL %(win_lookback_days)s DAY" in sql_arg
+        assert params["win_lookback_days"] == 7
+
+    @pytest.mark.django_db
+    @patch("tracer.views.dashboard.is_clickhouse_enabled", return_value=True)
+    @patch("tracer.views.dashboard.AnalyticsQueryService")
     def test_filter_values_search_companion_lowercases_needle(
         self,
         mock_analytics_cls,

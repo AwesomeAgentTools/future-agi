@@ -977,6 +977,11 @@ class DashboardViewSet(BaseModelViewSetMixin, ModelViewSet):
     # not a partial list — the picker renders empty and the user searches.
     _FILTER_VALUES_CH_SETTINGS = {"timeout_overflow_mode": "break"}
 
+    # Searches at least this long may scan unbounded — MUST equal the ngram
+    # size of idx_attrs_str_ngram (023), the length at which the index can
+    # prune. Shorter needles get no index help and stay windowed.
+    _FILTER_VALUES_SEARCH_UNBOUNDED_MIN_CHARS = 4
+
     @classmethod
     def _run_windowed_filter_values(
         cls, analytics, build_sql, ch_params, window, timeout_ms
@@ -1379,6 +1384,18 @@ class DashboardViewSet(BaseModelViewSetMixin, ModelViewSet):
                         f"LIMIT {attr_limit}"
                     )
 
+                # A search of >= ngram-size chars runs UNBOUNDED: values older
+                # than the lookback stay findable, and idx_attrs_str_ngram can
+                # prune the scan (its 4-gram bloom needs a >=4-char needle).
+                # Common needles that don't prune are still capped by break +
+                # the catch below — slow-then-empty, never an error. Shorter
+                # searches keep the window: the index cannot help them.
+                unbounded_search = (
+                    len(search) >= self._FILTER_VALUES_SEARCH_UNBOUNDED_MIN_CHARS
+                    if search
+                    else False
+                )
+
                 # Never 400: break absorbs timeouts; residual CH errors
                 # (241/307/connectivity) degrade to an empty list, matching
                 # the system_metric path.
@@ -1387,7 +1404,7 @@ class DashboardViewSet(BaseModelViewSetMixin, ModelViewSet):
                         analytics,
                         build_sql,
                         attr_params,
-                        self._filter_values_window(),
+                        ("", {}) if unbounded_search else self._filter_values_window(),
                         timeout_ms=15000,
                     )
                     values = [
