@@ -9,7 +9,16 @@ from decimal import Decimal, InvalidOperation
 import structlog
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Count, Exists, Max, OuterRef, Prefetch, Q
+from django.db.models import (
+    Count,
+    Exists,
+    Max,
+    OuterRef,
+    Prefetch,
+    Q,
+    Subquery,
+    Value,
+)
 from django.db.models.functions import Coalesce, Lower, TruncDate
 from django.utils import timezone
 from drf_yasg.utils import swagger_auto_schema
@@ -126,6 +135,7 @@ from model_hub.utils.annotation_queue_helpers import (
     filter_available_source_ids_for_annotation,
     get_fk_field_name,
     is_source_available_for_annotation,
+    preview_payload_for_source,
     resolve_source_content,
     resolve_source_object,
     resolve_source_objects_bulk,
@@ -1282,14 +1292,26 @@ def _reopen_items_missing_required_labels(queue):
     )
 
 
-def _span_notes_target_for_queue_item(item):
+def _span_notes_target_for_queue_item(item, *, ch_cache=None):
     """Return the span that stores whole-item notes for queue annotation.
 
     CH-native: span-source items resolve the span from CH by its soft id;
     trace-source items pick the trace's root span from CH (lean) — preference
     order ``observation_type="conversation"`` root (voice) → first root span →
     ``None``. Downstream only reads ``.id``. Never query PG (tables are dropped).
+
+    ``ch_cache`` (opt-in :class:`CollectorSourceCache`): reads the already-resolved
+    source off the page/item cache — same root-pick rule, so the same span — instead
+    of its own unscoped CH point-read. Callers that resolve the item's source anyway
+    should pass it; the bare read stays for callers that don't.
     """
+    if ch_cache is not None:
+        if item.source_type == "observation_span":
+            return ch_cache.span(item.observation_span_id)
+        if item.source_type == "trace":
+            return ch_cache.trace_root(item.trace_id)
+        return None
+
     from tracer.services.clickhouse.v2 import get_reader
 
     if item.source_type == "observation_span" and item.observation_span_id:
@@ -2873,6 +2895,36 @@ def _review_workflow_entitlement_denial(request):
     return None
 
 
+def _related_count_subquery(manager, fk_field, **filters):
+    """Live rows of *manager* pointing at the outer row, as a correlated scalar
+    subquery: one indexed aggregate on ``fk_field``, never a join the outer
+    GROUP BY has to de-duplicate, and never a query per rendered row.
+
+    The CALLER picks the manager, because the correct one differs by call site
+    and the difference is invisible in tests:
+
+    * ``no_workspace_objects`` reproduces a joined ``Count()`` — a JOIN carries
+      no workspace predicate, so the aggregate it replaces never had one.
+    * ``objects`` reproduces a per-object ``Model.objects.filter(...).count()``
+      — ``BaseModelManager`` folds the ambient thread-local workspace in, so
+      that count always did have one.
+
+    Picking the wrong one changes counts only under a non-default workspace,
+    which neither the API test client nor ``manage.py`` ever sets — so it will
+    not fail a test, it will just be wrong in production.
+    """
+    lookups = {fk_field: OuterRef("pk"), "deleted": False, **filters}
+    return Coalesce(
+        Subquery(
+            manager.filter(**lookups)
+            .values(fk_field)
+            .annotate(count=Count("id"))
+            .values("count")[:1]
+        ),
+        Value(0),
+    )
+
+
 class AnnotationQueuePagination(ExtendedPageNumberPagination):
     def get_page_size(self, request):
         if self.page_size_query_param in request.query_params:
@@ -2955,41 +3007,26 @@ class AnnotationQueueViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelVie
             queryset = queryset.filter(name__icontains=search)
 
         if include_counts:
+            # Correlated subqueries, NOT Count() over joins. Counting three
+            # multi-valued relations in one GROUP BY multiplies them into a
+            # labels x annotators x items cartesian the COUNT(DISTINCT)s then
+            # have to sort back down — a voice queue's item count is the
+            # multiplier, so the page spills to disk and takes seconds
+            # (TH-7104). Each subquery is an indexed aggregate on queue_id.
             queryset = queryset.annotate(
-                label_count=Coalesce(
-                    Count(
-                        "queue_labels",
-                        filter=Q(queue_labels__deleted=False),
-                        distinct=True,
-                    ),
-                    0,
+                label_count=_related_count_subquery(
+                    AnnotationQueueLabel.no_workspace_objects, "queue"
                 ),
-                annotator_count=Coalesce(
-                    Count(
-                        "queue_annotators",
-                        filter=Q(queue_annotators__deleted=False),
-                        distinct=True,
-                    ),
-                    0,
+                annotator_count=_related_count_subquery(
+                    AnnotationQueueAnnotator.no_workspace_objects, "queue"
                 ),
-                item_count=Coalesce(
-                    Count(
-                        "items",
-                        filter=Q(items__deleted=False),
-                        distinct=True,
-                    ),
-                    0,
+                item_count=_related_count_subquery(
+                    QueueItem.no_workspace_objects, "queue"
                 ),
-                completed_count=Coalesce(
-                    Count(
-                        "items",
-                        filter=Q(
-                            items__deleted=False,
-                            items__status="completed",
-                        ),
-                        distinct=True,
-                    ),
-                    0,
+                completed_count=_related_count_subquery(
+                    QueueItem.no_workspace_objects,
+                    "queue",
+                    status=QueueItemStatus.COMPLETED.value,
                 ),
             )
 
@@ -4631,6 +4668,44 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
                     to_attr="active_assignments",
                 ),
             )
+            # comment_count / open_feedback_count were a .count() per rendered
+            # item — two extra queries per row, so a page cost 2N+12 queries and
+            # ?limit=1000 cost 2012 (TH-7104). Annotated here they cost nothing
+            # extra. ``objects``, not ``no_workspace_objects``: the per-object
+            # counts these replace went through the workspace-filtering manager,
+            # so keeping it preserves their semantics exactly.
+            .annotate(
+                annotated_comment_count=_related_count_subquery(
+                    QueueItemReviewComment.objects,
+                    "queue_item",
+                    action=QueueItemReviewComment.ACTION_COMMENT,
+                ),
+                annotated_open_feedback_count=_related_count_subquery(
+                    QueueItemReviewThread.objects,
+                    "queue_item",
+                    blocking=True,
+                    status__in=[
+                        QueueItemReviewThread.STATUS_OPEN,
+                        QueueItemReviewThread.STATUS_REOPENED,
+                    ],
+                ),
+                # workflow_status and workflow_status_label each resolved this same
+                # lookup per rendered item, so a page of items awaiting review cost
+                # 2 extra queries per row on top of the base — 55 queries for 25
+                # items vs 15 for 5 (TH-7211). It was already annotated below, but
+                # only when the caller filtered by in_review/resubmitted, and the
+                # serializer never read it. Annotating unconditionally makes the
+                # status flat for every page and for a single-item retrieve; the
+                # status filters below read this same alias.
+                _has_addressed_review=Exists(
+                    QueueItemReviewThread.objects.filter(
+                        queue_item_id=OuterRef("pk"),
+                        blocking=True,
+                        status=QueueItemReviewThread.STATUS_ADDRESSED,
+                        deleted=False,
+                    )
+                ),
+            )
         )
         queue_id = self.kwargs.get("queue_id")
         if queue_id:
@@ -4650,20 +4725,6 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
 
         if statuses:
             status_q = Q()
-            addressed_threads = QueueItemReviewThread.objects.filter(
-                queue_item_id=OuterRef("pk"),
-                blocking=True,
-                status=QueueItemReviewThread.STATUS_ADDRESSED,
-                deleted=False,
-            )
-            if any(
-                workflow_status in statuses
-                for workflow_status in ("in_review", "resubmitted")
-            ):
-                queryset = queryset.annotate(
-                    _has_addressed_review=Exists(addressed_threads)
-                )
-
             for item_status in statuses:
                 if item_status == "in_review":
                     status_q |= Q(
@@ -4931,6 +4992,9 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
                     organization=organization,
                     workspace=workspace or queue.workspace,
                     project_id=getattr(source_obj, "project_id", None),
+                    # Captured from the source we already resolved above, so the
+                    # items grid never re-reads CH to render this row (TH-7211).
+                    source_preview=preview_payload_for_source(source_type, source_obj),
                     order=max_order,
                     **{f"{fk_field}_id": source_pk},
                 )
@@ -5042,6 +5106,7 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
             available_ids,
             unavailable_count,
             unavailable_error,
+            previews_by_id,
         ) = filter_available_source_ids_for_annotation(
             source_type,
             resolved_ids,
@@ -5078,6 +5143,9 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
                 organization=request.organization,
                 workspace=getattr(request, "workspace", None) or queue.workspace,
                 project_id=project_id,
+                # Built from the roots the availability check already read, so
+                # the grid never re-reads CH to render this row (TH-7211).
+                source_preview=previews_by_id.get(tid),
                 order=max_order + i,
                 **{f"{fk_field}_id": tid},
             )
@@ -5958,10 +6026,17 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
             is_reviewer=is_reviewer,
         )
 
+        # One CH read for the whole workspace. The notes target, the rendered
+        # content and the preview all resolve the SAME tracer source, and each
+        # used to do its own point-read — three unscoped `spans FINAL` scans per
+        # open on a voice trace (TH-7104). The cache reads once, pruned to the
+        # item's denormalized project_id, and the serializer reuses it.
+        ch_cache = CollectorSourceCache.for_items([item])
+
         existing_notes = ""
         span_notes = []
         span_notes_source_id = None
-        span_notes_target = _span_notes_target_for_queue_item(item)
+        span_notes_target = _span_notes_target_for_queue_item(item, ch_cache=ch_cache)
         if span_notes_target is not None:
             span_notes_source_id = span_notes_target.id
         span_notes = _item_note_payloads(
@@ -6093,7 +6168,9 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
             "prev_item_id": str(prev_item) if prev_item else None,
         }
 
-        serializer = AnnotateDetailSerializer(data, context={"request": request})
+        serializer = AnnotateDetailSerializer(
+            data, context={"request": request, "ch_source_cache": ch_cache}
+        )
         return self._gm.success_response(serializer.data)
 
     @validated_request(
@@ -6858,9 +6935,46 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
         reviewed = []
         now = timezone.now()
         workspace = getattr(request, "workspace", None)
+        is_approve = review_action == QueueItemReviewComment.ACTION_APPROVE
 
+        # Validation was 4 queries per item (label set refetched per row despite
+        # being one queue, two score .exists(), a blocking-thread .exists()).
+        # Three queries for the whole request now (TH-7211).
+        item_pks = [item.id for item in items]
+        label_ids = (
+            list(
+                items[0]
+                .queue.queue_labels.filter(deleted=False)
+                .values_list("label_id", flat=True)
+            )
+            if items
+            else []
+        )
+        # {queue_item_id: {annotator_id}} — same per-queue scoping as
+        # _scores_for_queue_item, which this replaces for the bulk path.
+        annotators_by_item: dict = {}
+        if label_ids and item_pks:
+            for qi_id, annotator_id in Score.objects.filter(
+                queue_item_id__in=item_pks,
+                label_id__in=label_ids,
+                deleted=False,
+            ).values_list("queue_item_id", "annotator_id"):
+                annotators_by_item.setdefault(qi_id, set()).add(annotator_id)
+        blocked_pks = (
+            set(
+                QueueItemReviewThread.objects.filter(
+                    queue_item_id__in=item_pks,
+                    blocking=True,
+                    status__in=OPEN_REVIEW_THREAD_STATUSES,
+                    deleted=False,
+                ).values_list("queue_item_id", flat=True)
+            )
+            if item_pks
+            else set()
+        )
+
+        eligible = []
         for item in items:
-            item_scores = _scores_for_queue_item(item)
             if item.review_status != "pending_review":
                 errors.append(
                     {
@@ -6869,7 +6983,8 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
                     }
                 )
                 continue
-            if not item_scores.exists():
+            item_annotators = annotators_by_item.get(item.id, set())
+            if not item_annotators:
                 errors.append(
                     {
                         "item_id": str(item.id),
@@ -6877,7 +6992,7 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
                     }
                 )
                 continue
-            if item_scores.filter(annotator=request.user).exists():
+            if request.user.pk in item_annotators:
                 errors.append(
                     {
                         "item_id": str(item.id),
@@ -6885,10 +7000,7 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
                     }
                 )
                 continue
-            if (
-                review_action == QueueItemReviewComment.ACTION_APPROVE
-                and _open_blocking_review_threads(item).exists()
-            ):
+            if is_approve and item.id in blocked_pks:
                 errors.append(
                     {
                         "item_id": str(item.id),
@@ -6896,48 +7008,84 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
                     }
                 )
                 continue
+            eligible.append(item)
 
-            if review_action == QueueItemReviewComment.ACTION_APPROVE:
+        # Resolve prior threads for every approved item in one statement, before
+        # any new thread exists — the replacement threads are created RESOLVED
+        # and would not match this filter anyway, but doing it first keeps that
+        # independent of the new thread's status.
+        if is_approve and eligible:
+            QueueItemReviewThread.objects.filter(
+                queue_item_id__in=[item.id for item in eligible],
+                status__in=[
+                    QueueItemReviewThread.STATUS_OPEN,
+                    QueueItemReviewThread.STATUS_REOPENED,
+                    QueueItemReviewThread.STATUS_ADDRESSED,
+                ],
+                deleted=False,
+            ).update(
+                status=QueueItemReviewThread.STATUS_RESOLVED,
+                resolved_by=request.user,
+                resolved_at=now,
+                updated_at=now,
+            )
+
+        # Two bulk_creates instead of two INSERTs per item; client-generated
+        # UUID pks let a comment reference its thread before either is written.
+        # workspace/organization passed explicitly because bulk_create skips the
+        # post_save backfill in tfc/utils/signals.py — same values either way.
+        new_threads, new_comments = [], []
+        for item in eligible:
+            if is_approve:
                 item.status = QueueItemStatus.COMPLETED.value
                 item.review_status = "approved"
                 comment_text = notes or "Approved."
                 thread_status = QueueItemReviewThread.STATUS_RESOLVED
-                QueueItemReviewThread.objects.filter(
-                    queue_item=item,
-                    status__in=[
-                        QueueItemReviewThread.STATUS_OPEN,
-                        QueueItemReviewThread.STATUS_REOPENED,
-                        QueueItemReviewThread.STATUS_ADDRESSED,
-                    ],
-                    deleted=False,
-                ).update(
-                    status=QueueItemReviewThread.STATUS_RESOLVED,
-                    resolved_by=request.user,
-                    resolved_at=now,
-                    updated_at=now,
-                )
             else:
                 item.status = QueueItemStatus.IN_PROGRESS.value
                 item.review_status = "rejected"
                 comment_text = notes
                 thread_status = QueueItemReviewThread.STATUS_OPEN
 
-            created_comment = _create_review_thread_comment(
-                item=item,
-                reviewer=request.user,
+            thread = QueueItemReviewThread(
+                queue_item=item,
+                created_by=request.user,
                 action=review_action,
-                comment=comment_text,
-                organization=request.organization,
-                workspace=workspace,
+                scope=_review_thread_scope(None, None),
                 blocking=review_action == QueueItemReviewComment.ACTION_REQUEST_CHANGES,
                 status=thread_status,
+                organization=request.organization,
+                workspace=workspace,
+            )
+            new_threads.append(thread)
+            new_comments.append(
+                QueueItemReviewComment(
+                    thread=thread,
+                    queue_item=item,
+                    reviewer=request.user,
+                    action=review_action,
+                    comment=comment_text,
+                    organization=request.organization,
+                    workspace=workspace,
+                )
             )
             item.reviewed_by = request.user
             item.reviewed_at = now
             item.review_notes = comment_text
             self._clear_reservation(item)
-            item.save(
-                update_fields=[
+            # bulk_update does not honour auto_now, so updated_at is set here to
+            # match what save() would have written.
+            item.updated_at = now
+            reviewed.append(str(item.id))
+
+        if new_threads:
+            QueueItemReviewThread.objects.bulk_create(new_threads, batch_size=500)
+            QueueItemReviewComment.objects.bulk_create(new_comments, batch_size=500)
+
+        if eligible:
+            QueueItem.objects.bulk_update(
+                eligible,
+                [
                     "status",
                     "review_status",
                     "reviewed_by",
@@ -6947,10 +7095,17 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
                     "reserved_at",
                     "reservation_expires_at",
                     "updated_at",
-                ]
+                ],
             )
-            _notify_annotation_discussion(item, created_comment, created_comment.thread)
-            reviewed.append(str(item.id))
+
+        # Broadcast only, deliberately. _notify_annotation_discussion's email
+        # step is unreachable here — no mentions, and the just-created thread's
+        # only participant is the actor — so it spent two queries per item
+        # proving recipients were empty. If that path is ever made to fire for
+        # approve/request-changes, wiring it in should be a deliberate call
+        # about one mail per item, not inherited silently.
+        for item, comment in zip(eligible, new_comments, strict=True):
+            _broadcast_annotation_discussion_update(item, comment, comment.thread)
 
         if reviewed:
             self._maybe_auto_complete_queue(queue_id)
