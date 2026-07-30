@@ -6601,3 +6601,103 @@ class TestLoadBalancedAssignment:
 
         item = QueueItem.objects.filter(queue_id=queue_id, deleted=False).first()
         assert item.assigned_to_id is None
+
+
+@pytest.mark.django_db
+class TestBulkReviewQueryCount:
+    """TH-7211: bulk-review's validation and persistence must not query per item.
+
+    It cost ~12 queries per item: the queue's label set refetched per row
+    despite being identical for every item, two score ``.exists()`` calls, a
+    blocking-thread ``.exists()``, and a save() each. At batch 500 that was
+    5,512 queries. ``bulk-remove`` is flat, which is the pattern this follows.
+
+    Asserting the batched lookups are exactly one query each, rather than a
+    total: the remaining per-item cost is thread/comment creation and
+    notification, which is deliberately still per item, so a total would drift
+    for unrelated reasons and stop meaning anything.
+    """
+
+    BATCHED_ONCE = {
+        "model_hub_annotationqueuelabel": "the queue's label set (identical for every item)",
+        "model_hub_score": "the submitted-annotation and own-annotation checks",
+    }
+
+    def _queries_by_table(self, ctx):
+        import re
+
+        counts = {}
+        for q in ctx.captured_queries:
+            sql = re.sub(r"\s+", " ", q["sql"]).strip()
+            m = re.search(r'FROM "([a-z_]+)"|INTO "([a-z_]+)"|UPDATE "([a-z_]+)"', sql)
+            table = next((g for g in (m.groups() if m else []) if g), "?")
+            verb = sql.split()[0]
+            counts[(verb, table)] = counts.get((verb, table), 0) + 1
+        return counts
+
+    def test_validation_and_persistence_are_batched(
+        self,
+        auth_client,
+        queue_with_items,
+        dataset_rows,
+        second_user,
+        organization,
+        workspace,
+    ):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        queue_id, _, label = queue_with_items
+        ds, _ = dataset_rows
+
+        rows = [Row.objects.create(dataset=ds, order=500 + i) for i in range(10)]
+        auth_client.post(
+            add_items_url(queue_id),
+            {
+                "items": [
+                    {"source_type": "dataset_row", "source_id": str(r.id)} for r in rows
+                ]
+            },
+            format="json",
+        )
+        ids = list(
+            QueueItem.objects.filter(
+                queue_id=queue_id, dataset_row__in=rows, deleted=False
+            ).values_list("id", flat=True)
+        )
+        assert len(ids) == 10
+        QueueItem.objects.filter(pk__in=ids).update(
+            status=QueueItemStatus.IN_PROGRESS.value, review_status="pending_review"
+        )
+        for item in QueueItem.objects.filter(pk__in=ids):
+            _create_score_for_item(item, label, second_user, organization)
+
+        with CaptureQueriesContext(connection) as ctx:
+            resp = auth_client.post(
+                bulk_review_url(queue_id),
+                {
+                    "item_ids": [str(i) for i in ids],
+                    "action": "approve",
+                    "notes": "Bulk approved.",
+                },
+                format="json",
+            )
+
+        assert resp.status_code == status.HTTP_200_OK, resp.data
+        assert _result(resp)["reviewed"] == 10, _result(resp)
+
+        counts = self._queries_by_table(ctx)
+        for table, what in self.BATCHED_ONCE.items():
+            n = counts.get(("SELECT", table), 0)
+            assert n == 1, (
+                f"bulk-review ran {n} SELECTs on {table} for 10 items — {what} "
+                "is being looked up per row again (TH-7211)."
+            )
+        # The item write is one bulk_update, not a save() each.
+        assert counts.get(("UPDATE", "model_hub_queueitem"), 0) == 1, (
+            "items are being saved one at a time instead of bulk_update"
+        )
+        # Prior threads resolve in one statement for the whole approved set.
+        assert counts.get(("UPDATE", "model_hub_queueitemreviewthread"), 0) <= 1, (
+            "prior review threads are being resolved per item"
+        )

@@ -6935,9 +6935,47 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
         reviewed = []
         now = timezone.now()
         workspace = getattr(request, "workspace", None)
+        is_approve = review_action == QueueItemReviewComment.ACTION_APPROVE
 
+        # Validation used to cost 4 queries per item — the queue's label set
+        # refetched per row despite being identical for every item, two score
+        # ``.exists()`` calls, and a blocking-thread ``.exists()``. Batched here
+        # they are three queries for the whole request (TH-7211).
+        item_pks = [item.id for item in items]
+        label_ids = (
+            list(
+                items[0]
+                .queue.queue_labels.filter(deleted=False)
+                .values_list("label_id", flat=True)
+            )
+            if items
+            else []
+        )
+        # {queue_item_id: {annotator_id}} — same per-queue scoping as
+        # _scores_for_queue_item, which this replaces for the bulk path.
+        annotators_by_item: dict = {}
+        if label_ids and item_pks:
+            for qi_id, annotator_id in Score.objects.filter(
+                queue_item_id__in=item_pks,
+                label_id__in=label_ids,
+                deleted=False,
+            ).values_list("queue_item_id", "annotator_id"):
+                annotators_by_item.setdefault(qi_id, set()).add(annotator_id)
+        blocked_pks = (
+            set(
+                QueueItemReviewThread.objects.filter(
+                    queue_item_id__in=item_pks,
+                    blocking=True,
+                    status__in=OPEN_REVIEW_THREAD_STATUSES,
+                    deleted=False,
+                ).values_list("queue_item_id", flat=True)
+            )
+            if item_pks
+            else set()
+        )
+
+        eligible = []
         for item in items:
-            item_scores = _scores_for_queue_item(item)
             if item.review_status != "pending_review":
                 errors.append(
                     {
@@ -6946,7 +6984,8 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
                     }
                 )
                 continue
-            if not item_scores.exists():
+            item_annotators = annotators_by_item.get(item.id, set())
+            if not item_annotators:
                 errors.append(
                     {
                         "item_id": str(item.id),
@@ -6954,7 +6993,7 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
                     }
                 )
                 continue
-            if item_scores.filter(annotator=request.user).exists():
+            if request.user.pk in item_annotators:
                 errors.append(
                     {
                         "item_id": str(item.id),
@@ -6962,10 +7001,7 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
                     }
                 )
                 continue
-            if (
-                review_action == QueueItemReviewComment.ACTION_APPROVE
-                and _open_blocking_review_threads(item).exists()
-            ):
+            if is_approve and item.id in blocked_pks:
                 errors.append(
                     {
                         "item_id": str(item.id),
@@ -6973,26 +7009,35 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
                     }
                 )
                 continue
+            eligible.append(item)
 
-            if review_action == QueueItemReviewComment.ACTION_APPROVE:
+        # Resolve prior threads for every approved item in one statement, before
+        # any new thread exists — the replacement threads are created RESOLVED
+        # and would not match this filter anyway, but doing it first keeps that
+        # independent of the new thread's status.
+        if is_approve and eligible:
+            QueueItemReviewThread.objects.filter(
+                queue_item_id__in=[item.id for item in eligible],
+                status__in=[
+                    QueueItemReviewThread.STATUS_OPEN,
+                    QueueItemReviewThread.STATUS_REOPENED,
+                    QueueItemReviewThread.STATUS_ADDRESSED,
+                ],
+                deleted=False,
+            ).update(
+                status=QueueItemReviewThread.STATUS_RESOLVED,
+                resolved_by=request.user,
+                resolved_at=now,
+                updated_at=now,
+            )
+
+        pending_notifications = []
+        for item in eligible:
+            if is_approve:
                 item.status = QueueItemStatus.COMPLETED.value
                 item.review_status = "approved"
                 comment_text = notes or "Approved."
                 thread_status = QueueItemReviewThread.STATUS_RESOLVED
-                QueueItemReviewThread.objects.filter(
-                    queue_item=item,
-                    status__in=[
-                        QueueItemReviewThread.STATUS_OPEN,
-                        QueueItemReviewThread.STATUS_REOPENED,
-                        QueueItemReviewThread.STATUS_ADDRESSED,
-                    ],
-                    deleted=False,
-                ).update(
-                    status=QueueItemReviewThread.STATUS_RESOLVED,
-                    resolved_by=request.user,
-                    resolved_at=now,
-                    updated_at=now,
-                )
             else:
                 item.status = QueueItemStatus.IN_PROGRESS.value
                 item.review_status = "rejected"
@@ -7013,8 +7058,16 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
             item.reviewed_at = now
             item.review_notes = comment_text
             self._clear_reservation(item)
-            item.save(
-                update_fields=[
+            # bulk_update does not honour auto_now, so updated_at is set here to
+            # match what save() would have written.
+            item.updated_at = now
+            pending_notifications.append((item, created_comment))
+            reviewed.append(str(item.id))
+
+        if eligible:
+            QueueItem.objects.bulk_update(
+                eligible,
+                [
                     "status",
                     "review_status",
                     "reviewed_by",
@@ -7024,10 +7077,12 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
                     "reserved_at",
                     "reservation_expires_at",
                     "updated_at",
-                ]
+                ],
             )
+
+        # Notify only after the rows are persisted, as the per-item save did.
+        for item, created_comment in pending_notifications:
             _notify_annotation_discussion(item, created_comment, created_comment.thread)
-            reviewed.append(str(item.id))
 
         if reviewed:
             self._maybe_auto_complete_queue(queue_id)
