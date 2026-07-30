@@ -180,7 +180,9 @@ class TestLoginWith2FA:
         )
         assert verify_resp.status_code == 400
         body = verify_resp.json()
-        assert body.get("status") is False or "invalid" in str(body).lower()
+        assert body["status"] is False
+        assert body["code"] == "invalid"
+        assert body["message"] == "Invalid code. Please try again."
         assert "access" not in body
 
     def test_verify_totp_missing_challenge(self, user):
@@ -197,8 +199,10 @@ class TestLoginWith2FA:
         )
         assert verify_resp.status_code == 400
         body = verify_resp.json()
+        assert body["status"] is False
+        assert body["code"] == "invalid"
+        assert body["message"] == "Invalid or expired verification session."
         assert "access" not in body
-        assert "expired" in str(body).lower() or "invalid" in str(body).lower()
 
     def test_verify_recovery_invalid_code(self, user, auth_client):
         """Wrong recovery code during login verify is rejected."""
@@ -222,4 +226,6 @@ class TestLoginWith2FA:
         assert verify_resp.status_code == 400
         body = verify_resp.json()
         assert "access" not in body
-        assert body.get("status") is False or "invalid" in str(body).lower()
+        assert body["status"] is False
+        assert body["code"] == "invalid"
+        assert body["message"] == "Invalid or already used recovery code."
