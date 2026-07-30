@@ -1264,7 +1264,7 @@ class DashboardViewSet(BaseModelViewSetMixin, ModelViewSet):
                     return self._gm.success_response({"values": []})
 
                 label_type = label.type
-                settings = label.settings or {}
+                label_settings = label.settings or {}
 
                 def add_value_option(options, seen, raw_value, raw_label=None):
                     if raw_value in (None, ""):
@@ -1283,7 +1283,7 @@ class DashboardViewSet(BaseModelViewSetMixin, ModelViewSet):
                 if label_type == "categorical":
                     values = []
                     seen_values = set()
-                    for opt in settings.get("options", []):
+                    for opt in label_settings.get("options", []):
                         if isinstance(opt, dict):
                             option_value = (
                                 opt.get("value") or opt.get("label") or opt.get("name")
@@ -1327,7 +1327,7 @@ class DashboardViewSet(BaseModelViewSetMixin, ModelViewSet):
                         for raw_value in raw_values:
                             add_value_option(values, seen_values, raw_value)
                 elif label_type == "star":
-                    no_of_stars = settings.get("no_of_stars", 5)
+                    no_of_stars = label_settings.get("no_of_stars", 5)
                     values = [
                         {"value": str(i), "label": f"{i} star{'s' if i != 1 else ''}"}
                         for i in range(1, no_of_stars + 1)
