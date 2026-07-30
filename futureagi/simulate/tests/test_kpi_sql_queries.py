@@ -538,8 +538,6 @@ class TestGetKpiEvalMetricsQuery:
         assert float(numeric_rows[0][3]) == 5.0
 
     def test_choice_dict_single_aggregation(self, test_execution, scenario):
-        """Scored-choices single-pick dict {"score":..,"choice":..} counts by
-        its choice label (regression: dict outputs previously emitted no row)."""
         metric_id = str(uuid.uuid4())
 
         for i, label in enumerate(["positive", "positive", "negative"]):
@@ -568,8 +566,6 @@ class TestGetKpiEvalMetricsQuery:
         assert choice_map.get("negative") == 1
 
     def test_choice_dict_multi_aggregation(self, test_execution, scenario):
-        """Scored-choices multi-pick dict {"score":..,"choices":[..]} unnests
-        each label into the distribution."""
         metric_id = str(uuid.uuid4())
 
         for i, labels in enumerate([["joy", "love"], ["joy"]]):
@@ -598,8 +594,6 @@ class TestGetKpiEvalMetricsQuery:
         assert choice_map.get("love") == 1
 
     def test_score_dict_aggregation(self, test_execution, scenario):
-        """Score + choice_scores dict {"score":..,"choice":..} averages on the
-        ->>'score' field (regression: dict outputs previously averaged to NULL)."""
         metric_id = str(uuid.uuid4())
 
         for i, score in enumerate([0.8, 0.6]):
@@ -908,7 +902,6 @@ class TestRunTestKPIsViewAPI:
     def test_kpi_choice_metric_uses_template_labels_when_config_omits_choices(
         self, auth_client, organization, run_test, scenario, test_execution
     ):
-        """Choice charts use the template's complete configured label set."""
         template = EvalTemplate.objects.create(
             name="Politeness",
             config={},
@@ -942,6 +935,45 @@ class TestRunTestKPIsViewAPI:
         assert metric["excellent"] == 1
         assert metric["impolite"] == 1
         assert metric["choices"] == ["excellent", "good", "neutral", "impolite", "hostile"]
+
+    def test_kpi_choice_metric_uses_legacy_binding_labels(
+        self, auth_client, organization, run_test, scenario, test_execution
+    ):
+        template = EvalTemplate.objects.create(
+            name="Politeness",
+            config={},
+            organization=organization,
+        )
+        eval_config = SimulateEvalConfig.objects.create(
+            name="Politeness",
+            eval_template=template,
+            run_test=run_test,
+            config={"config": {"choices": ["excellent", "good", "neutral"]}},
+        )
+        CallExecution.objects.create(
+            test_execution=test_execution,
+            scenario=scenario,
+            phone_number="+80000000999",
+            status="completed",
+            eval_outputs={
+                str(eval_config.id): {
+                    "name": "Politeness",
+                    "output": "excellent",
+                    "output_type": "choices",
+                }
+            },
+        )
+
+        response = auth_client.get(
+            f"/simulate/test-executions/{test_execution.id}/kpis/"
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json()["politeness"]["choices"] == [
+            "excellent",
+            "good",
+            "neutral",
+        ]
 
     def test_kpi_empty_execution(self, auth_client, test_execution):
         """Test KPIs for execution with no call executions returns zeros."""

@@ -9,6 +9,7 @@ import {
   getLoadingStateWithRespectiveStatus,
   TestRunExecutionStatus,
 } from "src/sections/test-detail/common";
+import { normalizeEvalResult } from "src/sections/develop-detail/DataTab/common";
 import CustomTooltip from "src/components/tooltip/CustomTooltip";
 import CallAnalyticsView from "./CallAnalyticsView";
 import { isLiveKitProvider } from "src/sections/agents/constants";
@@ -239,18 +240,16 @@ const VoiceRightPanel = ({
             rawValue.length > 24 ? `${rawValue.slice(0, 24)}…` : rawValue;
         }
       } else if (Array.isArray(rawValue) && rawValue.length > 0) {
-        // Choices-type results surface their selected labels as an array.
         scoreItems = rawValue.map((value) => String(value));
       } else if (rawValue && typeof rawValue === "object") {
-        if (Array.isArray(rawValue.choices)) {
-          scoreItems = rawValue.choices.map((value) => String(value));
-        } else if (rawValue.choice) {
-          scoreItems = [String(rawValue.choice)];
-        } else if (typeof rawValue.score === "number") {
+        const result = normalizeEvalResult(rawValue, e?.type || e?.output_type);
+        if (result.kind === "choices") {
+          scoreItems = result.items;
+        } else if (result.kind === "score") {
           score =
-            rawValue.score <= 1
-              ? Math.round(rawValue.score * 100)
-              : Math.round(rawValue.score);
+            result.score <= 1
+              ? Math.round(result.score * 100)
+              : Math.round(result.score);
         }
       }
 

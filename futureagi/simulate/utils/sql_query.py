@@ -244,7 +244,6 @@ def get_kpi_eval_metrics_query(test_execution_id):
                     WHEN output_type = 'Pass/Fail' AND output_text = 'Failed' THEN 0.0
                     WHEN output_type = 'score' AND jsonb_typeof(output_raw) IN ('number')
                          THEN (output_text)::numeric * 100
-                    -- score + choice_scores: output is {"score": .., "choice": ..}
                     WHEN output_type = 'score' AND jsonb_typeof(output_raw) = 'object'
                          THEN (output_raw->>'score')::numeric * 100
                 END
@@ -256,7 +255,6 @@ def get_kpi_eval_metrics_query(test_execution_id):
         GROUP BY metric_id, metric_name, output_type
     ),
 
-    -- Choices: unnest strings, arrays, and scored-choices dicts into rows
     choice_rows AS (
         -- string values
         SELECT metric_id, metric_name,
@@ -275,7 +273,6 @@ def get_kpi_eval_metrics_query(test_execution_id):
 
         UNION ALL
 
-        -- choices + choice_scores, single pick: choice lives in ->>'choice'
         SELECT metric_id, metric_name,
                output_raw->>'choice' AS choice_value
         FROM eval_entries
@@ -284,7 +281,6 @@ def get_kpi_eval_metrics_query(test_execution_id):
 
         UNION ALL
 
-        -- choices + choice_scores, multi pick: choices live in ->'choices'
         SELECT metric_id, metric_name,
                elem AS choice_value
         FROM eval_entries,

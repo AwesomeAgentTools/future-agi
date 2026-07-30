@@ -1579,9 +1579,10 @@ class RunTestKPIsView(APIView):
                 ).select_related("eval_template")
                 config_choices_map = {}
                 for sec in simulate_eval_configs:
-                    runtime_config = (sec.config or {}).get("run_config", {})
-                    # Match the evaluator's source-of-truth order. Template
-                    # choices are a model field, not nested binding config.
+                    binding_config = sec.config or {}
+                    runtime_config = binding_config.get("run_config") or binding_config.get(
+                        "config", {}
+                    )
                     choices = (
                         runtime_config.get("choices")
                         or sec.eval_template.choices
@@ -1594,9 +1595,6 @@ class RunTestKPIsView(APIView):
                     mid = data.pop("_metric_id")
                     eval_averages[base_name] = data
                     choices_list = config_choices_map.get(str(mid), [])
-                    # Legacy bindings can lack both runtime and template labels.
-                    # Their persisted output is still chartable, so preserve it
-                    # as a last-resort category list.
                     if not choices_list:
                         choices_list = list(data)
                     if choices_list:
