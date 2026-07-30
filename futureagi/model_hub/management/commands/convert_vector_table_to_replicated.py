@@ -1,11 +1,10 @@
 """
-Convert a CH vector table (``syn`` / ``ground_truths`` / ``feedbacks``) from a
+Convert a CH vector table (``syn`` / ``feedbacks``) from a
 plain, non-replicated engine to ``ReplicatedReplacingMergeTree`` IN PLACE,
 inside the single ``default`` database, without losing data.
 
-Why this exists (and why it is separate from ``backfill_vector_tables``):
-``backfill_vector_tables`` rebuilds a table's CONTENTS from source (S3 / PG).
-This command does not touch content sources; it fixes the ENGINE of a table
+This command does not touch content sources or write to an already replicated
+table. It fixes the ENGINE of a table
 whose rows already exist but are split across replicas because a plain
 ``MergeTree`` never replicated them. On a multi-replica cluster a plain engine
 means each replica holds its own slice (e.g. 2 / 3 / 0 rows), and a query is
@@ -31,7 +30,10 @@ How it is safe:
     (plain is correct there).
 
 Usage:
+    # Run once for each live vector table. Already-replicated tables are no-ops.
+    python manage.py convert_vector_table_to_replicated --table syn
     python manage.py convert_vector_table_to_replicated --table feedbacks
+    # After a write freeze, execute only the table(s) reported as plain.
     python manage.py convert_vector_table_to_replicated --table feedbacks --execute
     # after verifying, optionally:
     # DROP TABLE default.feedbacks__plain_backup ON CLUSTER '<cluster>' SYNC;
@@ -48,10 +50,7 @@ from agentic_eval.core.database.ch_vector import (
     ClickHouseVectorDB,
     get_clickhouse_cluster_name,
 )
-from agentic_eval.core.embeddings.embedding_manager import (
-    FEEDBACK_TABLE_NAME,
-    GROUND_TRUTH_TABLE_NAME,
-)
+from agentic_eval.core.embeddings.embedding_manager import FEEDBACK_TABLE_NAME
 from model_hub.services.ch_migration import (
     expected_replica_count,
     per_replica_counts,
@@ -62,7 +61,7 @@ from model_hub.utils.kb_indexer import KB_TABLE_NAME
 
 logger = structlog.get_logger(__name__)
 
-KNOWN_TABLES = (FEEDBACK_TABLE_NAME, GROUND_TRUTH_TABLE_NAME, KB_TABLE_NAME)
+KNOWN_TABLES = (FEEDBACK_TABLE_NAME, KB_TABLE_NAME)
 
 
 def _distinct_engines(client, database: str, table: str, cluster: str) -> set[str]:
