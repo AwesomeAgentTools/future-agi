@@ -31,7 +31,7 @@ How it is safe:
     (plain is correct there).
 
 Usage:
-    python manage.py convert_vector_table_to_replicated --table feedbacks --dry-run
+    python manage.py convert_vector_table_to_replicated --table feedbacks
     python manage.py convert_vector_table_to_replicated --table feedbacks --execute
     # after verifying, optionally:
     # DROP TABLE default.feedbacks__plain_backup ON CLUSTER '<cluster>' SYNC;
@@ -90,6 +90,25 @@ def _shared_columns_same_db(client, database: str, a: str, b: str) -> list[str]:
     return [c for c in a_cols if c in b_set]
 
 
+def _table_hosts(client, database: str, table: str, cluster: str) -> set[str]:
+    rows = client.execute(
+        f"SELECT hostName() FROM clusterAllReplicas('{cluster}', system.tables) "
+        "WHERE database = %(d)s AND name = %(t)s",
+        {"d": database, "t": table},
+    )
+    return {row[0] for row in rows}
+
+
+def _conflicting_ids(client, database: str, table: str, cluster: str) -> int:
+    rows = client.execute(
+        f"SELECT count() FROM ("
+        f"SELECT id FROM clusterAllReplicas('{cluster}', {database}.{table}) "
+        "GROUP BY id HAVING uniqExact(sipHash64(toString(tuple(eval_id, vector, metadata.key, metadata.value, deleted)))) > 1"
+        ")"
+    )
+    return rows[0][0]
+
+
 class Command(BaseCommand):
     help = "Convert a plain CH vector table to ReplicatedReplacingMergeTree in place."
 
@@ -104,6 +123,11 @@ class Command(BaseCommand):
             "--execute", action="store_true",
             help="Actually convert. Omit for a dry run (the default).",
         )
+        parser.add_argument("--dry-run", action="store_true", help="Explicit dry-run alias.")
+        parser.add_argument(
+            "--write-freeze-confirmed", action="store_true",
+            help="Required with --execute after relevant vector writers are stopped.",
+        )
 
     def handle(self, *args, **opts):
         table = opts["table"].strip()
@@ -111,7 +135,11 @@ class Command(BaseCommand):
             raise CommandError(f"--table must be one of {KNOWN_TABLES}, got {table!r}")
         database = require_identifier(opts["database"], "--database")
         cluster = require_identifier(opts["cluster"], "--cluster")
+        if opts["execute"] and opts["dry_run"]:
+            raise CommandError("--execute and --dry-run cannot be combined")
         execute = opts["execute"]
+        if execute and not opts["write_freeze_confirmed"]:
+            raise CommandError("--execute requires --write-freeze-confirmed")
 
         db = ClickHouseVectorDB()
         client = db.client
@@ -146,6 +174,20 @@ class Command(BaseCommand):
         expected_replicas = expected_replica_count(client, cluster)
         tmp = f"{table}__repl_tmp"
         backup = f"{table}__plain_backup"
+        live_hosts = _table_hosts(client, database, table, cluster)
+        if len(live_hosts) != expected_replicas:
+            raise CommandError(
+                f"{database}.{table} is present on {len(live_hosts)} of {expected_replicas} replicas; inspect manually."
+            )
+        if _table_hosts(client, database, tmp, cluster) or _table_hosts(client, database, backup, cluster):
+            raise CommandError(
+                f"{database}.{table}: temporary or backup table already exists; inspect and recover it before retrying."
+            )
+        conflicts = _conflicting_ids(client, database, table, cluster)
+        if conflicts:
+            raise CommandError(
+                f"{database}.{table} has {conflicts} duplicate id(s) with conflicting payloads; refusing arbitrary selection."
+            )
 
         self.stdout.write(f"{database}.{table}: plain engine(s) {sorted(engines)}")
         self.stdout.write(f"  per-replica rows (diverged): {before}")
@@ -165,7 +207,12 @@ class Command(BaseCommand):
             return
 
         # 1. Replicated temp table (own Keeper path via create_table).
-        db.create_table(tmp, cluster=cluster, database=database)
+        db.create_table(
+            tmp,
+            cluster=cluster,
+            database=database,
+            keeper_table_name=table,
+        )
 
         # 2. Insert the deduped union of every replica's slice. LIMIT 1 BY id
         #    collapses any id that appears on more than one replica.

@@ -222,6 +222,7 @@ class ClickHouseVectorDB:
         *,
         cluster: str | None = None,
         database: str | None = None,
+        keeper_table_name: str | None = None,
     ) -> None:
         """Create a vector table. Replicated engine on clustered CH, plain otherwise.
 
@@ -239,13 +240,17 @@ class ClickHouseVectorDB:
         `<default_replica_path>/clickhouse/tables/{shard}/{database}/{table}</default_replica_path>`
         convention so two replicated tables with the same short name in
         different databases do not coordinate on the same znode.
+
+        `keeper_table_name` is reserved for a verified table conversion: the
+        physical candidate table can use a temporary name while retaining the
+        canonical Keeper path after an atomic name exchange.
         """
         clustered = self._is_clustered()
         cluster_name = cluster or get_clickhouse_cluster_name()
         qualified = f"{database}.{table_name}" if database else table_name
         engine, on_cluster = build_replicated_engine(
             "ReplacingMergeTree()",
-            table_name,
+            keeper_table_name or table_name,
             clustered=clustered,
             database=database,
             cluster=cluster_name,

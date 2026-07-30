@@ -28,7 +28,7 @@ Safety model:
   - Resumable: a per-table checkpoint file is appended after each unit.
 
 Usage:
-    python manage.py backfill_vector_tables --tables syn --dry-run
+    python manage.py backfill_vector_tables --tables syn
     python manage.py backfill_vector_tables --tables syn --org <ORG_UUID> --execute
     python manage.py backfill_vector_tables --tables syn,ground_truths --execute
     python manage.py backfill_vector_tables --check-engines
@@ -89,6 +89,51 @@ def _present_eval_ids(table_name: str) -> set[str]:
     finally:
         db.close()
     return {str(r[0]) for r in rows}
+
+
+def _existing_file_metadata(kb) -> tuple[dict[str, dict[str, str]], list[str]]:
+    """Return source objects that exist now, without changing PG file status.
+
+    The normal upload helper intentionally marks files failed after its upload
+    polling window. A recovery command must not reinterpret an old object that
+    is unavailable in the current backend as a new application failure.
+    """
+    from tfc.utils.storage import UPLOAD_BUCKET_NAME
+    from tfc.utils.storage_client import get_object_url, get_storage_client
+
+    client = get_storage_client()
+    available = {}
+    missing = []
+    for file_obj in kb.files.all():
+        extension = file_obj.name.rsplit(".", 1)[-1].lower() if "." in file_obj.name else ""
+        object_name = f"{file_obj.id}.{extension}" if extension else str(file_obj.id)
+        object_key = f"knowledge-base/{kb.id}/{object_name}"
+        try:
+            client.stat_object(UPLOAD_BUCKET_NAME, object_key)
+        except Exception:
+            missing.append(str(file_obj.id))
+            continue
+        available[str(file_obj.id)] = {
+            "name": file_obj.name,
+            "extension": extension,
+            "url": get_object_url(UPLOAD_BUCKET_NAME, object_key),
+        }
+    return available, missing
+
+
+def _rebuild_syn_now(file_metadata: dict[str, dict[str, str]], kb_id: str, org_id: str) -> tuple[list[str], list[str]]:
+    """Run the existing indexer synchronously and return successful/failed IDs."""
+    from model_hub.utils.kb_indexer import KBIndexer
+
+    succeeded = []
+    failed = []
+    for file_id, metadata in file_metadata.items():
+        result = KBIndexer().process_s3_file(metadata["url"], file_id, kb_id, org_id)
+        if result and not result.get("error"):
+            succeeded.append(file_id)
+        else:
+            failed.append(file_id)
+    return succeeded, failed
 
 
 def _resolve_present(table_name, *, only_missing, execute, stdout) -> set[str]:
@@ -187,8 +232,6 @@ def _validate_uuid(value: str | None, label: str) -> str | None:
 # ==========================================================================
 def _backfill_syn(*, org, workspace, only_missing, execute, stdout) -> int:
     from model_hub.models.develop_dataset import KnowledgeBaseFile
-    from model_hub.utils.kb_helpers import ingest_kb_files_impl
-
     if execute:
         _assert_replicated_or_absent("syn")
     done = _load_done("syn")
@@ -210,28 +253,35 @@ def _backfill_syn(*, org, workspace, only_missing, execute, stdout) -> int:
             skipped += 1
             continue
 
-        # file_metadata = {file_id: {name, extension}}; S3 key is
-        # knowledge-base/{kb_id}/{file_id}.{extension}.
-        file_metadata = {}
-        for f in kb.files.all():
-            ext = f.name.rsplit(".", 1)[-1] if "." in f.name else ""
-            file_metadata[str(f.id)] = {"name": f.name, "extension": ext}
+        file_metadata, missing_files = _existing_file_metadata(kb)
 
         if not file_metadata:
-            stdout(f"[syn] {kb_id} has no Files rows, skipping")
+            stdout(f"[syn] {kb_id} has no readable source objects, skipping")
             skipped += 1
             continue
 
         if not execute:
-            stdout(f"[syn] DRY-RUN would re-ingest {kb_id} ({len(file_metadata)} files)")
+            stdout(
+                f"[syn] DRY-RUN would rebuild {kb_id} ({len(file_metadata)} readable, "
+                f"{len(missing_files)} unavailable source files)"
+            )
             continue
 
         try:
-            ingest_kb_files_impl(file_metadata, kb_id, str(kb.organization_id))
+            rebuilt_files, failed_files = _rebuild_syn_now(
+                file_metadata, kb_id, str(kb.organization_id)
+            )
         except Exception:
             failed += 1
             logger.exception("syn_backfill_kb_failed", kb_id=kb_id)
             stdout(f"[syn] FAILED {kb_id} (see logs)")
+            continue
+        if missing_files or failed_files or len(rebuilt_files) != len(file_metadata):
+            failed += 1
+            stdout(
+                f"[syn] INCOMPLETE {kb_id}: rebuilt={len(rebuilt_files)} "
+                f"missing_source={len(missing_files)} failed={len(failed_files)}"
+            )
             continue
         _mark_done("syn", kb_id)
         rebuilt += 1
@@ -293,28 +343,75 @@ def _backfill_ground_truths(*, org, workspace, only_missing, execute, stdout) ->
 
 
 # ==========================================================================
-# feedbacks - report-only. The feedback vector needs the evaluated input row
-# (keyed by the eval template's required input keys) plus feedback value and
-# comment; that input is not on the Feedback row, and the embed is written
-# inline in a view rather than a reusable helper. Blocked on: (1) extract that
-# embed into a helper, (2) confirm the input rows are available. Until then
-# this reports the count and never fabricates a vector.
+# feedbacks - rebuild dataset/experiment feedback from its retained row/cells.
+# Playground and observe sources have different persisted input shapes, so the
+# command reports them rather than fabricating vectors from incomplete data.
 # ==========================================================================
 def _backfill_feedbacks(*, org, workspace, only_missing, execute, stdout) -> int:
+    from agentic_eval.core.embeddings.embedding_manager import EmbeddingManager
+    from evaluations.constants import FUTUREAGI_EVAL_TYPES
+    from model_hub.models.develop_dataset import Cell
     from model_hub.models.evals_metric import Feedback
+    from model_hub.views.eval_runner import EvaluationRunner
 
-    qs = Feedback.objects.filter(deleted=False)
+    qs = Feedback.objects.filter(deleted=False).select_related(
+        "user_eval_metric__template", "user_eval_metric__dataset"
+    )
     if org:
         qs = qs.filter(organization_id=org)
     if workspace:
         qs = qs.filter(workspace_id=workspace)
 
-    stdout(
-        f"[feedbacks] {qs.count()} Feedback rows in PG. Report-only: rebuild "
-        "needs the evaluated input row and a reusable embed helper (see "
-        "module docstring). No vectors written."
-    )
-    return 0
+    total = qs.count()
+    rebuilt = skipped = failed = 0
+    stdout(f"[feedbacks] {total} Feedback candidates")
+    for feedback in qs.iterator():
+        metric = feedback.user_eval_metric
+        if not metric or not feedback.row_id or not metric.dataset_id:
+            skipped += 1
+            continue
+        row_cells = Cell.objects.filter(
+            row_id=feedback.row_id, dataset_id=metric.dataset_id, deleted=False
+        ).select_related("column")
+        row_dict = {}
+        for cell in row_cells:
+            row_dict[str(cell.column_id)] = cell.value
+            if cell.column.name:
+                row_dict[cell.column.name] = cell.value
+        if not row_dict:
+            skipped += 1
+            continue
+        row_dict["feedback_comment"] = feedback.explanation
+        row_dict["feedback_value"] = feedback.value
+        futureagi_eval = metric.template.config.get("eval_type_id") in FUTUREAGI_EVAL_TYPES
+        required_fields, _ = EvaluationRunner(
+            metric.template.config.get("eval_type_id"),
+            format_output=True,
+            futureagi_eval=futureagi_eval,
+        )._get_required_fields_and_mappings(user_eval_metric=metric)
+        if not required_fields:
+            skipped += 1
+            continue
+        if not execute:
+            stdout(f"[feedbacks] DRY-RUN would re-embed {feedback.id}")
+            continue
+        try:
+            manager = EmbeddingManager()
+            manager.parallel_process_metadata(
+                eval_id=metric.template_id,
+                metadatas=row_dict,
+                inputs_formater=required_fields,
+                organization_id=metric.dataset.organization_id,
+                workspace_id=metric.dataset.workspace_id,
+            )
+            manager.close()
+        except Exception:
+            failed += 1
+            logger.exception("feedback_backfill_failed", feedback_id=str(feedback.id))
+            continue
+        rebuilt += 1
+    stdout(f"[feedbacks] rebuilt={rebuilt} skipped={skipped} failed={failed}")
+    return failed
 
 
 _DISPATCH = {
@@ -337,6 +434,10 @@ class Command(BaseCommand):
         parser.add_argument(
             "--execute", action="store_true",
             help="Actually write. Omit for a dry run (the default).",
+        )
+        parser.add_argument(
+            "--dry-run", action="store_true",
+            help="Explicit dry-run alias. It cannot be combined with --execute.",
         )
         parser.add_argument(
             "--no-only-missing", action="store_true",
@@ -365,6 +466,8 @@ class Command(BaseCommand):
 
         org = _validate_uuid(opts["org"], "org")
         workspace = _validate_uuid(opts["workspace"], "workspace")
+        if opts["execute"] and opts["dry_run"]:
+            raise CommandError("--execute and --dry-run cannot be combined")
         execute = opts["execute"]
         only_missing = not opts["no_only_missing"]
         mode = "EXECUTE" if execute else "DRY-RUN"
