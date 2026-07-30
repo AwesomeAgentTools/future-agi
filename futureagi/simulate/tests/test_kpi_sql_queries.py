@@ -905,6 +905,44 @@ class TestRunTestKPIsViewAPI:
         assert "avg_quality_check" in data  # Pass/Fail → avg_quality_check
         assert "avg_accuracy" in data  # score → avg_accuracy
 
+    def test_kpi_choice_metric_uses_template_labels_when_config_omits_choices(
+        self, auth_client, organization, run_test, scenario, test_execution
+    ):
+        """Choice charts use the template's complete configured label set."""
+        template = EvalTemplate.objects.create(
+            name="Politeness",
+            config={},
+            organization=organization,
+            choices=["excellent", "good", "neutral", "impolite", "hostile"],
+        )
+        eval_config = SimulateEvalConfig.objects.create(
+            name="Politeness", eval_template=template, run_test=run_test, config={}
+        )
+        for index, output in enumerate(["excellent", "impolite"]):
+            CallExecution.objects.create(
+                test_execution=test_execution,
+                scenario=scenario,
+                phone_number=f"+800000000{index}",
+                status="completed",
+                eval_outputs={
+                    str(eval_config.id): {
+                        "name": "Politeness",
+                        "output": output,
+                        "output_type": "choices",
+                    }
+                },
+            )
+
+        response = auth_client.get(
+            f"/simulate/test-executions/{test_execution.id}/kpis/"
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        metric = response.json()["politeness"]
+        assert metric["excellent"] == 1
+        assert metric["impolite"] == 1
+        assert metric["choices"] == ["excellent", "good", "neutral", "impolite", "hostile"]
+
     def test_kpi_empty_execution(self, auth_client, test_execution):
         """Test KPIs for execution with no call executions returns zeros."""
         response = auth_client.get(
