@@ -359,18 +359,14 @@ class TestAgentccGatewayAPI:
 
         with patch("agentcc.views.gateway.get_gateway_client") as mock_get:
             mock_client = MagicMock()
-            mock_client.list_providers.side_effect = GatewayClientError("down")
+            mock_client.provider_health.side_effect = GatewayClientError("down")
             mock_get.return_value = mock_client
 
             response = auth_client.get(
                 f"/agentcc/gateways/{gateway_id}/providers/"
             )
-        # The endpoint handles unreachable upstream gracefully; either falls
-        # back to the DB-only view (200) or returns a bad_request (400).
-        assert response.status_code in (
-            status.HTTP_200_OK,
-            status.HTTP_400_BAD_REQUEST,
-        )
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json()["result"] == {"providers": []}
 
     @patch("agentcc.views.gateway.push_org_config", return_value=True)
     def test_reload_happy_path_pushes_current_config(
@@ -1109,9 +1105,6 @@ class TestAgentccAPIKeyAPI:
     def test_revoke_api_key_idempotence(
         self, auth_client, organization, workspace
     ):
-        # Revoking an already-revoked key returns 200 and stays revoked;
-        # auth_bridge.revoke_key is what enforces the state transition, so
-        # the endpoint just re-runs the same flow.
         key = AgentccAPIKey.objects.create(
             gateway_key_id="gw-revoke-twice",
             name="revoke-twice",
@@ -1124,8 +1117,8 @@ class TestAgentccAPIKeyAPI:
             response = auth_client.post(f"/agentcc/api-keys/{key.id}/revoke/")
 
         assert response.status_code == status.HTTP_200_OK
-        key.refresh_from_db()
-        assert key.status == AgentccAPIKey.REVOKED
+        mock_bridge.revoke_key.assert_called_once_with(key)
+        assert response.json()["result"]["status"] == AgentccAPIKey.REVOKED
 
 
 @pytest.mark.integration

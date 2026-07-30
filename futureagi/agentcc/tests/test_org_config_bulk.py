@@ -78,24 +78,20 @@ class TestOrgConfigBulk:
         # Only the active row should be shipped; older inactive versions are
         # history and must not leak into the gateway payload.
         AgentccOrgConfig.no_workspace_objects.create(
-            organization=organization, version=1, is_active=False
+            organization=organization,
+            version=1,
+            is_active=False,
+            routing={"strategy": "old"},
         )
-        _make_active_config(organization, version=2)
+        _make_active_config(
+            organization,
+            version=2,
+            routing={"strategy": "active"},
+        )
 
         result = admin_client.get("/agentcc/org-configs/bulk/").json()["result"]
 
-        # Exactly one entry for this org: the active version.
-        assert str(organization.id) in result
-        # The endpoint filters by is_active=True at the ORM level; assert we
-        # get exactly one row per org (not two).
-        assert (
-            AgentccOrgConfig.no_workspace_objects.filter(
-                organization=organization
-            ).count()
-            == 2
-        )
-        # But bulk sync returns exactly one key per org.
-        assert list(result.keys()).count(str(organization.id)) == 1
+        assert result[str(organization.id)]["routing"] == {"strategy": "active"}
 
     def test_soft_deleted_configs_excluded(self, admin_client, organization, db):
         # Soft-deleted rows are still present in the DB but must be filtered

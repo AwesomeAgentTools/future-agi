@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from agentcc.models.webhook import AgentccWebhook, AgentccWebhookEvent
+from agentcc.services.url_safety import WEBHOOK_PRIVATE_URL_ERROR
 
 
 def _make_webhook(user, name="hook", **overrides):
@@ -94,6 +95,18 @@ class TestAgentccWebhookCRUD:
 @pytest.mark.integration
 @pytest.mark.api
 class TestAgentccWebhookTest:
+    @patch("agentcc.views.webhook_outbound.build_ssrf_safe_session")
+    def test_test_send_rejects_private_url(
+        self, mock_session_builder, auth_client, user
+    ):
+        webhook = _make_webhook(user, url="http://169.254.169.254/")
+
+        response = auth_client.post(f"/agentcc/webhooks/{webhook.id}/test/")
+
+        assert response.status_code == 400, response.json()
+        assert response.json()["result"] == WEBHOOK_PRIVATE_URL_ERROR
+        mock_session_builder.assert_not_called()
+
     @patch("agentcc.views.webhook_outbound.build_ssrf_safe_session")
     @patch("agentcc.views.webhook_outbound.ensure_public_http_url")
     def test_test_send_success_records_delivered_event(
