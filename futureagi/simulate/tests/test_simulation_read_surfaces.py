@@ -230,6 +230,36 @@ def test_get_eval_metrics_skips_missing_config(simulation_tree, eval_configs):
 
 
 @pytest.mark.django_db
+def test_eval_serializers_extract_choice_labels_from_scored_output(
+    simulation_tree, eval_configs
+):
+    live = eval_configs["live"]
+    call_execution = simulation_tree["call_execution"]
+    call_execution.eval_outputs = {
+        str(live.id): {
+            "name": "Live Eval",
+            "output": {"score": 0.5, "choices": ["Helpful", "Polite"]},
+            "output_type": "choices",
+            "status": "completed",
+        }
+    }
+    call_execution.save(update_fields=["eval_outputs"])
+
+    serializer = CallExecutionDetailSerializer(
+        context={"eval_configs": {str(live.id): live}}
+    )
+
+    assert serializer.get_eval_outputs(call_execution)[str(live.id)]["value"] == [
+        "Helpful",
+        "Polite",
+    ]
+    assert serializer.get_eval_metrics(call_execution)[str(live.id)]["value"] == [
+        "Helpful",
+        "Polite",
+    ]
+
+
+@pytest.mark.django_db
 def test_get_eval_outputs_surfaces_all_when_context_absent(
     simulation_tree, eval_configs
 ):
