@@ -6937,10 +6937,9 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
         workspace = getattr(request, "workspace", None)
         is_approve = review_action == QueueItemReviewComment.ACTION_APPROVE
 
-        # Validation used to cost 4 queries per item — the queue's label set
-        # refetched per row despite being identical for every item, two score
-        # ``.exists()`` calls, and a blocking-thread ``.exists()``. Batched here
-        # they are three queries for the whole request (TH-7211).
+        # Validation was 4 queries per item (label set refetched per row despite
+        # being one queue, two score .exists(), a blocking-thread .exists()).
+        # Three queries for the whole request now (TH-7211).
         item_pks = [item.id for item in items]
         label_ids = (
             list(
@@ -7031,7 +7030,11 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
                 updated_at=now,
             )
 
-        pending_notifications = []
+        # Two bulk_creates instead of two INSERTs per item; client-generated
+        # UUID pks let a comment reference its thread before either is written.
+        # workspace/organization passed explicitly because bulk_create skips the
+        # post_save backfill in tfc/utils/signals.py — same values either way.
+        new_threads, new_comments = [], []
         for item in eligible:
             if is_approve:
                 item.status = QueueItemStatus.COMPLETED.value
@@ -7044,15 +7047,27 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
                 comment_text = notes
                 thread_status = QueueItemReviewThread.STATUS_OPEN
 
-            created_comment = _create_review_thread_comment(
-                item=item,
-                reviewer=request.user,
+            thread = QueueItemReviewThread(
+                queue_item=item,
+                created_by=request.user,
                 action=review_action,
-                comment=comment_text,
-                organization=request.organization,
-                workspace=workspace,
+                scope=_review_thread_scope(None, None),
                 blocking=review_action == QueueItemReviewComment.ACTION_REQUEST_CHANGES,
                 status=thread_status,
+                organization=request.organization,
+                workspace=workspace,
+            )
+            new_threads.append(thread)
+            new_comments.append(
+                QueueItemReviewComment(
+                    thread=thread,
+                    queue_item=item,
+                    reviewer=request.user,
+                    action=review_action,
+                    comment=comment_text,
+                    organization=request.organization,
+                    workspace=workspace,
+                )
             )
             item.reviewed_by = request.user
             item.reviewed_at = now
@@ -7061,8 +7076,11 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
             # bulk_update does not honour auto_now, so updated_at is set here to
             # match what save() would have written.
             item.updated_at = now
-            pending_notifications.append((item, created_comment))
             reviewed.append(str(item.id))
+
+        if new_threads:
+            QueueItemReviewThread.objects.bulk_create(new_threads, batch_size=500)
+            QueueItemReviewComment.objects.bulk_create(new_comments, batch_size=500)
 
         if eligible:
             QueueItem.objects.bulk_update(
@@ -7080,9 +7098,14 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
                 ],
             )
 
-        # Notify only after the rows are persisted, as the per-item save did.
-        for item, created_comment in pending_notifications:
-            _notify_annotation_discussion(item, created_comment, created_comment.thread)
+        # Broadcast only, deliberately. _notify_annotation_discussion's email
+        # step is unreachable here — no mentions, and the just-created thread's
+        # only participant is the actor — so it spent two queries per item
+        # proving recipients were empty. If that path is ever made to fire for
+        # approve/request-changes, wiring it in should be a deliberate call
+        # about one mail per item, not inherited silently.
+        for item, comment in zip(eligible, new_comments, strict=True):
+            _broadcast_annotation_discussion_update(item, comment, comment.thread)
 
         if reviewed:
             self._maybe_auto_complete_queue(queue_id)

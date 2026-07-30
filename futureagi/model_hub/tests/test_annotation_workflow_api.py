@@ -6605,18 +6605,9 @@ class TestLoadBalancedAssignment:
 
 @pytest.mark.django_db
 class TestBulkReviewQueryCount:
-    """TH-7211: bulk-review's validation and persistence must not query per item.
-
-    It cost ~12 queries per item: the queue's label set refetched per row
-    despite being identical for every item, two score ``.exists()`` calls, a
-    blocking-thread ``.exists()``, and a save() each. At batch 500 that was
-    5,512 queries. ``bulk-remove`` is flat, which is the pattern this follows.
-
-    Asserting the batched lookups are exactly one query each, rather than a
-    total: the remaining per-item cost is thread/comment creation and
-    notification, which is deliberately still per item, so a total would drift
-    for unrelated reasons and stop meaning anything.
-    """
+    """TH-7211: bulk-review must not query per item — it was ~12/item, 5,512 at
+    batch 500. Asserting per-table counts rather than a total, so the test says
+    which lookup regressed instead of just that some number moved."""
 
     BATCHED_ONCE = {
         "model_hub_annotationqueuelabel": "the queue's label set (identical for every item)",
@@ -6701,3 +6692,71 @@ class TestBulkReviewQueryCount:
         assert counts.get(("UPDATE", "model_hub_queueitemreviewthread"), 0) <= 1, (
             "prior review threads are being resolved per item"
         )
+        # Threads and comments are two bulk_creates, not two INSERTs per item.
+        for table in (
+            "model_hub_queueitemreviewthread",
+            "model_hub_queueitemreviewcomment",
+        ):
+            n = counts.get(("INSERT", table), 0)
+            assert n == 1, f"{table} is being INSERTed per item ({n} for 10 items)"
+        # The two lookups whose answer is structurally known on this path:
+        # bulk review passes no mentions, and the thread was just created.
+        assert counts.get(("SELECT", "model_hub_queueitemreviewcomment"), 0) == 0, (
+            "the thread-participant scan is back — it can only ever return the "
+            "reviewer, who is then discarded as the actor"
+        )
+
+    def test_bulk_review_persists_tenancy_without_the_save_signal(
+        self, auth_client, queue_with_items, second_user, organization
+    ):
+        """bulk_create skips the post_save workspace/organization backfill, so
+        they are passed explicitly. A regression writes NULL tenancy, which is
+        invisible until something filters by workspace."""
+        queue_id, item_ids, label = queue_with_items
+        selected = item_ids[:2]
+        QueueItem.objects.filter(pk__in=selected).update(
+            status=QueueItemStatus.IN_PROGRESS.value, review_status="pending_review"
+        )
+        for item in QueueItem.objects.filter(pk__in=selected):
+            _create_score_for_item(item, label, second_user, organization)
+
+        resp = auth_client.post(
+            bulk_review_url(queue_id),
+            {"item_ids": [str(i) for i in selected], "action": "approve"},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_200_OK, resp.data
+
+        threads = QueueItemReviewThread.objects.filter(queue_item_id__in=selected)
+        comments = QueueItemReviewComment.objects.filter(queue_item_id__in=selected)
+        assert threads.count() == 2
+        assert comments.count() == 2
+        for row in list(threads) + list(comments):
+            assert row.organization_id is not None, f"{row!r} has NULL organization"
+            assert row.workspace_id is not None, f"{row!r} has NULL workspace"
+            assert row.created_at is not None
+
+    def test_bulk_review_sends_no_email(
+        self, auth_client, queue_with_items, second_user, organization, mocker
+    ):
+        """Bulk review has never emailed (recipients are always empty here). The
+        bulk path now broadcasts directly rather than computing that empty set
+        per item, so this pins the outcome, not the mechanism."""
+        send = mocker.patch(
+            "model_hub.views.annotation_queues._send_annotation_discussion_email"
+        )
+        queue_id, item_ids, label = queue_with_items
+        selected = item_ids[:2]
+        QueueItem.objects.filter(pk__in=selected).update(
+            status=QueueItemStatus.IN_PROGRESS.value, review_status="pending_review"
+        )
+        for item in QueueItem.objects.filter(pk__in=selected):
+            _create_score_for_item(item, label, second_user, organization)
+
+        resp = auth_client.post(
+            bulk_review_url(queue_id),
+            {"item_ids": [str(i) for i in selected], "action": "approve"},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_200_OK, resp.data
+        send.assert_not_called()
