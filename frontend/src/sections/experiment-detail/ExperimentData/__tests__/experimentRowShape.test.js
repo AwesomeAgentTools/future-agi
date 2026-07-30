@@ -51,6 +51,16 @@ describe("experiment-rows endpoint shape", () => {
     expect(result.items).toEqual(["Useless", "Non-Toxic"]);
   });
 
+  it("unwraps scored choices wrapped in an array by the call-detail API", () => {
+    const result = normalizeEvalResult(
+      [{ score: 0.25, choices: ["Useless", "Non-Toxic"] }],
+      "choices",
+    );
+
+    expect(result).toMatchObject({ kind: "choices" });
+    expect(result.items).toEqual(["Useless", "Non-Toxic"]);
+  });
+
   it("ViewDetailsModal reads cell_metadata.explanation / error_analysis / selected_input_key", () => {
     const evalCellId = "8b3e0d2f-1234-49aa-bf02-d4fbf08e9f55";
     const cell = EXPERIMENT_ROW_FIXTURE[evalCellId];
