@@ -273,9 +273,14 @@ class TestSessionEvalLogsShape:
         assert detail["target_type"] == "session"
         assert detail["session_id"] == str(session.id)
         assert detail["session_name"] == "My Session"
-        # CH stores output_bool as Nullable(UInt8) → the read path surfaces 1/0,
-        # not Python True/False (matches prod).
+        # CH stores output_bool as Nullable(UInt8) → the read path surfaces the
+        # int 1/0, not Python True/False (matches prod). Pin the int-ness
+        # explicitly: `True == 1` in Python, so `== 1` alone wouldn't catch a
+        # regression that surfaced a bool here.
         assert detail["output_bool"] == 1
+        # `type() is int` (not isinstance): bool subclasses int, so isinstance
+        # would pass for True too — this pins the surfaced value as a plain int.
+        assert type(detail["output_bool"]) is int
         assert detail["error_message"] is None
         assert "span_id" not in detail
         assert "trace_id" not in detail

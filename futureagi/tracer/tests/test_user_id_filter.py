@@ -19,6 +19,8 @@ UUIDs via a ``SELECT id FROM tracer_enduser FINAL WHERE user_id = ...`` subquery
 
 import unittest
 
+import pytest
+
 from tracer.services.clickhouse.query_builders.filters import (
     ClickHouseFilterBuilder,
 )
@@ -45,8 +47,8 @@ class UserIdFilterTests(unittest.TestCase):
         self.assertIsNotNone(sql, "user_id filter should produce a condition")
         # Wraps in trace_id IN (...) so trace-list/span-list both see matching traces.
         self.assertIn("trace_id IN (", sql)
-        # Resolves via the v2 `end_users` curated dimension — not a raw
-        # span_attribute match (P3b step2 precondition cut off `tracer_enduser`).
+        # Resolves the user_id string via the CDC `tracer_enduser` dimension —
+        # not a raw span_attribute match.
         self.assertIn("FROM tracer_enduser", sql)
         self.assertIn("user_id =", sql)
         # Must NOT fall through to the generic span-attribute path,
@@ -156,9 +158,16 @@ class UserIdFilterTests(unittest.TestCase):
 
     def test_user_filter_always_resolves_via_tracer_enduser(self):
         """``col_id == 'user'`` is treated as a string filter against
-        ``tracer_enduser.user_id`` regardless of value shape. UUID-shaped
-        back-compat that previously routed directly to ``end_user_id`` has
-        been removed — every value is matched as a user_id string."""
+        ``tracer_enduser.user_id`` regardless of value shape — every value is
+        matched as a user_id string (the old UUID-direct back-compat branch is
+        gone).
+
+        This pins only what the builder emits *today* and is compatible with the
+        survivor-collapse form too: the historical id-remap wrapped this same
+        ``user_id =`` / ``FROM tracer_enduser`` inner lookup rather than
+        replacing it. The missing remap layer is tracked separately by
+        ``test_user_filter_should_survivor_collapse_via_id_remap`` below.
+        """
         b = self._build()
         sql = b._build_condition(
             col_id="user",
@@ -168,16 +177,52 @@ class UserIdFilterTests(unittest.TestCase):
             filter_value="08ad78f8-1974-45c1-b6bc-4f2b2ba0b243",
         )
         self.assertIsNotNone(sql)
-        # ``col_id == 'user'`` now resolves the value as a user_id string via
-        # the CDC ``tracer_enduser`` dimension — identical to ``user_id``. The
-        # UUID-direct back-compat and the id-remap survivor-collapse layer were
-        # both removed post-cutover.
+        # ``col_id == 'user'`` resolves the value as a user_id string via the CDC
+        # ``tracer_enduser`` dimension — identical to ``user_id``. ``end_users``
+        # (the reverted v2 string-dimension) is genuinely dead and must not
+        # appear.
         self.assertNotIn("FROM end_users", sql)
         self.assertIn("FROM tracer_enduser", sql)
         self.assertIn("user_id =", sql)
         self.assertEqual(
             b._params.get("col_1"), "08ad78f8-1974-45c1-b6bc-4f2b2ba0b243"
         )
+
+    @pytest.mark.xfail(
+        reason=(
+            "TH-XXXX: the user/session FILTER builder lost id-remap "
+            "survivor-collapse. `_resolved_enduser_membership` dropped out of "
+            "query_builders/filters.py in merge 3e614ae27 (the `main` side of a "
+            "conflict, not a decision); the design landed in 183b2a36f / "
+            "ba315c8b1 and is still live in span_list/session_list/"
+            "session_analytics/session_time_series/user_time_series. Until the "
+            "filter builder is re-aligned (or the remap is dropped from those "
+            "modules too), a cross-cutover straddler that the list/analytics "
+            "queries count as one entity is split by this filter. Impact is zero "
+            "pre-flip; this xfail preserves the deleted signal so it surfaces at "
+            "flip time. See atharva-bhange review on PR #1811."
+        ),
+        strict=False,
+    )
+    def test_user_filter_should_survivor_collapse_via_id_remap(self):
+        """DESIRED (currently un-emitted): the ``user`` filter should resolve
+        ``end_user_id`` new→old through ``end_user_id_remap`` so a straddler's
+        pre- and post-cutover ids unify — matching span_list/session_list.
+
+        Restored verbatim from the assertions this PR deleted; xfails until the
+        filter builder regains the remap (see the ticket in the marker).
+        """
+        b = self._build()
+        sql = b._build_condition(
+            col_id="user",
+            col_type=ClickHouseFilterBuilder.SYSTEM_METRIC,
+            filter_type="text",
+            filter_op="equals",
+            filter_value="08ad78f8-1974-45c1-b6bc-4f2b2ba0b243",
+        )
+        self.assertIsNotNone(sql)
+        self.assertIn("end_user_id_remap", sql)
+        self.assertIn("id_remap.survivor_id", sql)
 
     def test_user_id_contains(self):
         b = self._build()
@@ -295,8 +340,10 @@ class EndUserAndIdColumnFilterTests(unittest.TestCase):
                 filter_value=["003b76f1-2b4a-4af5-b0dc-224d687374d4"],
             )
             self.assertIsNotNone(sql)
-            # Session-id membership matches on ``trace_session_id`` directly
-            # (the id-remap survivor-collapse layer was removed post-cutover).
+            # Session-id membership matches on ``trace_session_id`` directly.
+            # NB: unlike session_list/session_analytics this filter path does
+            # NOT survivor-collapse via trace_session_id_remap (same gap as
+            # test_user_filter_should_survivor_collapse_via_id_remap; TH-XXXX).
             self.assertIn("toString(trace_session_id) IN", sql)
             self.assertEqual(
                 b._params.get("col_1"),

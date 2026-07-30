@@ -427,9 +427,23 @@ class TestSpanAggregation:
         assert list(sa.keys()) == [str(observation_span.id)]
         assert sa[str(observation_span.id)]["SpanEval"]["value"] is True
 
-    def test_latest_wins_when_same_span_eval_pair_has_multiple_rows(
+    def test_soft_deleted_predecessor_is_superseded_by_live_row(
         self, auth_client, project, organization, workspace, observation_span
     ):
+        """Re-evaluating a (task, span, cfg) triple soft-deletes the old row and
+        upserts a new live one; only the live value surfaces in the rollup.
+
+        The ``eval_logger_live_span_uniq`` constraint (scoped
+        ``eval_task_id__isnull=False``) makes two *live* rows for one triple
+        impossible, so for eval-*task* rollups "latest wins" reduces to
+        "soft-deleted predecessor is excluded" — which is all this can assert.
+
+        NOTE: the endpoint's created_at "latest wins" tie-break is only
+        reachable on the inline (task-less) path, where the unique constraint
+        does not apply and multiple live rows are representable. That branch is
+        unexercised here. TODO(TH-XXXX): add ordering coverage on the inline
+        path, or delete the now-unreachable ordering branch.
+        """
         tpl = _template(
             organization=organization,
             workspace=workspace,
@@ -437,22 +451,10 @@ class TestSpanAggregation:
         )
         cfg = _config(project=project, template=tpl, name="Faithfulness")
         task = _task(project=project)
-        # The superseded eval row is soft-deleted (re-eval upserts it), so only
-        # the latest live row survives the (task, span, cfg) unique constraint.
-        older = _row(
-            span=observation_span, cfg=cfg, task=task, output_float=0.1, deleted=True
-        )
-        newer = _row(span=observation_span, cfg=cfg, task=task, output_float=0.9)
-        # bump `older` further into the past so created_at ordering is
-        # deterministic regardless of intra-test timing.
-        from datetime import timedelta
-
-        from django.utils import timezone
-
-        EvalLogger.objects.filter(id=older.id).update(
-            created_at=timezone.now() - timedelta(hours=2)
-        )
-        EvalLogger.objects.filter(id=newer.id).update(created_at=timezone.now())
+        # Superseded row is soft-deleted (re-eval upserts it); the live row is
+        # the only survivor under the (task, span, cfg) unique constraint.
+        _row(span=observation_span, cfg=cfg, task=task, output_float=0.1, deleted=True)
+        _row(span=observation_span, cfg=cfg, task=task, output_float=0.9)
 
         sa = self._get(auth_client, task).json()["result"]["span_aggregation"]
         assert sa[str(observation_span.id)]["Faithfulness"]["value"] == pytest.approx(

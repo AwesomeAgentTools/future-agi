@@ -489,7 +489,6 @@ def _ensure_ch_eval_logger_table(client: Any) -> None:
 def _eval_logger_row_from_django(el: Any) -> tuple:
     """Build a CH-insert tuple from a Django ``EvalLogger`` instance."""
     import json
-    from datetime import datetime
 
     now = datetime.now(UTC)
 
@@ -520,16 +519,6 @@ def _eval_logger_row_from_django(el: Any) -> tuple:
         1 if getattr(el, "deleted", False) else 0,
         1,  # _peerdb_version — seed rows carry unique ids, so no supersede needed
     )
-
-
-def seed_ch_eval_logger(eval_logger: Any, *, client: Any | None = None) -> None:
-    """Insert ONE ``EvalLogger`` into the CH ``tracer_eval_logger`` table.
-
-    Seed each row exactly once, AFTER any soft-delete mutation, so the row's
-    ``deleted`` flag matches its final PG state (FINAL then needs no version
-    supersede on either table shape).
-    """
-    seed_ch_eval_loggers([eval_logger], client=client)
 
 
 def seed_ch_eval_loggers(

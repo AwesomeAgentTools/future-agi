@@ -8,7 +8,7 @@ Schema-only tests; PR4 introduces the writers.
 
 import json
 import uuid
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -200,8 +200,6 @@ class TestEvalLoggerReaderAudit:
         (the view delegates to it), so assert against the query that method
         sends to ``execute_ch_query``.
         """
-        from unittest.mock import patch
-
         from tracer.services.clickhouse.query_service import AnalyticsQueryService
 
         analytics = AnalyticsQueryService()

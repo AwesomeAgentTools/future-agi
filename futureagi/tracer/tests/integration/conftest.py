@@ -137,6 +137,10 @@ def ch_schema(ch_client):
     # not-deleted) so both readers resolve against the seeded rows.
     # `_peerdb_version` backs the enrichment reader's `ORDER BY _peerdb_version
     # DESC LIMIT 1 BY id` page-scoped dedup; without it the eval read 500s.
+    # NB: no seeder writes `_peerdb_version` here, so it stays at the DEFAULT 0
+    # constant — the version-collapse/supersede behaviour is NOT exercised by
+    # this fixture, only kept present so the reader resolves. Add a seeder that
+    # sets distinct versions if that dedup ever needs real coverage.
     for col_ddl in (
         "_peerdb_is_deleted UInt8 DEFAULT 0",
         "deleted UInt8 DEFAULT 0",

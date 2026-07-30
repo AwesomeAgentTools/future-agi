@@ -14,15 +14,13 @@ Requires:
 
 Covered:
 - Connection and schema lifecycle
-- Data insertion (spans, evals, nulls, deduplication)
-- DashboardQueryBuilder integration (system/eval metrics, time ranges, filters, aggregations)
 - SimulationQueryBuilder integration (system metrics, breakdowns, filters)
 - DatasetQueryBuilder integration (system metrics, breakdowns)
 """
 
 import os
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import pytest
 

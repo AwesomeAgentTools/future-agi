@@ -897,10 +897,15 @@ class TestTraceSessionOverlayWritePath:
             if "FROM spans" in query and (
                 "count(DISTINCT trace_id)" in query or "GROUP BY trace_id" in query
             ):
-                # Both span scans are scoped to the session group, with no
-                # created_at time window applied.
+                # Both span scans are scoped to the session group
+                # (partition/bloom-pruned by the id set), not the request's
+                # created_at window — the detail view shows the whole session.
+                # NB: we pin the positive scoping only. We deliberately do NOT
+                # assert the *absence* of a time bound: `spans` is partitioned
+                # by month, so a future fix that re-adds a date bound for
+                # partition pruning (cf. TH-6237's 3.6 GiB OOM) must not be
+                # forced red by this test.
                 assert "trace_session_id IN %(session_group_ids)s" in query
-                assert "start_date" not in query
                 captured_span_scan_params.append(params)
                 if "count(DISTINCT trace_id)" in query:
                     return mock.Mock(
