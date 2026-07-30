@@ -906,7 +906,7 @@ export const normalizeEvalResult = (value, outputType) => {
       items = [v];
     }
     items = items
-      .flatMap((/** @type {any} */ x) => {
+      .flatMap((x) => {
         if (!x || typeof x !== "object") return [x];
         return extractChoiceArray(x) ?? [extractChoiceLabel(x) ?? x.label ?? x.value ?? ""];
       })
