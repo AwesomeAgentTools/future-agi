@@ -9,6 +9,7 @@ rows (``observation_span_id IS NULL``) and picks the latest run when the
 same ``(span, eval_config)`` repeats.
 """
 
+import uuid
 from datetime import timedelta
 
 import pytest  # noqa: E402
@@ -91,8 +92,6 @@ def _fresh_span(base):
     """A new span sharing base's trace/project — one eval row per span, so
     live rows don't collide on the eval_logger_live_span_uniq
     (task, span, cfg) partial unique constraint."""
-    import uuid
-
     return ObservationSpan.objects.create(
         id=f"span_{uuid.uuid4().hex[:16]}",
         project=base.project,
