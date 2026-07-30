@@ -593,6 +593,38 @@ class TestGetKpiEvalMetricsQuery:
         assert choice_map.get("joy") == 2
         assert choice_map.get("love") == 1
 
+    def test_choice_dict_uses_choices_precedence_and_skips_malformed_array(
+        self, test_execution, scenario
+    ):
+        metric_id = str(uuid.uuid4())
+        for i, output in enumerate(
+            [
+                {"score": 0.5, "choice": "positive", "choices": ["negative"]},
+                {"score": 0.5, "choices": "invalid"},
+            ]
+        ):
+            CallExecution.objects.create(
+                test_execution=test_execution,
+                scenario=scenario,
+                phone_number=f"+8250000{i:03d}",
+                status="completed",
+                eval_outputs={
+                    metric_id: {
+                        "name": "Sentiment",
+                        "output": output,
+                        "output_type": "choices",
+                    },
+                },
+            )
+
+        query, params = get_kpi_eval_metrics_query(test_execution.id)
+        with connection.cursor() as cursor:
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+
+        choice_map = {r[4]: r[5] for r in rows if r[2] == "choices" and r[4]}
+        assert choice_map == {"negative": 1}
+
     def test_score_dict_aggregation(self, test_execution, scenario):
         metric_id = str(uuid.uuid4())
 

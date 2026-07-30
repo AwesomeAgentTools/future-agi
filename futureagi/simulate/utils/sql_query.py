@@ -279,6 +279,7 @@ def get_kpi_eval_metrics_query(test_execution_id):
         FROM eval_entries
         WHERE output_type = 'choices' AND jsonb_typeof(output_raw) = 'object'
               AND output_raw ? 'choice'
+              AND NOT (output_raw ? 'choices')
 
         UNION ALL
 
@@ -288,6 +289,7 @@ def get_kpi_eval_metrics_query(test_execution_id):
              jsonb_array_elements_text(output_raw->'choices') AS elem
         WHERE output_type = 'choices' AND jsonb_typeof(output_raw) = 'object'
               AND output_raw ? 'choices'
+              AND jsonb_typeof(output_raw->'choices') = 'array'
     ),
 
     choice_agg AS (
