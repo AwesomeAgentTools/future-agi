@@ -6302,14 +6302,23 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
                 deleted=True,
             ).update(deleted=False, deleted_at=None)
 
-        # Update legacy FK to first assigned user (backward compat)
+        # Update legacy FK to first assigned user (backward compat).
+        # Was a SELECT plus an UPDATE per item — the whole N+1 on this endpoint.
+        # Now one SELECT for the batch, then one UPDATE per distinct assignee.
+        # QueueItemAssignment has no Meta.ordering, so "first" was already
+        # whichever row Postgres returned; taking the first seen per item keeps
+        # exactly that guarantee.
+        first_by_item = {}
+        for qi_id, user_id in QueueItemAssignment.objects.filter(
+            queue_item_id__in=item_pks, deleted=False
+        ).values_list("queue_item_id", "user_id"):
+            first_by_item.setdefault(qi_id, user_id)
+
+        pks_by_assignee = {}
         for item_pk in item_pks:
-            first_assignment = (
-                QueueItemAssignment.objects.filter(queue_item_id=item_pk, deleted=False)
-                .values_list("user_id", flat=True)
-                .first()
-            )
-            QueueItem.objects.filter(pk=item_pk).update(assigned_to_id=first_assignment)
+            pks_by_assignee.setdefault(first_by_item.get(item_pk), []).append(item_pk)
+        for user_id, assignee_pks in pks_by_assignee.items():
+            QueueItem.objects.filter(pk__in=assignee_pks).update(assigned_to_id=user_id)
 
         return self._gm.success_response({"assigned": len(item_pks) * len(user_ids)})
 
