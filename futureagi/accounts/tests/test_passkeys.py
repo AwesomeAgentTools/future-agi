@@ -949,10 +949,8 @@ class TestPasskey2FAOptions:
 
         assert response.status_code == 200, response.json()
         mock_get_options.assert_called_once()
-        call_kwargs = mock_get_options.call_args
-        assert call_kwargs[1]["user"] == user or (
-            call_kwargs[0] and call_kwargs[0][0] == user
-        )
+        _, call_kwargs = mock_get_options.call_args
+        assert call_kwargs["user"] == user
 
     def test_rejects_invalid_challenge_token(self, user):
         """Non-existent challenge token returns 400."""
@@ -965,10 +963,7 @@ class TestPasskey2FAOptions:
         )
 
         assert response.status_code == 400
-        assert (
-            "verification session" in response.json()["message"].lower()
-            or "invalid" in response.json()["message"].lower()
-        )
+        assert response.json()["message"] == "Invalid or expired verification session."
 
     def test_rejects_expired_challenge(self, user):
         """Challenge that has expired (deleted from cache) returns 400."""

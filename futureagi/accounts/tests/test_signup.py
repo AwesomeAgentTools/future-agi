@@ -1048,6 +1048,14 @@ class TestPasswordResetConfirmHappyPath:
 class TestActivateAccountRateLimit:
     """Rate-limit boundary tests for GET /accounts/activate/<uidb64>/<token>/."""
 
+    @pytest.fixture(autouse=True)
+    def _clear_rate_limit_cache(self):
+        yield
+        from django.core.cache import cache
+
+        for ip in ("10.20.30.1", "10.20.30.2", "10.20.30.3", "10.20.30.4"):
+            cache.delete(f"activate_account_rate:{ip}")
+
     def _inactive_user(self, db):
         from accounts.models import User
 
@@ -1074,7 +1082,7 @@ class TestActivateAccountRateLimit:
 
         user = self._inactive_user(db)
         url = self._activation_url(user)
-        ip = "127.0.0.1"
+        ip = "10.20.30.1"
         cache.set(f"activate_account_rate:{ip}", 10, timeout=60)
 
         response = api_client.get(url, REMOTE_ADDR=ip)
@@ -1089,7 +1097,7 @@ class TestActivateAccountRateLimit:
 
         user = self._inactive_user(db)
         url = self._activation_url(user)
-        ip = "127.0.0.1"
+        ip = "10.20.30.2"
         cache.set(f"activate_account_rate:{ip}", 9, timeout=60)
 
         response = api_client.get(url, REMOTE_ADDR=ip)
@@ -1104,7 +1112,7 @@ class TestActivateAccountRateLimit:
 
         user = self._inactive_user(db)
         url = self._activation_url(user)
-        ip = "127.0.0.1"
+        ip = "10.20.30.3"
         cache.set(f"activate_account_rate:{ip}", 0, timeout=60)
 
         api_client.get(url, REMOTE_ADDR=ip)
@@ -1116,12 +1124,12 @@ class TestActivateAccountRateLimit:
 
         user = self._inactive_user(db)
         url = self._activation_url(user)
-        forwarded_ip = "10.0.0.99"
+        forwarded_ip = "10.20.30.4"
         cache.set(f"activate_account_rate:{forwarded_ip}", 10, timeout=60)
 
         response = api_client.get(
             url,
-            REMOTE_ADDR="127.0.0.1",
+            REMOTE_ADDR="10.20.30.1",
             HTTP_X_FORWARDED_FOR=f"{forwarded_ip}, 192.168.1.1",
         )
         # First IP in X-Forwarded-For is used for rate limiting
