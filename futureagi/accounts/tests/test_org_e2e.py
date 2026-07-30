@@ -910,6 +910,7 @@ class TestOrgAccessModel:
             is_active=True,
             created_by=outsider,
         )
+        assert outsider.can_access_organization(org) is False
 
     def test_owner_has_global_workspace_access(self, org, owner):
         """Owner has global workspace access."""
