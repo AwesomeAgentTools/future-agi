@@ -224,6 +224,54 @@ _LEAN_SELECT_SQL = ", ".join(
 # FINAL, so the predicate is redundant and only arms the resurrection bug.
 _FINAL_SKIP_INDEX_SETTINGS = {"use_skip_indexes_if_final": 1}
 
+# FINAL merges every part covering the queried key range, so its cost tracks the
+# project's span volume, not the number of ids asked for. On dev: a 500-id heavy
+# read is 2,358ms / 3.4GiB peak under FINAL vs 123ms / 67MiB here, same rows
+# (TH-7226). Opt-in per caller — this reader also backs feed / dataset / evals.
+_SORTING_KEY = (
+    "project_id, observation_type, service_name, "
+    "toStartOfHour(start_time), trace_id, id"
+)
+
+
+def _output_name(column: str) -> str:
+    """The name a ``_READ_COLUMNS`` entry exposes to an enclosing query."""
+    return column.rsplit(" AS ", 1)[-1].strip() if " AS " in column else column.strip()
+
+
+def _named_select(include_heavy: bool) -> str:
+    """``_SELECT_SQL`` / ``_LEAN_SELECT_SQL`` with the stubs named, so an
+    enclosing query can project them (``'' AS span_events``, not a bare ``''``)."""
+    return ", ".join(
+        f"'' AS {_output_name(col)}"
+        if not include_heavy and col in _HEAVY_COLUMNS
+        else col
+        for col in _READ_COLUMNS
+    )
+
+
+def _dedup_sql(where: str, order_by: str, *, include_heavy: bool) -> str:
+    """ReplacingMergeTree resolved without ``FINAL``. Same column shape/order as
+    the FINAL read, so ``_row_to_chspan`` decodes it unchanged.
+
+    ``is_deleted = 0`` MUST stay on the outer query: filtered inside the dedup,
+    a row whose newest version is deleted resurrects as its older live version.
+    """
+    projection = ", ".join(_output_name(col) for col in _READ_COLUMNS)
+    return (
+        f"SELECT {projection} FROM ("
+        # project_id is exposed as project_id_str and service_name isn't in the
+        # read set — both needed raw for the key, so re-selected privately.
+        f" SELECT {_named_select(include_heavy)},"
+        f" project_id AS _dedup_project, service_name AS _dedup_service"
+        f" FROM spans WHERE {where}"
+        f" ORDER BY _version DESC"
+        f" LIMIT 1 BY _dedup_project, observation_type, _dedup_service,"
+        f" toStartOfHour(start_time), trace_id, id"
+        f") WHERE is_deleted = 0 {order_by}"
+    )
+
+
 # Order in which result_rows columns arrive — bare names (no `AS` aliases) for the
 # row→dataclass mapping below.
 _DATA_KEYS: tuple[str, ...] = (
@@ -676,6 +724,7 @@ class CHSpanReader:
         include_heavy: bool = False,
         project_id: str | None = None,
         org_id: str | None = None,
+        dedup_via_limit_by: bool = False,
     ) -> list[CHSpan]:
         """Parentless spans for the given traces, same shape/order as
         list_by_trace_ids. Fetches one row per root instead of every span.
@@ -704,13 +753,16 @@ class CHSpanReader:
         if org_id:
             where.append("org_id = %(oid)s")
             params["oid"] = str(org_id)
-        rows = self._client.query(
-            f"SELECT {select} FROM spans FINAL "
-            f"WHERE {' AND '.join(where)} "
-            "ORDER BY trace_id, start_time, id",
-            parameters=params,
-            settings=_FINAL_SKIP_INDEX_SETTINGS,
-        ).result_rows
+        order_by = "ORDER BY trace_id, start_time, id"
+        if dedup_via_limit_by:
+            sql = _dedup_sql(" AND ".join(where), order_by, include_heavy=include_heavy)
+            # Skip indexes need no coaxing without FINAL, and the is_deleted
+            # minmax hazard that setting guards against does not arise.
+            settings: dict[str, Any] = {}
+        else:
+            sql = f"SELECT {select} FROM spans FINAL WHERE {' AND '.join(where)} {order_by}"
+            settings = _FINAL_SKIP_INDEX_SETTINGS
+        rows = self._client.query(sql, parameters=params, settings=settings).result_rows
         return [_row_to_chspan(r) for r in rows]
 
     # ─── Per-trace rollups (latency / tokens) ─────────────────────────────────
@@ -779,6 +831,7 @@ class CHSpanReader:
         include_heavy: bool = True,
         project_id: str | None = None,
         org_id: str | None = None,
+        dedup_via_limit_by: bool = False,
     ) -> list[CHSpan]:
         """Equivalent to ObservationSpan.objects.filter(id__in=span_ids).
 
@@ -804,11 +857,18 @@ class CHSpanReader:
         if org_id:
             where.append("org_id = %(oid)s")
             params["oid"] = str(org_id)
-        rows = self._client.query(
-            f"SELECT {select} FROM spans FINAL WHERE {' AND '.join(where)} ORDER BY id",
-            parameters=params,
-            settings=_FINAL_SKIP_INDEX_SETTINGS,
-        ).result_rows
+        if dedup_via_limit_by:
+            sql = _dedup_sql(
+                " AND ".join(where), "ORDER BY id", include_heavy=include_heavy
+            )
+            settings: dict[str, Any] = {}
+        else:
+            sql = (
+                f"SELECT {select} FROM spans FINAL "
+                f"WHERE {' AND '.join(where)} ORDER BY id"
+            )
+            settings = _FINAL_SKIP_INDEX_SETTINGS
+        rows = self._client.query(sql, parameters=params, settings=settings).result_rows
         return [_row_to_chspan(r) for r in rows]
 
     def export_fields_by_ids(

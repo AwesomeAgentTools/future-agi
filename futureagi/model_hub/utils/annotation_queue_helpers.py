@@ -734,7 +734,11 @@ def _ch_root_span_for_trace(trace_id):
 
     try:
         with get_reader() as reader:
-            roots = reader.roots_by_trace_ids([str(trace_id)], include_heavy=False)
+            roots = reader.roots_by_trace_ids(
+                [str(trace_id)],
+                include_heavy=False,
+                dedup_via_limit_by=True,  # see _batch_ch_trace_roots (TH-7226)
+            )
     except Exception as exc:
         logger.warning("ch_trace_render_error", trace_id=str(trace_id), error=str(exc))
         return None
@@ -780,6 +784,7 @@ def _batch_ch_spans(span_ids, *, project_id=None, include_heavy=True, caller="re
                 [str(s) for s in span_ids],
                 project_id=project_id,
                 include_heavy=include_heavy,
+                dedup_via_limit_by=True,  # see _batch_ch_trace_roots (TH-7226)
             )
     except Exception as exc:
         logger.warning(
@@ -827,7 +832,13 @@ def _batch_ch_trace_roots(trace_ids, *, project_id=None, caller="render"):
             for start in range(0, len(ids), _CH_TRACE_ID_BATCH):
                 chunk = ids[start : start + _CH_TRACE_ID_BATCH]
                 for span in reader.roots_by_trace_ids(
-                    chunk, include_heavy=False, project_id=project_id
+                    chunk,
+                    include_heavy=False,
+                    project_id=project_id,
+                    # Dedup without FINAL: 25-id page 179ms/221MiB -> 50ms/40MiB
+                    # on dev, 500-id export chunk 2,358ms/3.4GiB -> 123ms/67MiB,
+                    # same rows. The memory is what 504s an export (TH-7226).
+                    dedup_via_limit_by=True,
                 ):
                     roots_by_trace.setdefault(str(span.trace_id), []).append(span)
     except Exception as exc:
