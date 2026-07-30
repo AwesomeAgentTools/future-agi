@@ -238,6 +238,9 @@ const VoiceRightPanel = ({
           scoreLabel =
             rawValue.length > 24 ? `${rawValue.slice(0, 24)}…` : rawValue;
         }
+      } else if (Array.isArray(rawValue) && rawValue.length > 0) {
+        // Choices-type results surface their selected labels as an array.
+        scoreItems = rawValue.map((value) => String(value));
       } else if (rawValue && typeof rawValue === "object") {
         if (Array.isArray(rawValue.choices)) {
           scoreItems = rawValue.choices.map((value) => String(value));
@@ -249,10 +252,6 @@ const VoiceRightPanel = ({
               ? Math.round(rawValue.score * 100)
               : Math.round(rawValue.score);
         }
-      } else if (Array.isArray(rawValue) && rawValue.length > 0) {
-        // Choices-type results surface their selected labels as an array —
-        // keep them as items so the table can render one chip per label.
-        scoreItems = rawValue.map((v) => String(v));
       }
 
       return {
