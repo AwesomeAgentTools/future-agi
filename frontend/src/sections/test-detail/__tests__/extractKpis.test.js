@@ -7,7 +7,7 @@ describe("extractKpis", () => {
     const { deterministicEvals } = extractKpis(
       {
         customer_agent_single: {
-          bad: 4,
+          Bad: 4,
           choices: ["Good", "Neutral", "Bad"],
         },
       },

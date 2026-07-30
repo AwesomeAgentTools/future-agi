@@ -906,7 +906,7 @@ class TestRunTestKPIsViewAPI:
             name="Politeness",
             config={},
             organization=organization,
-            choices=["excellent", "good", "neutral", "impolite", "hostile"],
+            choices=["Excellent", "Good", "Neutral", "Impolite", "Hostile"],
         )
         eval_config = SimulateEvalConfig.objects.create(
             name="Politeness", eval_template=template, run_test=run_test, config={}
@@ -932,9 +932,9 @@ class TestRunTestKPIsViewAPI:
 
         assert response.status_code == status.HTTP_200_OK
         metric = response.json()["politeness"]
-        assert metric["excellent"] == 1
-        assert metric["impolite"] == 1
-        assert metric["choices"] == ["excellent", "good", "neutral", "impolite", "hostile"]
+        assert metric["Excellent"] == 1
+        assert metric["Impolite"] == 1
+        assert metric["choices"] == ["Excellent", "Good", "Neutral", "Impolite", "Hostile"]
 
     def test_kpi_choice_metric_uses_legacy_binding_labels(
         self, auth_client, organization, run_test, scenario, test_execution
@@ -948,7 +948,7 @@ class TestRunTestKPIsViewAPI:
             name="Politeness",
             eval_template=template,
             run_test=run_test,
-            config={"config": {"choices": ["excellent", "good", "neutral"]}},
+            config={"config": {"choices": ["Excellent", "Good", "Neutral"]}},
         )
         CallExecution.objects.create(
             test_execution=test_execution,
@@ -969,11 +969,9 @@ class TestRunTestKPIsViewAPI:
         )
 
         assert response.status_code == status.HTTP_200_OK
-        assert response.json()["politeness"]["choices"] == [
-            "excellent",
-            "good",
-            "neutral",
-        ]
+        metric = response.json()["politeness"]
+        assert metric["Excellent"] == 1
+        assert metric["choices"] == ["Excellent", "Good", "Neutral"]
 
     def test_kpi_empty_execution(self, auth_client, test_execution):
         """Test KPIs for execution with no call executions returns zeros."""
