@@ -731,7 +731,7 @@ export const extractKpis = (data, agentType) => {
         title: getLabel(key),
         data: (data[key]?.choices || [])
           .map((choice) => {
-            const value = data[key][choice] ?? 0;
+            const value = data[key][choice] ?? data[key][choice.toLowerCase()] ?? 0;
             return value === 0
               ? null
               : {
