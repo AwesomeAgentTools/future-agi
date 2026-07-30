@@ -245,6 +245,7 @@ def get_kpi_eval_metrics_query(test_execution_id):
                     WHEN output_type = 'score' AND jsonb_typeof(output_raw) IN ('number')
                          THEN (output_text)::numeric * 100
                     WHEN output_type = 'score' AND jsonb_typeof(output_raw) = 'object'
+                         AND jsonb_typeof(output_raw->'score') = 'number'
                          THEN (output_raw->>'score')::numeric * 100
                 END
             )::numeric, 1) AS avg_value,

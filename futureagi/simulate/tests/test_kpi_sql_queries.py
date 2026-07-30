@@ -596,7 +596,7 @@ class TestGetKpiEvalMetricsQuery:
     def test_score_dict_aggregation(self, test_execution, scenario):
         metric_id = str(uuid.uuid4())
 
-        for i, score in enumerate([0.8, 0.6]):
+        for i, score in enumerate([0.8, 0.6, "high"]):
             CallExecution.objects.create(
                 test_execution=test_execution,
                 scenario=scenario,
@@ -618,7 +618,7 @@ class TestGetKpiEvalMetricsQuery:
 
         score_rows = [r for r in rows if r[2] == "score"]
         assert len(score_rows) == 1
-        # avg of 0.8*100, 0.6*100 = 70.0
+        # The malformed score is ignored; avg of 0.8*100 and 0.6*100 is 70.0.
         assert float(score_rows[0][3]) == 70.0
 
     def test_fully_errored_pass_fail_emits_zero_row(self, test_execution, scenario):
