@@ -8,7 +8,7 @@ Online incremental approach: each issue embedded → nearest centroid → assign
 """
 
 import hashlib
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 import structlog
 from django.db import IntegrityError, transaction
@@ -137,14 +137,32 @@ def find_nearest_centroid(
     try:
         ensure_centroid_table(db)
         vector_str = "[" + ",".join(map(str, embedding)) + "]"
+        # ``cluster_centroids`` is a ReplacingMergeTree and assign_to_cluster
+        # INSERTs a new row per member rather than updating, so every historical
+        # version of a centroid coexists until a background merge collapses them.
+        # Reading the table directly therefore compares the query vector against
+        # stale centroids as well as current ones, and which one wins is decided
+        # by whichever happens to be nearest — not by recency.
+        #
+        # ``LIMIT 1 BY cluster_id`` over an explicit recency ordering collapses
+        # each cluster to its current centroid before the distance sort. This is
+        # preferred over FINAL: it needs no schema change, and member_count
+        # breaks ties that last_updated cannot, because that column is
+        # second-granularity and two updates to one cluster inside the same
+        # second are otherwise unordered.
         rows = db.client.execute(
             f"""
             SELECT
                 cluster_id,
                 cosineDistance(centroid, {vector_str}) AS distance
-            FROM {CENTROIDS_TABLE}
-            WHERE project_id = %(project_id)s
-            AND family = %(family)s
+            FROM (
+                SELECT cluster_id, centroid
+                FROM {CENTROIDS_TABLE}
+                WHERE project_id = %(project_id)s
+                AND family = %(family)s
+                ORDER BY last_updated DESC, member_count DESC
+                LIMIT 1 BY cluster_id
+            )
             ORDER BY distance ASC
             LIMIT 1
             """,
@@ -167,11 +185,17 @@ def create_cluster(
     project_id: str,
     issue: ClusterableIssue,
     embedding: List[float],
+    on_join: Optional[Callable[[], None]] = None,
 ) -> str:
     """
     Create a new TraceErrorGroup cluster + ClickHouse centroid.
 
-    Returns the new cluster_id.
+    Returns the cluster_id — which may be an EXISTING cluster's, when the issue
+    turns out to be a repeat that the centroid lookup failed to match. Callers
+    that report create-vs-assign counts should pass ``on_join``; it fires when
+    this call joined an existing cluster rather than creating one, so a missed
+    centroid lookup is not miscounted as a new cluster. The return type stays a
+    plain str so existing callers and their test doubles keep working.
     """
     # Stable cluster ID from project + category + brief prefix
     base = f"{project_id}|scanner|{issue.category}|{issue.brief[:100]}"
@@ -201,6 +225,8 @@ def create_cluster(
                 reason="centroid_lookup_missed",
             )
             assign_to_cluster(cluster_id, project_id, issue, embedding)
+            if on_join is not None:
+                on_join()
             return cluster_id
 
         h2 = hashlib.md5(
@@ -291,6 +317,29 @@ def create_cluster(
         title=issue.brief[:80],
     )
     return cluster_id
+
+
+def delete_centroid(cluster_id: str, project_id: str) -> None:
+    """Drop a cluster's centroid rows.
+
+    Centroids outlive their TraceErrorGroup: nothing removes them when a cluster
+    is deleted, so the store accumulates rows pointing at clusters that no longer
+    exist. find_nearest_centroid will happily match one of those, and the
+    subsequent assign_to_cluster raises DoesNotExist — which cluster_issues
+    swallows, dropping the issue silently. Callers use this to self-heal when
+    they discover an orphan.
+    """
+    db = ClickHouseVectorDB()
+    try:
+        ensure_centroid_table(db)
+        db.client.execute(
+            f"ALTER TABLE {CENTROIDS_TABLE} DELETE "
+            f"WHERE cluster_id = %(cluster_id)s AND project_id = %(project_id)s",
+            {"cluster_id": cluster_id, "project_id": project_id},
+        )
+        logger.info("centroid_deleted", cluster_id=cluster_id)
+    finally:
+        db.close()
 
 
 # ---------------------------------------------------------------------------
