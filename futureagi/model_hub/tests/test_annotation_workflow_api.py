@@ -6677,7 +6677,16 @@ class TestAssignItemsQueryCount:
                 "roles": [AnnotatorRole.ANNOTATOR.value],
             },
         )
-        user_ids = [user.id, second_user.id]
+        # ONE user, deliberately. The endpoint emits one UPDATE per distinct
+        # winning assignee, and with two users each item's winner is min(pk)
+        # over uuid4 keys — a coin flip. A 20-item batch then almost always
+        # spans both assignees (2 UPDATEs) while a 2-item batch collapses to one
+        # about half the time, so comparing totals across batch sizes fails
+        # ~50% of runs on correct code. With a single assignee the UPDATE count
+        # is deterministically 1 and the comparison measures only per-item
+        # growth, which is what it is for. Grouping across several assignees is
+        # asserted separately below.
+        user_ids = [user.id]
 
         small = self._add_items(auth_client, queue_id, ds, 2, 600)
         large = self._add_items(auth_client, queue_id, ds, 20, 700)
@@ -6698,20 +6707,41 @@ class TestAssignItemsQueryCount:
         assert counts.get(("SELECT", "model_hub_queueitemassignment"), 0) <= 2, (
             "the assigned_to resolve is reading assignments per item again"
         )
-        # ...and one UPDATE per distinct resulting assignee, never per item.
-        # The bound is distinct first-assignees among the touched items (plus one
-        # for the NULL group), NOT len(user_ids): a remove/set, or an add over
-        # items already assigned to someone outside this request, leaves live
-        # assignments from users the request never named.
-        n_updates = counts.get(("UPDATE", "model_hub_queueitem"), 0)
+        assert counts.get(("UPDATE", "model_hub_queueitem"), 0) == 1, (
+            "assigned_to is not being written in a single grouped UPDATE"
+        )
+
+    def test_updates_are_grouped_by_assignee_not_per_item(
+        self, auth_client, queue_with_items, dataset_rows, second_user, user
+    ):
+        """With several winning assignees the writes group by assignee.
+
+        Split out of the flatness test because the number of distinct winners is
+        random (min(pk) over uuid4 keys), which makes it unusable in a
+        cross-batch total comparison but fine as a bound.
+        """
+        queue_id, _, _ = queue_with_items
+        ds, _ = dataset_rows
+        AnnotationQueueAnnotator.objects.update_or_create(
+            queue_id=queue_id,
+            user=second_user,
+            defaults={
+                "role": AnnotatorRole.ANNOTATOR.value,
+                "roles": [AnnotatorRole.ANNOTATOR.value],
+            },
+        )
+        item_ids = self._add_items(auth_client, queue_id, ds, 20, 950)
+        ctx = self._assign(auth_client, queue_id, item_ids, [user.id, second_user.id])
+
+        n_updates = _queries_by_table(ctx).get(("UPDATE", "model_hub_queueitem"), 0)
         distinct_assignees = len(
             set(
-                QueueItem.objects.filter(pk__in=large).values_list(
+                QueueItem.objects.filter(pk__in=item_ids).values_list(
                     "assigned_to_id", flat=True
                 )
             )
         )
-        assert n_updates <= distinct_assignees, (
+        assert 1 <= n_updates <= distinct_assignees, (
             f"{n_updates} UPDATEs for 20 items resolving to {distinct_assignees} "
             "distinct assignees — assigned_to is being written per item instead "
             "of grouped by assignee"
