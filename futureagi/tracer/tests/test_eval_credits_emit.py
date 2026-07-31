@@ -11,12 +11,16 @@ These three paths used to charge legacy billing only; this verifies the
 new emit hits all of them.
 
 In OSS builds, root ``conftest`` installs ``ee.usage.*`` patch-target stubs
-(without flipping ``has_ee`` / ``is_oss``). This file mocks ``emit`` and
-``BillingConfig.get_eval_per_run_fee`` so the dual-write path is exercised
-without a real EE install.
+(``BillingConfig``, ``UsageEvent``, ``token_usage_properties``, still with
+``__spec__=None`` so ``has_ee`` / ``is_oss`` don't flip). This file mocks
+``emit`` and ``BillingConfig.get_eval_per_run_fee`` so the dual-write path
+is exercised without a real EE install. The ``amount`` assertion runs only
+when real ``ee/`` is present — against the stub it would be tautological.
 """
 
 from __future__ import annotations
+
+from pathlib import Path
 
 import pytest
 
@@ -32,6 +36,9 @@ PROMPT_TOKENS = 100
 COMPLETION_TOKENS = 50
 TOTAL_TOKENS = PROMPT_TOKENS + COMPLETION_TOKENS
 RAW_COST_USD = 0.12345
+
+# Real ee package on disk (not the OSS conftest stubs).
+_EE_PRESENT = (Path(__file__).resolve().parents[2] / "ee").is_dir()
 
 _CREDIT_EVENT_TYPES = {
     APICallTypeChoices.TURING_LARGE_EVALUATOR.value,
@@ -119,6 +126,22 @@ def _assert_token_properties(props):
     assert props["raw_cost_usd"] == str(RAW_COST_USD)
 
 
+def _assert_credit_amount(event):
+    """Assert amount against real BillingConfig math when ee is present.
+
+    On OSS, root conftest stubs ``BillingConfig.calculate_ai_credits`` as
+    ``cost * 100``. Comparing emit amount to that stub is tautological
+    (stub-vs-stub), so the amount check is EE-only. OSS still covers
+    event_type / org_id / source / source_id / target_type / token props.
+    """
+    if not _EE_PRESENT:
+        return
+    from ee.usage.services.config import BillingConfig
+
+    expected_credits = BillingConfig.get().calculate_ai_credits(RAW_COST_USD)
+    assert event.amount == expected_credits
+
+
 @pytest.mark.django_db
 def test_span_eval_emits_ai_credits_with_tokens(
     organization,
@@ -131,7 +154,6 @@ def test_span_eval_emits_ai_credits_with_tokens(
     stub_cost_log,
     captured_emit,
 ):
-    from ee.usage.services.config import BillingConfig
     from tracer.utils.eval import OBSERVE, _execute_evaluation
 
     _execute_evaluation(
@@ -143,11 +165,10 @@ def test_span_eval_emits_ai_credits_with_tokens(
     )
 
     event = _credit_event(captured_emit)
-    expected_credits = BillingConfig.get().calculate_ai_credits(RAW_COST_USD)
 
     assert event.event_type == APICallTypeChoices.TURING_LARGE_EVALUATOR.value
     assert event.org_id == str(organization.id)
-    assert event.amount == expected_credits
+    _assert_credit_amount(event)
     props = event.properties
     assert props["source"] == "tracer"
     assert props["source_id"] == str(custom_eval_config.eval_template.id)
@@ -167,7 +188,6 @@ def test_trace_eval_emits_ai_credits_with_tokens(
     stub_cost_log,
     captured_emit,
 ):
-    from ee.usage.services.config import BillingConfig
     from tracer.utils.eval import _execute_evaluation_for_trace
 
     _execute_evaluation_for_trace(
@@ -179,11 +199,10 @@ def test_trace_eval_emits_ai_credits_with_tokens(
     )
 
     event = _credit_event(captured_emit)
-    expected_credits = BillingConfig.get().calculate_ai_credits(RAW_COST_USD)
 
     assert event.event_type == APICallTypeChoices.TURING_LARGE_EVALUATOR.value
     assert event.org_id == str(organization.id)
-    assert event.amount == expected_credits
+    _assert_credit_amount(event)
     props = event.properties
     assert props["source"] == "tracer"
     assert props["source_id"] == str(custom_eval_config.eval_template.id)
@@ -202,7 +221,6 @@ def test_session_eval_emits_ai_credits_with_tokens(
     stub_cost_log,
     captured_emit,
 ):
-    from ee.usage.services.config import BillingConfig
     from tracer.utils.eval import _execute_evaluation_for_session
 
     _execute_evaluation_for_session(
@@ -213,11 +231,10 @@ def test_session_eval_emits_ai_credits_with_tokens(
     )
 
     event = _credit_event(captured_emit)
-    expected_credits = BillingConfig.get().calculate_ai_credits(RAW_COST_USD)
 
     assert event.event_type == APICallTypeChoices.TURING_LARGE_EVALUATOR.value
     assert event.org_id == str(organization.id)
-    assert event.amount == expected_credits
+    _assert_credit_amount(event)
     props = event.properties
     assert props["source"] == "tracer"
     assert props["source_id"] == str(custom_eval_config.eval_template.id)
