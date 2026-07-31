@@ -6408,14 +6408,31 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
                 deleted=True,
             ).update(deleted=False, deleted_at=None)
 
-        # Update legacy FK to first assigned user (backward compat)
-        for item_pk in item_pks:
-            first_assignment = (
-                QueueItemAssignment.objects.filter(queue_item_id=item_pk, deleted=False)
-                .values_list("user_id", flat=True)
-                .first()
+        # Update legacy FK to first assigned user (backward compat).
+        # Was a SELECT plus an UPDATE per item — the whole N+1 on this endpoint.
+        # Now one SELECT for the batch, then one UPDATE per distinct assignee.
+        # order_by("pk") is load-bearing, not tidiness: the per-item .first() it
+        # replaces ran on an unordered queryset, and QuerySet.first() falls back
+        # to order_by("pk") in that case, so the old code deterministically
+        # picked the lowest-pk assignment. Reading the batch in the same order
+        # and keeping the first row per item reproduces that exactly; without it
+        # assigned_to would follow scan order and could differ between two
+        # identical calls.
+        first_by_item = {}
+        for qi_id, user_id in (
+            QueueItemAssignment.objects.filter(
+                queue_item_id__in=item_pks, deleted=False
             )
-            QueueItem.objects.filter(pk=item_pk).update(assigned_to_id=first_assignment)
+            .order_by("pk")
+            .values_list("queue_item_id", "user_id")
+        ):
+            first_by_item.setdefault(qi_id, user_id)
+
+        pks_by_assignee = {}
+        for item_pk in item_pks:
+            pks_by_assignee.setdefault(first_by_item.get(item_pk), []).append(item_pk)
+        for user_id, assignee_pks in pks_by_assignee.items():
+            QueueItem.objects.filter(pk__in=assignee_pks).update(assigned_to_id=user_id)
 
         return self._gm.success_response({"assigned": len(item_pks) * len(user_ids)})
 
