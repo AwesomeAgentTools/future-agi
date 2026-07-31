@@ -6698,12 +6698,66 @@ class TestAssignItemsQueryCount:
         assert counts.get(("SELECT", "model_hub_queueitemassignment"), 0) <= 2, (
             "the assigned_to resolve is reading assignments per item again"
         )
-        # ...and one UPDATE per distinct assignee, never per item.
+        # ...and one UPDATE per distinct resulting assignee, never per item.
+        # The bound is distinct first-assignees among the touched items (plus one
+        # for the NULL group), NOT len(user_ids): a remove/set, or an add over
+        # items already assigned to someone outside this request, leaves live
+        # assignments from users the request never named.
         n_updates = counts.get(("UPDATE", "model_hub_queueitem"), 0)
-        assert n_updates <= len(user_ids), (
-            f"{n_updates} UPDATEs on queue items for 20 items — assigned_to is "
-            "being written per item instead of grouped by assignee"
+        distinct_assignees = len(
+            set(
+                QueueItem.objects.filter(pk__in=large).values_list(
+                    "assigned_to_id", flat=True
+                )
+            )
         )
+        assert n_updates <= distinct_assignees, (
+            f"{n_updates} UPDATEs for 20 items resolving to {distinct_assignees} "
+            "distinct assignees — assigned_to is being written per item instead "
+            "of grouped by assignee"
+        )
+
+    def test_assigned_to_is_the_lowest_pk_assignment_not_scan_order(
+        self, auth_client, queue_with_items, dataset_rows, second_user, third_user, user
+    ):
+        """The per-item ``.first()`` this replaced ran on an unordered queryset,
+        and ``QuerySet.first()`` falls back to ``order_by("pk")`` there — so the
+        old code deterministically picked the lowest-pk assignment. Reading the
+        batch unordered would follow scan order instead, which is stable in a
+        clean fixture and not in general. Seeds a foreign assignee first so the
+        winner is decided by pk, not by insertion order or the request's
+        ``user_ids``."""
+        queue_id, _, _ = queue_with_items
+        ds, _ = dataset_rows
+        for annotator in (second_user, third_user):
+            AnnotationQueueAnnotator.objects.update_or_create(
+                queue_id=queue_id,
+                user=annotator,
+                defaults={
+                    "role": AnnotatorRole.ANNOTATOR.value,
+                    "roles": [AnnotatorRole.ANNOTATOR.value],
+                },
+            )
+        item_ids = self._add_items(auth_client, queue_id, ds, 4, 900)
+
+        # A live assignment from a user this request will never name.
+        for item_id in item_ids:
+            QueueItemAssignment.objects.create(queue_item_id=item_id, user=third_user)
+
+        self._assign(auth_client, queue_id, item_ids, [user.id, second_user.id])
+
+        for item_id in item_ids:
+            expected = (
+                QueueItemAssignment.objects.filter(queue_item_id=item_id, deleted=False)
+                .order_by("pk")
+                .values_list("user_id", flat=True)
+                .first()
+            )
+            actual = QueueItem.objects.get(pk=item_id).assigned_to_id
+            assert actual == expected, (
+                f"assigned_to={actual} but the lowest-pk live assignment is "
+                f"{expected} — the batched resolve is following scan order"
+            )
 
     def test_assigned_to_still_mirrors_an_active_assignment(
         self, auth_client, queue_with_items, dataset_rows, second_user, user

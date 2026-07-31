@@ -6305,13 +6305,21 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
         # Update legacy FK to first assigned user (backward compat).
         # Was a SELECT plus an UPDATE per item — the whole N+1 on this endpoint.
         # Now one SELECT for the batch, then one UPDATE per distinct assignee.
-        # QueueItemAssignment has no Meta.ordering, so "first" was already
-        # whichever row Postgres returned; taking the first seen per item keeps
-        # exactly that guarantee.
+        # order_by("pk") is load-bearing, not tidiness: the per-item .first() it
+        # replaces ran on an unordered queryset, and QuerySet.first() falls back
+        # to order_by("pk") in that case, so the old code deterministically
+        # picked the lowest-pk assignment. Reading the batch in the same order
+        # and keeping the first row per item reproduces that exactly; without it
+        # assigned_to would follow scan order and could differ between two
+        # identical calls.
         first_by_item = {}
-        for qi_id, user_id in QueueItemAssignment.objects.filter(
-            queue_item_id__in=item_pks, deleted=False
-        ).values_list("queue_item_id", "user_id"):
+        for qi_id, user_id in (
+            QueueItemAssignment.objects.filter(
+                queue_item_id__in=item_pks, deleted=False
+            )
+            .order_by("pk")
+            .values_list("queue_item_id", "user_id")
+        ):
             first_by_item.setdefault(qi_id, user_id)
 
         pks_by_assignee = {}
