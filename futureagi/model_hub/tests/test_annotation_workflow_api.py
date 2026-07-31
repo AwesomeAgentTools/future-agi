@@ -1181,6 +1181,64 @@ class TestSubmitAnnotations:
             deleted=False,
         ).exists()
 
+    def test_query_count_does_not_grow_with_label_count(
+        self, auth_client, queue_with_items, label_b, organization, workspace
+    ):
+        """TH-7211: submit was ~8 queries per label — 82 for 7 labels, in the
+        annotator's inner loop. One extra label must not cost extra queries."""
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        queue_id, item_ids, label = queue_with_items
+        queue = AnnotationQueue.objects.get(pk=queue_id)
+        extra = [label_b] + [
+            AnnotationsLabels.objects.create(
+                name=f"Bulk Label {i}",
+                type="categorical",
+                settings={
+                    "options": [{"label": "positive"}, {"label": "negative"}],
+                    "multi_choice": False,
+                    "rule_prompt": "",
+                    "auto_annotate": False,
+                    "strategy": None,
+                },
+                organization=organization,
+                workspace=workspace,
+            )
+            for i in range(4)
+        ]
+        for order, extra_label in enumerate(extra, start=1):
+            AnnotationQueueLabel.objects.create(
+                queue=queue, label=extra_label, order=order, required=False
+            )
+
+        def submit(item_id, labels):
+            body = {
+                "annotations": [
+                    {
+                        "label_id": str(each.id),
+                        "value": 3 if each.type == "star" else "positive",
+                    }
+                    for each in labels
+                ]
+            }
+            with CaptureQueriesContext(connection) as ctx:
+                resp = auth_client.post(
+                    submit_annotations_url(queue_id, item_id), body, format="json"
+                )
+            assert resp.status_code == status.HTTP_200_OK, resp.data
+            assert _result(resp)["submitted"] == len(labels), _result(resp)
+            return len(ctx.captured_queries)
+
+        one = submit(item_ids[0], [label])
+        six = submit(item_ids[1], [label] + extra)
+
+        assert one == six, (
+            f"submit ran {one} queries for 1 label and {six} for 6 — "
+            f"{(six - one) / 5:.1f} per label. The per-label label lookup or the "
+            "per-label Score upsert is back (TH-7211)."
+        )
+
     def test_submit_stores_notes_per_label(
         self, auth_client, queue_with_items, label_b
     ):

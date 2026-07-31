@@ -5459,14 +5459,22 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
             )
         )
 
+        # One read for every label in the payload; this was a .get() per label
+        # in the annotator's inner loop (TH-7211).
+        labels_by_id = {
+            label.pk: label
+            for label in AnnotationsLabels.objects.filter(
+                pk__in=[ann["label_id"] for ann in annotations_data], deleted=False
+            )
+        }
+
         annotations_to_save = []
         for ann_data in annotations_data:
             label_id = ann_data["label_id"]
             value = ann_data["value"]
 
-            try:
-                label = AnnotationsLabels.objects.get(pk=label_id, deleted=False)
-            except AnnotationsLabels.DoesNotExist:
+            label = labels_by_id.get(label_id)
+            if label is None:
                 continue
 
             # Validate label belongs to this queue
@@ -5481,41 +5489,109 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
                 return self._gm.bad_request(str(exc))
             annotations_to_save.append((ann_data, label, value))
 
-        for ann_data, label, value in annotations_to_save:
-            per_label_notes = (
-                ann_data.get("notes", label_notes_fallback) if label.allow_notes else ""
+        # Upsert every Score in three statements instead of update_or_create per
+        # label, which cost a SELECT, an INSERT/UPDATE and its own savepoint each
+        # — ~8 queries per label in the annotator's inner loop (TH-7211).
+        #
+        # Use no_workspace_objects + _id fields to avoid the LEFT JOIN on the
+        # nullable workspace FK that triggers PostgreSQL's "FOR UPDATE cannot be
+        # applied to the nullable side of an outer join".
+        if source_id and source_fk_field and annotations_to_save:
+            request_workspace = getattr(request, "workspace", None)
+            # _id, not the object: item.workspace would lazy-load the FK.
+            score_workspace_id = (
+                request_workspace.id if request_workspace else item.workspace_id
             )
-
-            # Upsert Score (unified annotation primitive)
-            # Use no_workspace_objects + _id fields to avoid the LEFT JOIN
-            # on nullable workspace FK that triggers PostgreSQL's "FOR UPDATE
-            # cannot be applied to the nullable side of an outer join".
-            if source_id and source_fk_field:
-                # Scope the upsert by queue_item so each queue review context
-                # owns its own Score row even when the same annotator scores
-                # the same label across multiple queues.
-                score, _ = Score.no_workspace_objects.update_or_create(
+            # Scoped by queue_item so each queue review context owns its own Score
+            # row even when the same annotator scores the same label across queues.
+            existing_by_label = {
+                score.label_id: score
+                for score in Score.no_workspace_objects.filter(
                     **{f"{source_fk_field}_id": source_id},
-                    label_id=label.pk,
+                    label_id__in=[label.pk for _, label, _ in annotations_to_save],
                     annotator_id=request.user.pk,
                     queue_item=item,
                     deleted=False,
-                    defaults={
-                        "source_type": item.source_type,
-                        "value": value,
-                        "score_source": "human",
-                        "notes": per_label_notes,
-                        "organization": request.organization,
-                        # Denormalized tracer project id (QueueItem.project is the
-                        # tracer.Project; null for non-tracer sources).
-                        **(
-                            {"tracer_project_id": item.project_id}
-                            if item.project_id
-                            else {}
-                        ),
-                    },
                 )
+            }
+            now = timezone.now()
+            to_create, to_update = [], []
+            for ann_data, label, value in annotations_to_save:
+                per_label_notes = (
+                    ann_data.get("notes", label_notes_fallback)
+                    if label.allow_notes
+                    else ""
+                )
+                score = existing_by_label.get(label.pk)
+                if score is None:
+                    to_create.append(
+                        Score(
+                            **{f"{source_fk_field}_id": source_id},
+                            label_id=label.pk,
+                            annotator_id=request.user.pk,
+                            queue_item=item,
+                            source_type=item.source_type,
+                            value=value,
+                            score_source="human",
+                            notes=per_label_notes,
+                            organization=request.organization,
+                            # bulk_create skips the post_save tenancy backfill in
+                            # tfc/utils/signals.py — same value it would have written.
+                            workspace_id=score_workspace_id,
+                            # Denormalized tracer project id (QueueItem.project is
+                            # the tracer.Project; null for non-tracer sources).
+                            tracer_project_id=item.project_id or None,
+                        )
+                    )
+                else:
+                    # Score.save() writes value_history and bulk_update bypasses
+                    # it. The row just read IS the previous version, so the entry
+                    # is built here rather than re-reading it as save() must.
+                    if score.value != value:
+                        score.value_history = Score.appended_value_history(
+                            score.value,
+                            score.value_history,
+                            score.updated_at or score.created_at,
+                        )
+                    score.source_type = item.source_type
+                    score.value = value
+                    score.score_source = "human"
+                    score.notes = per_label_notes
+                    score.organization = request.organization
+                    if item.project_id:
+                        score.tracer_project_id = item.project_id
+                    # bulk_update does not honour auto_now.
+                    score.updated_at = now
+                    to_update.append(score)
                 submitted += 1
+
+            # no_workspace_objects for the writes too, not just the read above:
+            # bulk_update filters through the manager's queryset, and the default
+            # manager scopes by the request workspace — which would silently skip
+            # exactly the NULL/mismatched-workspace rows this manager exists to
+            # reach, reporting them as submitted.
+            with transaction.atomic():
+                if to_create:
+                    # A concurrent submit of the same label can win the race; the
+                    # partial unique index on (source, label, annotator,
+                    # queue_item) WHERE NOT deleted makes that a no-op, not a 500.
+                    Score.no_workspace_objects.bulk_create(
+                        to_create, ignore_conflicts=True
+                    )
+                if to_update:
+                    Score.no_workspace_objects.bulk_update(
+                        to_update,
+                        [
+                            "source_type",
+                            "value",
+                            "value_history",
+                            "score_source",
+                            "notes",
+                            "organization",
+                            "tracer_project_id",
+                            "updated_at",
+                        ],
+                    )
 
         if item_notes is not None:
             if item_notes:
