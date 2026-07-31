@@ -5489,6 +5489,18 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
                 return self._gm.bad_request(str(exc))
             annotations_to_save.append((ann_data, label, value))
 
+        # A payload may repeat a label_id. The sequential update_or_create this
+        # replaces created then updated the same row, so the LAST entry won;
+        # bulk_create(ignore_conflicts) would keep the FIRST and drop the rest.
+        # Collapse to the last entry per label to preserve that.
+        if len({label.pk for _, label, _ in annotations_to_save}) != len(
+            annotations_to_save
+        ):
+            deduped = {}
+            for ann_data, label, value in annotations_to_save:
+                deduped[label.pk] = (ann_data, label, value)
+            annotations_to_save = list(deduped.values())
+
         # Upsert every Score in three statements instead of update_or_create per
         # label, which cost a SELECT, an INSERT/UPDATE and its own savepoint each
         # — ~8 queries per label in the annotator's inner loop (TH-7211).
@@ -5535,8 +5547,12 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
                             score_source="human",
                             notes=per_label_notes,
                             organization=request.organization,
-                            # bulk_create skips the post_save tenancy backfill in
-                            # tfc/utils/signals.py — same value it would have written.
+                            # bulk_create skips the post_save tenancy backfill.
+                            # With a request workspace this is the value that
+                            # backfill would have written; with none it writes
+                            # item.workspace_id where the old path left NULL —
+                            # a deliberate improvement, not an equivalence, and
+                            # the same expression QueueItemNote uses below.
                             workspace_id=score_workspace_id,
                             # Denormalized tracer project id (QueueItem.project is
                             # the tracer.Project; null for non-tracer sources).
@@ -5563,13 +5579,19 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
                     # bulk_update does not honour auto_now.
                     score.updated_at = now
                     to_update.append(score)
-                submitted += 1
 
             # no_workspace_objects for the writes too, not just the read above:
             # bulk_update filters through the manager's queryset, and the default
             # manager scopes by the request workspace — which would silently skip
             # exactly the NULL/mismatched-workspace rows this manager exists to
             # reach, reporting them as submitted.
+            #
+            # The old per-label update_or_create took a FOR UPDATE row lock and
+            # serialised concurrent writers; this read is unlocked. Only the same
+            # annotator can collide (annotator_id is in every applicable unique
+            # key), so the exposure is one user double-submitting an item: the
+            # update path is last-writer-wins and can lose one value_history
+            # entry, and the create path drops the loser's value below.
             with transaction.atomic():
                 if to_create:
                     # A concurrent submit of the same label can win the race; the
@@ -5592,6 +5614,14 @@ class QueueItemViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
                             "updated_at",
                         ],
                     )
+            # Labels accepted for this item. Every one of them ends up with a
+            # live Score row, so this is not inflated by the ignore_conflicts
+            # drop above — but in that race the surviving row holds the
+            # concurrent request's value, not this one's. Deliberately not
+            # verified with a COUNT: that would add a query to the inner loop
+            # this change exists to shrink, to correct a number only a
+            # self-conflicting double-submit can skew.
+            submitted = len(annotations_to_save)
 
         if item_notes is not None:
             if item_notes:
