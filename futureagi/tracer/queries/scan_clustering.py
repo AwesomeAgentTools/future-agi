@@ -11,6 +11,7 @@ import hashlib
 from typing import List, Optional, Tuple
 
 import structlog
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from agentic_eval.core.database.ch_vector import ClickHouseVectorDB
@@ -177,10 +178,31 @@ def create_cluster(
     h = hashlib.md5(base.encode(), usedforsecurity=False).hexdigest()[:8]
     cluster_id = f"S-{h.upper()}"
 
-    # Handle collision — if cluster_id already exists, append suffix
-    if TraceErrorGroup.objects.filter(
+    # A row already under this ID is almost always the SAME failure arriving
+    # again, not an md5 collision: the ID hashes (project, category, brief), so
+    # a repeat brief repeats the hash by construction. We land here when the
+    # centroid lookup missed a cluster it should have matched — cluster_centroids
+    # is a ReplacingMergeTree read without FINAL, so a just-written centroid is
+    # not reliably visible. Minting a fresh ID here is what produced pairs of
+    # clusters with byte-identical titles seconds apart; join the existing one
+    # instead. Only a row whose (category, title) actually DIFFERS is a real
+    # hash collision and still needs a distinct ID — note the ID hashes
+    # brief[:100] while title holds the full brief, so two briefs sharing a
+    # 100-char prefix legitimately reach this branch.
+    existing = TraceErrorGroup.objects.filter(
         project_id=project_id, cluster_id=cluster_id
-    ).exists():
+    ).first()
+    if existing is not None:
+        if (existing.issue_category, existing.title) == (issue.category, issue.brief):
+            logger.info(
+                "cluster_join_on_existing_id",
+                cluster_id=cluster_id,
+                issue_id=issue.issue_id,
+                reason="centroid_lookup_missed",
+            )
+            assign_to_cluster(cluster_id, project_id, issue, embedding)
+            return cluster_id
+
         h2 = hashlib.md5(
             f"{base}|{issue.issue_id}".encode(), usedforsecurity=False
         ).hexdigest()[:8]
@@ -194,24 +216,41 @@ def create_cluster(
 
     seed_sev = _seed_severity(issue.category, issue.brief)
 
-    cluster = TraceErrorGroup.objects.create(
-        project_id=project_id,
-        cluster_id=cluster_id,
-        source=ClusterSource.SCANNER,
-        issue_group=issue.group,
-        issue_category=issue.category,
-        fix_layer=issue.fix_layer,
-        title=issue.brief,
-        status=FeedIssueStatus.ESCALATING,
-        error_type=issue.group,
-        combined_impact=_severity_to_impact(seed_sev),
-        priority=severity_to_priority(seed_sev),
-        total_events=1,
-        unique_traces=1,
-        error_count=1,
-        first_seen=timezone.now(),
-        last_seen=timezone.now(),
-    )
+    try:
+        # Savepoint so a unique-constraint violation here doesn't poison the
+        # surrounding transaction/connection (mirrors the eval path).
+        with transaction.atomic():
+            cluster = TraceErrorGroup.objects.create(
+                project_id=project_id,
+                cluster_id=cluster_id,
+                source=ClusterSource.SCANNER,
+                issue_group=issue.group,
+                issue_category=issue.category,
+                fix_layer=issue.fix_layer,
+                title=issue.brief,
+                status=FeedIssueStatus.ESCALATING,
+                error_type=issue.group,
+                combined_impact=_severity_to_impact(seed_sev),
+                priority=severity_to_priority(seed_sev),
+                total_events=1,
+                unique_traces=1,
+                error_count=1,
+                first_seen=timezone.now(),
+                last_seen=timezone.now(),
+            )
+    except IntegrityError:
+        # A concurrent run created this cluster between the lookup above and
+        # this insert (unique_project_cluster_if_not_deleted). Without this the
+        # exception escapes to cluster_issues' blanket handler and the issue is
+        # silently dropped — never clustered, never retried. Treat it as an
+        # assignment so the trace is still linked and the centroid still moves.
+        logger.info(
+            "scan_cluster_create_race_assigning",
+            cluster_id=cluster_id,
+            issue_id=issue.issue_id,
+        )
+        assign_to_cluster(cluster_id, project_id, issue, embedding)
+        return cluster_id
 
     # Link issue → cluster
     TraceScanIssue.objects.filter(id=issue.issue_id).update(cluster=cluster)
