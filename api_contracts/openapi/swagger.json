@@ -33485,6 +33485,27 @@
                 "description": "",
                 "parameters": [
                     {
+                        "name": "created_at",
+                        "in": "query",
+                        "description": "",
+                        "required": false,
+                        "type": "string"
+                    },
+                    {
+                        "name": "status",
+                        "in": "query",
+                        "description": "",
+                        "required": false,
+                        "type": "string"
+                    },
+                    {
+                        "name": "dataset_id",
+                        "in": "query",
+                        "description": "",
+                        "required": false,
+                        "type": "string"
+                    },
+                    {
                         "name": "ordering",
                         "in": "query",
                         "description": "Which field to use when ordering the results.",
@@ -33739,6 +33760,27 @@
                 "operationId": "model-hub_experiments_v2_list_list",
                 "description": "V2 experiment list with filtering, search, and pagination.",
                 "parameters": [
+                    {
+                        "name": "created_at",
+                        "in": "query",
+                        "description": "",
+                        "required": false,
+                        "type": "string"
+                    },
+                    {
+                        "name": "status",
+                        "in": "query",
+                        "description": "",
+                        "required": false,
+                        "type": "string"
+                    },
+                    {
+                        "name": "dataset_id",
+                        "in": "query",
+                        "description": "",
+                        "required": false,
+                        "type": "string"
+                    },
                     {
                         "name": "search",
                         "in": "query",
@@ -38192,6 +38234,20 @@
                 "description": "",
                 "parameters": [
                     {
+                        "name": "optimize_type",
+                        "in": "query",
+                        "description": "",
+                        "required": false,
+                        "type": "string"
+                    },
+                    {
+                        "name": "status",
+                        "in": "query",
+                        "description": "",
+                        "required": false,
+                        "type": "string"
+                    },
+                    {
                         "name": "search",
                         "in": "query",
                         "description": "A search term.",
@@ -40804,6 +40860,13 @@
                 "description": "",
                 "parameters": [
                     {
+                        "name": "name",
+                        "in": "query",
+                        "description": "",
+                        "required": false,
+                        "type": "string"
+                    },
+                    {
                         "name": "search",
                         "in": "query",
                         "description": "A search term.",
@@ -41126,6 +41189,27 @@
                 "description": "",
                 "parameters": [
                     {
+                        "name": "template_name",
+                        "in": "query",
+                        "description": "",
+                        "required": false,
+                        "type": "string"
+                    },
+                    {
+                        "name": "template_version",
+                        "in": "query",
+                        "description": "",
+                        "required": false,
+                        "type": "string"
+                    },
+                    {
+                        "name": "created_at",
+                        "in": "query",
+                        "description": "",
+                        "required": false,
+                        "type": "string"
+                    },
+                    {
                         "name": "search",
                         "in": "query",
                         "description": "A search term.",
@@ -41204,6 +41288,27 @@
                 "operationId": "model-hub_prompt-history-executions_get_execution_details",
                 "description": "Get detailed information about a specific PromptVersion",
                 "parameters": [
+                    {
+                        "name": "template_name",
+                        "in": "query",
+                        "description": "",
+                        "required": false,
+                        "type": "string"
+                    },
+                    {
+                        "name": "template_version",
+                        "in": "query",
+                        "description": "",
+                        "required": false,
+                        "type": "string"
+                    },
+                    {
+                        "name": "created_at",
+                        "in": "query",
+                        "description": "",
+                        "required": false,
+                        "type": "string"
+                    },
                     {
                         "name": "search",
                         "in": "query",
@@ -42238,6 +42343,27 @@
                 "description": "",
                 "parameters": [
                     {
+                        "name": "name",
+                        "in": "query",
+                        "description": "",
+                        "required": false,
+                        "type": "string"
+                    },
+                    {
+                        "name": "version",
+                        "in": "query",
+                        "description": "",
+                        "required": false,
+                        "type": "string"
+                    },
+                    {
+                        "name": "created_at",
+                        "in": "query",
+                        "description": "",
+                        "required": false,
+                        "type": "string"
+                    },
+                    {
                         "name": "search",
                         "in": "query",
                         "description": "A search term.",
@@ -42585,6 +42711,27 @@
                 "operationId": "model-hub_prompt-templates_get_template_by_name",
                 "description": "Retrieve a prompt template by name.\nIf no version is specified, returns the default version (is_default=True).\nIf a version is specified, returns that specific version.",
                 "parameters": [
+                    {
+                        "name": "name",
+                        "in": "query",
+                        "description": "",
+                        "required": false,
+                        "type": "string"
+                    },
+                    {
+                        "name": "version",
+                        "in": "query",
+                        "description": "",
+                        "required": false,
+                        "type": "string"
+                    },
+                    {
+                        "name": "created_at",
+                        "in": "query",
+                        "description": "",
+                        "required": false,
+                        "type": "string"
+                    },
                     {
                         "name": "search",
                         "in": "query",
@@ -63817,6 +63964,10 @@
                         }
                     }
                 },
+                "produces": [
+                    "application/json",
+                    "text/csv"
+                ],
                 "tags": [
                     "tracer"
                 ],
@@ -82147,7 +82298,8 @@
                         "SERVICE_UNAVAILABLE",
                         "NETWORK_REQUIRED",
                         "USAGE_LIMIT_REACHED",
-                        "PLAN_FEATURE_MISSING"
+                        "PLAN_FEATURE_MISSING",
+                        "LICENSE_VERSION_UNSUPPORTED"
                     ],
                     "x-nullable": true
                 },
@@ -131479,20 +131631,22 @@
         },
         "Heartbeat": {
             "required": [
-                "instance_id"
+                "instance_id",
+                "timestamp",
+                "nonce",
+                "sequence"
             ],
             "type": "object",
             "properties": {
                 "instance_id": {
                     "title": "Instance id",
                     "type": "string",
-                    "maxLength": 64,
-                    "minLength": 1
+                    "format": "uuid"
                 },
                 "license_id": {
                     "title": "License id",
                     "type": "string",
-                    "maxLength": 64
+                    "pattern": "^lic_[A-Za-z0-9_-]{1,60}$"
                 },
                 "version": {
                     "title": "Version",
@@ -131512,6 +131666,17 @@
                     "title": "Timestamp",
                     "type": "string",
                     "format": "date-time"
+                },
+                "nonce": {
+                    "title": "Nonce",
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]{16,64}$",
+                    "minLength": 1
+                },
+                "sequence": {
+                    "title": "Sequence",
+                    "type": "integer",
+                    "minimum": 0
                 },
                 "usage_data": {
                     "title": "Usage data",

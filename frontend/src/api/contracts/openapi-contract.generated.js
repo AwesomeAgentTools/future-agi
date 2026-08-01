@@ -18325,6 +18325,24 @@ export const OPENAPI_CONTRACT = Object.freeze({
         "runtimeResponseValidation": false,
         "requestBody": null,
         "queryParameters": {
+          "created_at": {
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          "dataset_id": {
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
           "ordering": {
             "required": false,
             "schema": {
@@ -18488,6 +18506,24 @@ export const OPENAPI_CONTRACT = Object.freeze({
         "runtimeResponseValidation": false,
         "requestBody": null,
         "queryParameters": {
+          "created_at": {
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          "dataset_id": {
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
           "search": {
             "required": false,
             "schema": {
@@ -20932,6 +20968,18 @@ export const OPENAPI_CONTRACT = Object.freeze({
         "runtimeResponseValidation": false,
         "requestBody": null,
         "queryParameters": {
+          "optimize_type": {
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
           "search": {
             "required": false,
             "schema": {
@@ -22434,6 +22482,12 @@ export const OPENAPI_CONTRACT = Object.freeze({
         "runtimeResponseValidation": false,
         "requestBody": null,
         "queryParameters": {
+          "name": {
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
           "search": {
             "required": false,
             "schema": {
@@ -22653,6 +22707,24 @@ export const OPENAPI_CONTRACT = Object.freeze({
         "runtimeResponseValidation": false,
         "requestBody": null,
         "queryParameters": {
+          "template_name": {
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          "template_version": {
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          "created_at": {
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
           "search": {
             "required": false,
             "schema": {
@@ -22720,6 +22792,24 @@ export const OPENAPI_CONTRACT = Object.freeze({
         "runtimeResponseValidation": false,
         "requestBody": null,
         "queryParameters": {
+          "template_name": {
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          "template_version": {
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          "created_at": {
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
           "search": {
             "required": false,
             "schema": {
@@ -23339,6 +23429,24 @@ export const OPENAPI_CONTRACT = Object.freeze({
         "runtimeResponseValidation": false,
         "requestBody": null,
         "queryParameters": {
+          "name": {
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          "version": {
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          "created_at": {
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
           "search": {
             "required": false,
             "schema": {
@@ -23552,6 +23660,24 @@ export const OPENAPI_CONTRACT = Object.freeze({
         "runtimeResponseValidation": false,
         "requestBody": null,
         "queryParameters": {
+          "name": {
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          "version": {
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          "created_at": {
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
           "search": {
             "required": false,
             "schema": {
@@ -57559,20 +57685,22 @@ export const OPENAPI_CONTRACT = Object.freeze({
     },
     "Heartbeat": {
       "required": [
-        "instance_id"
+        "instance_id",
+        "timestamp",
+        "nonce",
+        "sequence"
       ],
       "type": "object",
       "properties": {
         "instance_id": {
           "title": "Instance id",
           "type": "string",
-          "maxLength": 64,
-          "minLength": 1
+          "format": "uuid"
         },
         "license_id": {
           "title": "License id",
           "type": "string",
-          "maxLength": 64
+          "pattern": "^lic_[A-Za-z0-9_-]{1,60}$"
         },
         "version": {
           "title": "Version",
@@ -57592,6 +57720,17 @@ export const OPENAPI_CONTRACT = Object.freeze({
           "title": "Timestamp",
           "type": "string",
           "format": "date-time"
+        },
+        "nonce": {
+          "title": "Nonce",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{16,64}$",
+          "minLength": 1
+        },
+        "sequence": {
+          "title": "Sequence",
+          "type": "integer",
+          "minimum": 0
         },
         "usage_data": {
           "title": "Usage data",
@@ -77753,7 +77892,8 @@ export const OPENAPI_CONTRACT = Object.freeze({
             "SERVICE_UNAVAILABLE",
             "NETWORK_REQUIRED",
             "USAGE_LIMIT_REACHED",
-            "PLAN_FEATURE_MISSING"
+            "PLAN_FEATURE_MISSING",
+            "LICENSE_VERSION_UNSUPPORTED"
           ],
           "x-nullable": true
         },
