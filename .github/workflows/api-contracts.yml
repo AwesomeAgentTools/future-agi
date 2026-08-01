@@ -289,6 +289,7 @@ jobs:
           TESTING: "true"
         run: >
           uv run pytest -q --tb=line
+          --ds=tfc.settings.openapi
           tracer/tests/test_filter_contract.py
           tracer/tests/test_filter_api_contract.py
           tracer/tests/test_validate_filters_helper.py
@@ -298,6 +299,7 @@ jobs:
           tfc/tests/test_falcon_api_contract_debt.py
           tfc/tests/test_usage_api_contract_debt.py
           ee/usage/tests/test_events_schema.py
+          ee/cloud/tests/test_billing_api.py
           tfc/tests/test_api_contracts.py
           tfc/tests/test_accounts_api_contract_debt.py
           tfc/tests/test_core_api_contract_debt.py
@@ -316,11 +318,3 @@ jobs:
           simulate/tests/test_simulator_agent_api_contract.py
           simulate/tests/test_test_execution_api_contract.py
           tracer/tests/test_tracer_feed_api_contract.py
-
-      - name: Run cloud API contract tests
-        env:
-          TESTING: "true"
-        run: >
-          uv run pytest -q --tb=line
-          --ds=tfc.settings.openapi
-          ee/cloud/tests/test_billing_api.py
