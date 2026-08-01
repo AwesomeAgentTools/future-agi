@@ -34,7 +34,41 @@ from tracer.types.scan_types import ClusterableIssue, TraceInputData
 
 logger = structlog.get_logger(__name__)
 
-COSINE_THRESHOLD = 0.45  # cosine distance: 0 = identical, 2 = opposite
+# Cosine distance: 0 = identical, 2 = opposite.
+#
+# Tightened from 0.45 alongside PARTITION_BY_CATEGORY below. Those two numbers
+# are coupled: with the category partition ON, 0.45 was an *intra-category*
+# bound and every candidate had already cleared a categorical filter. Dropping
+# the partition removes that filter, so the identical 0.45 admits a strictly
+# larger candidate set — the effective constraint loosened without the constant
+# changing. A per-issue audit of the un-partitioned run put ~15% of merges
+# wrong (34 issues moved, 5-6 badly), all of them marginal pairings like
+# "responded as client rather than analyst" landing in "agent repeated itself",
+# while the merges the fix exists for had near-identical briefs well inside
+# 0.40. Tightening restores roughly the constraint that was there before.
+COSINE_THRESHOLD = 0.40
+
+# Whether centroid matching is confined to the issue's own category.
+#
+# It used to be, unconditionally, which made a whole class of merge impossible
+# rather than merely unlikely: the scanner picks the category, and one bug
+# described two ways lands in two categories. On the post-fix-5 corpus this is
+# visible directly — the SAME defect sits in two clusters purely because the
+# categories differ:
+#
+#   S-232AA3EB  Context Handling Failures     15  "Queried past month instead of
+#                                                  requested quarterly performance"
+#   S-15263D7F  Poor Information Retrieval     5  "Fetched 1-month performance data
+#                                                  instead of requested quarterly numbers"
+#
+# and likewise the hallucinated-holding bug across Poor Information Retrieval and
+# Tool Output Misinterpretation. No embedding could ever merge those.
+#
+# An earlier attempt at this was measured on the pre-fix-5 corpus and showed no
+# benefit — but that corpus was ~78% fabricated briefs, so the ground truth it
+# was scored against was noise. Kept as a switch so it can be reverted without a
+# code change if cross-category merging proves too loose.
+PARTITION_BY_CATEGORY = False
 
 
 def _severity_to_impact(severity: str | None) -> str:
@@ -137,6 +171,7 @@ def find_nearest_centroid(
     try:
         ensure_centroid_table(db)
         vector_str = "[" + ",".join(map(str, embedding)) + "]"
+        family_clause = "AND family = %(family)s" if PARTITION_BY_CATEGORY else ""
         # ``cluster_centroids`` is a ReplacingMergeTree and assign_to_cluster
         # INSERTs a new row per member rather than updating, so every historical
         # version of a centroid coexists until a background merge collapses them.
@@ -159,7 +194,7 @@ def find_nearest_centroid(
                 SELECT cluster_id, centroid
                 FROM {CENTROIDS_TABLE}
                 WHERE project_id = %(project_id)s
-                AND family = %(family)s
+                {family_clause}
                 ORDER BY last_updated DESC, member_count DESC
                 LIMIT 1 BY cluster_id
             )
@@ -264,6 +299,11 @@ def create_cluster(
                 first_seen=timezone.now(),
                 last_seen=timezone.now(),
             )
+            # Fix 7: a brand-new cluster has one trace and therefore no trend.
+            # It becomes ESCALATING only once _ESCALATING_MIN_TRACES is reached.
+            if cluster.status != FeedIssueStatus.FOR_REVIEW:
+                cluster.status = FeedIssueStatus.FOR_REVIEW
+                cluster.save(update_fields=["status", "updated_at"])
     except IntegrityError:
         # A concurrent run created this cluster between the lookup above and
         # this insert (unique_project_cluster_if_not_deleted). Without this the
@@ -342,6 +382,165 @@ def delete_centroid(cluster_id: str, project_id: str) -> None:
         db.close()
 
 
+# Cluster sizes at which the title is recomputed from members. A cluster's title
+# is otherwise whichever brief happened to arrive FIRST, which has no claim to
+# being representative — a 15-trace cluster ends up named after one accidental
+# member, which is the "the heading doesn't describe what's inside" complaint.
+# Recomputing on every assignment would re-embed the whole cluster each time, so
+# it happens at a handful of growth points instead.
+_RETITLE_AT = (2, 5, 10, 25, 50, 100, 250)
+
+
+def _cosine_distance(a: List[float], b: List[float]) -> float:
+    """1 - cosine similarity. Mirrors ClickHouse's cosineDistance."""
+    dot = sum(x * y for x, y in zip(a, b))
+    na = sum(x * x for x in a) ** 0.5
+    nb = sum(y * y for y in b) ** 0.5
+    if not na or not nb:
+        return 1.0
+    return 1.0 - dot / (na * nb)
+
+
+def _retitle_from_members(cluster, centroid: List[float]) -> None:
+    """Rename a cluster after its MEDOID — the member nearest the centroid.
+
+    First-arrival titling has no relationship to what a cluster contains; the
+    medoid is the most typical member by construction, so the title describes the
+    group rather than an accident of ordering. Best-effort: any failure leaves
+    the existing title alone, since a stale title beats a broken assignment.
+    """
+    briefs = list(
+        TraceScanIssue.objects.filter(cluster=cluster)
+        .exclude(brief="")
+        .values_list("brief", flat=True)
+    )
+    if len(briefs) < 2:
+        return
+    try:
+        vectors = embed_texts(briefs)
+    except Exception:
+        logger.warning("retitle_embed_failed", cluster_id=cluster.cluster_id)
+        return
+
+    best_brief, best_distance = None, None
+    for brief, vector in zip(briefs, vectors):
+        distance = _cosine_distance(vector, centroid)
+        if best_distance is None or distance < best_distance:
+            best_brief, best_distance = brief, distance
+
+    # The medoid is the most TYPICAL member, which is not the same as a good
+    # group title: when every member names its own ticker, the most central one
+    # names a ticker too. Measured on 30 real clusters, medoid titling changed 18
+    # of them but several swapped one entity for another rather than generalising
+    # ("Coca-Cola" -> "MSFT"). A generated title is asked to describe what the
+    # members SHARE with no entity at all; it falls back to the medoid whenever
+    # it is unavailable, declines, or still leaks an entity.
+    from tracer.ee_boundary import generate_scan_cluster_title
+
+    generated = generate_scan_cluster_title(briefs)
+    if generated:
+        best_brief = generated
+
+    if best_brief and best_brief != cluster.title:
+        previous = cluster.title
+        cluster.title = best_brief
+        cluster.save(update_fields=["title", "updated_at"])
+        logger.info(
+            "cluster_retitled_to_medoid",
+            cluster_id=cluster.cluster_id,
+            members=len(briefs),
+            distance=round(best_distance, 4),
+            previous_title=(previous or "")[:80],
+            new_title=best_brief[:80],
+        )
+
+
+def _volume_floor(traces: int) -> str:
+    """The severity a cluster earns from breadth alone."""
+    if traces >= 25:
+        return "high"
+    if traces >= 5:
+        return "medium"
+    return "low"
+
+
+def _refresh_severity(cluster) -> None:
+    """Fix 6 — re-derive severity from the cluster, not from its seed issue.
+
+    Severity used to be one cheap-LLM call on whichever issue happened to create
+    the cluster, frozen forever: a 126-trace cluster kept the grade its single
+    seed trace drew, and 72% of production clusters ended up high/critical.
+
+    Two changes. The classifier now reads the cluster's CURRENT title, which by
+    this point describes the group rather than one arbitrary member. And volume
+    is applied as a floor afterwards: a defect reproducing across many traces is
+    at least a medium regardless of how the text reads, because breadth is
+    evidence the text alone cannot carry.
+    """
+    from tracer.queries.feed import severity_to_priority
+
+    severity = _seed_severity(cluster.issue_category or "", cluster.title or "")
+    if severity is None:
+        return
+
+    order = ["low", "medium", "high", "critical"]
+    traces = cluster.unique_traces or 0
+    floor = _volume_floor(traces)
+    if order.index(floor) > order.index(severity):
+        severity = floor
+
+    impact, priority = _severity_to_impact(severity), severity_to_priority(severity)
+    if (cluster.combined_impact, cluster.priority) == (impact, priority):
+        return
+    previous = cluster.priority
+    cluster.combined_impact, cluster.priority = impact, priority
+    cluster.save(update_fields=["combined_impact", "priority", "updated_at"])
+    logger.info(
+        "cluster_severity_refreshed",
+        cluster_id=cluster.cluster_id,
+        traces=traces,
+        previous=previous,
+        new=priority,
+    )
+
+
+# Below this many distinct traces a cluster has no trend to speak of, so calling
+# it "escalating" is a decoration rather than a claim. 234 of 235 production
+# clusters carried that status, including 138 singletons seen exactly once.
+_ESCALATING_MIN_TRACES = 5
+
+
+def _refresh_status(cluster) -> None:
+    """Fix 7 — only claim "escalating" when there is evidence for it.
+
+    Status was hardcoded to ESCALATING at creation and never recomputed; nothing
+    in tracer/ transitioned it automatically. This does not invent a trend model
+    — it applies the floor that makes the existing label honest, and leaves any
+    status a human has since set (acknowledged/resolved) alone.
+    """
+    if cluster.status in (FeedIssueStatus.ACKNOWLEDGED, FeedIssueStatus.RESOLVED):
+        return  # a person has triaged this; never overwrite that
+
+    traces = cluster.unique_traces or 0
+    target = (
+        FeedIssueStatus.ESCALATING
+        if traces >= _ESCALATING_MIN_TRACES
+        else FeedIssueStatus.FOR_REVIEW
+    )
+    if cluster.status == target:
+        return
+    previous = cluster.status
+    cluster.status = target
+    cluster.save(update_fields=["status", "updated_at"])
+    logger.info(
+        "cluster_status_refreshed",
+        cluster_id=cluster.cluster_id,
+        traces=traces,
+        previous=previous,
+        new=target,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Cluster assignment
 # ---------------------------------------------------------------------------
@@ -418,6 +617,39 @@ def assign_to_cluster(
         )
     finally:
         db.close()
+
+    # Re-title from the members at growth points, so a cluster stops being named
+    # after whichever brief arrived first. Never allowed to break the assignment.
+    if unique in _RETITLE_AT:
+        try:
+            previous_title = cluster.title
+            _retitle_from_members(cluster, new_centroid)
+            # Severity reads the refreshed title, so it must run after it —
+            # but ONLY when one of its two inputs actually moved.
+            #
+            # The grader is not reproducible: re-running the same corpus flipped
+            # 6 of 91 grades, and 4 of those had byte-identical titles. That is
+            # the serving layer, not sampling — temperature is already 0.0 and
+            # neither Bedrock nor Vertex honours a seed. Re-asking an unchanged
+            # question therefore does not refine the answer, it re-rolls it, and
+            # the feed churns for free. Asking only when the question changed
+            # removes the churn (and the wasted call) without pretending the
+            # model is deterministic.
+            if cluster.title != previous_title or _volume_floor(
+                unique
+            ) != _volume_floor(unique - 1):
+                _refresh_severity(cluster)
+        except Exception:
+            logger.warning(
+                "cluster_retitle_failed", cluster_id=cluster_id, exc_info=True
+            )
+
+    # Status depends only on trace count, so it is checked on every assignment —
+    # a cluster crossing the threshold should stop saying "for review" promptly.
+    try:
+        _refresh_status(cluster)
+    except Exception:
+        logger.warning("cluster_status_failed", cluster_id=cluster_id, exc_info=True)
 
     logger.info(
         "issue_assigned_to_cluster",
