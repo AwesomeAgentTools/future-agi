@@ -564,6 +564,83 @@ def build_flow_outline(trace_data):
     return " > ".join(parts)
 
 
+def _plain(text, max_len):
+    """Whitespace-normalised truncation. Unlike kevinify, grammar is preserved.
+
+    Used for the fields the model reasons over directly — a stripped negation
+    ("didn't get X" -> "n't get X") inverts the meaning of the very sentence
+    being judged.
+    """
+    if not text:
+        return ""
+    text = re.sub(r"\s+", " ", str(text)).strip()
+    return text if len(text) <= max_len else text[: max_len - 1] + "…"
+
+
+_MSG_RE = re.compile(
+    r"^(?:gen_ai\.(input|output)\.messages\.(\d+)\.message"
+    r"|llm\.(input|output)_messages\.(\d+)\.message)\.(role|content)$"
+)
+
+
+def extract_turn(all_flat):
+    """Pull THIS turn's user request and agent response out of a trace.
+
+    One trace is one user turn, so the pair on trial is unambiguous even though
+    the SDK's role tags are unreliable (it re-serialises conversation history as
+    ``user``, so the agent's own prior replies arrive mislabelled):
+
+      * agent response  = the output message — tagged ``assistant`` because it
+        is the message being generated, which is the one case the SDK gets right
+      * user request    = the last ``user``-tagged message BEFORE the trailing
+        assistant/tool block
+
+    Alternation was considered and rejected: it breaks on consecutive same-role
+    messages, and these traces contain them (interleaved tool results, users
+    sending two messages in a row).
+
+    Returns ``(history, request, response)``; empty strings when the span data
+    carries no per-message attributes, so callers fall back to old behaviour.
+    """
+    richest, best = {}, -1
+    for span, _depth in all_flat:
+        msgs = {}
+        for key, val in (span.get("span_attributes") or {}).items():
+            m = _MSG_RE.match(key)
+            if not m:
+                continue
+            io = m.group(1) or m.group(3)
+            idx = int(m.group(2) or m.group(4))
+            msgs.setdefault((io, idx), {})[m.group(5)] = val
+        n_in = sum(1 for io, _ in msgs if io == "input")
+        if n_in > best:
+            best, richest = n_in, msgs
+    if not richest:
+        return [], "", ""
+
+    inputs = sorted((i, d) for (io, i), d in richest.items() if io == "input")
+    outputs = sorted((i, d) for (io, i), d in richest.items() if io == "output")
+
+    request, req_idx = "", None
+    for idx, data in reversed(inputs):
+        role = str(data.get("role", "")).lower()
+        if role in ("tool", "assistant"):
+            continue  # trailing tool-call block for THIS turn
+        if role == "system":
+            break
+        request, req_idx = str(data.get("content", "")).strip(), idx
+        break
+
+    history = [
+        str(d.get("content", "")).strip()
+        for i, d in inputs
+        if i < (req_idx if req_idx is not None else 0)
+        and str(d.get("role", "")).lower() != "system"
+    ]
+    response = str(outputs[0][1].get("content", "")).strip() if outputs else ""
+    return history, request, response
+
+
 def compress_v2(trace_data, prefilter_result):
     """
     Smart compression — kevinify all spans with adaptive token budget.
@@ -587,6 +664,18 @@ def compress_v2(trace_data, prefilter_result):
                 break
         if not final_output:
             final_output = root_attrs.get("output.value", "")
+
+    # THIS turn's request/response. root_input is the whole serialized message
+    # list for multi-turn agents, so feeding it to `task` told the model that
+    # every question in the conversation was "the request" — and the prompt asks
+    # it to compare task against result. That mismatch is what produced briefs
+    # like "answered X instead of Y" for traces where each turn was answered
+    # correctly, just in different turns. Prefer the real pair when available.
+    prior_turns, turn_request, turn_response = extract_turn(all_flat)
+    if turn_request:
+        root_input = turn_request
+    if turn_response:
+        final_output = turn_response
 
     # Adaptive budget: ~3000 chars total, distributed by importance
     TOTAL_IO_BUDGET = 3000
@@ -659,14 +748,30 @@ def compress_v2(trace_data, prefilter_result):
     trace_label = trace_data.get("_short_label", trace_data["trace_id"])
     flow_outline = build_flow_outline(trace_data)
 
+    # task/result are the pair the model is asked to compare, so they are NOT
+    # kevinified. Stopword stripping mangles exactly the words that decide the
+    # verdict — "didn't get the benchmark" becomes "n't get benchmark", and a
+    # destroyed negation flips the meaning of the sentence being judged. Plain
+    # truncation keeps the grammar; the budget is spent where it matters.
+    task_text = turn_request or root_input
+    result_text = turn_response or final_output
     result = {
         "tid": trace_label,
-        "task": kevinify(root_input, 300),
-        "result": kevinify(final_output, 300),
+        "task": _plain(task_text, 600),
+        "result": _plain(result_text, 600),
         "flow": flow_outline,
         "signals": prefilter_result["signal_summary"],
         "spans": spans,
     }
+    # Earlier turns, clearly separated from the turn being judged. Supplied so
+    # genuine cross-turn failures (hallucinated context, ignoring a name given
+    # earlier) stay detectable, WITHOUT letting an earlier turn's question be
+    # mistaken for this turn's request.
+    # Prior turns are also left un-kevinified: the model needs them to work out
+    # what the user is actually asking for when THIS turn is only a clarification
+    # ("Ravi Krishnan", "yes please"), and stripped grammar makes that unreadable.
+    if prior_turns:
+        result["prior_turns"] = [_plain(t, 300) for t in prior_turns[-6:]]
 
     available_tools = prefilter_result.get("available_tools", [])
     if available_tools:

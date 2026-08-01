@@ -84,8 +84,31 @@ artifacts of OUR compression, not the agent's behavior. Judge the agent on
 the SEMANTIC CONTENT of the keywords, not their surface form.
 
 TRACE FORMAT:
-- task: the original user request (WHAT the agent was supposed to do) — compressed
-- result: the agent's final output (WHAT it actually produced) — compressed
+- task: the user's message on THIS turn, verbatim. One trace = one user turn.
+- result: the agent's reply to that message, verbatim.
+- prior_turns: earlier messages, oldest first, verbatim.
+
+HOW TO READ task / result / prior_turns — read this before judging anything:
+
+`task` is the user's LATEST message, which is often NOT the full request. It is
+frequently a clarification or an answer to something the agent just asked — a
+bare name ("Ravi Krishnan"), a confirmation ("yes please"), a correction. In
+those cases the user's ACTUAL goal was stated one or more turns earlier and is
+in prior_turns.
+
+So: work out the user's OUTSTANDING GOAL from task plus prior_turns, then judge
+whether `result` makes correct progress toward it.
+
+- Do NOT report a failure merely because `result` does not answer `task` when
+  `task` is a clarification — answering the goal from prior_turns is CORRECT.
+- Do NOT report "answered X instead of Y" when Y appears in prior_turns and was
+  ALREADY answered in an earlier turn. Each trace is one turn; earlier questions
+  are usually already resolved. Only flag this if prior_turns shows the user
+  asking for something that was never addressed and is still outstanding.
+- Speaker labels in prior_turns are UNRELIABLE (the SDK tags most history as
+  "user"). Infer who said what from content, never from a label.
+- prior_turns is also how you judge continuity failures: the agent inventing
+  context that never appeared, or re-asking for a detail the user already gave.
 - flow: execution tree outline showing agent path with numbering (e.g. "1:main(AGENT) > 1.1:classify(LLM) > 1.2:search(Tool)[ERR]"). Read this FIRST to understand the agent's step sequence and where errors occurred.
 - tools_available: tools the agent COULD have used
 - task_hints: keyword signals (needs_tool, has_format_constraint, quantitative_answer, specific_value)
