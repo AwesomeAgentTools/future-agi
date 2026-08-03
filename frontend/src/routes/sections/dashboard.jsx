@@ -13,6 +13,7 @@ import WorkspaceRoleProtection from "../components/workspace-role-protection";
 import { GatewayProvider } from "src/sections/gateway/context/GatewayContext";
 import GatewayGuard from "src/sections/gateway/components/GatewayGuard";
 import lazyWithRetry from "src/utils/lazyWithRetry";
+import CapabilityGate from "src/components/capability-gate";
 // Lazy load all route components (with retry for chunk errors after deploys)
 const DevKeysPage = lazyWithRetry(
   () => import("src/pages/dashboard/keys/dev-keys"),
@@ -1273,11 +1274,19 @@ export const dashboardRoutes = (
       children: [
         {
           index: true,
-          element: <ErrorFeed />,
+          element: (
+            <CapabilityGate feature="error_feed">
+              <ErrorFeed />
+            </CapabilityGate>
+          ),
         },
         {
           path: ":id",
-          element: <ErrorFeedDetail />,
+          element: (
+            <CapabilityGate feature="error_feed">
+              <ErrorFeedDetail />
+            </CapabilityGate>
+          ),
         },
       ],
     },
