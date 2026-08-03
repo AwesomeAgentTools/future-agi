@@ -17,11 +17,6 @@ try:
 except ImportError:  # pragma: no cover - OSS / no-ee checkout
     _detect_mode = None
 
-requires_ee = pytest.mark.skipif(
-    _detect_mode is None,
-    reason="ee.usage.deployment not installed",
-)
-
 
 class PublicConfigEndpointTest(TestCase):
     def setUp(self):
@@ -42,7 +37,7 @@ class PublicConfigEndpointTest(TestCase):
         self.assertIsNone(result["region"])
         self.assertEqual(result["available_regions"], [])
 
-    @requires_ee
+    @pytest.mark.requires_ee
     @patch("ee.usage.deployment._validate_cloud_secret", return_value=True)
     @override_settings(
         CLOUD_DEPLOYMENT="US",
@@ -80,7 +75,7 @@ class PublicConfigEndpointTest(TestCase):
         result = response.json()["result"]
         self.assertFalse(result["cloud"])
 
-    @requires_ee
+    @pytest.mark.requires_ee
     @patch("ee.usage.deployment._validate_cloud_secret", return_value=True)
     @override_settings(CLOUD_DEPLOYMENT="DEV", REGION="dev", AVAILABLE_REGIONS="")
     def test_cloud_no_regions(self, _mock_secret):
@@ -93,7 +88,7 @@ class PublicConfigEndpointTest(TestCase):
         self.assertEqual(result["region"], "dev")
         self.assertEqual(result["available_regions"], [])
 
-    @requires_ee
+    @pytest.mark.requires_ee
     @patch("ee.usage.deployment._validate_cloud_secret", return_value=True)
     @override_settings(
         CLOUD_DEPLOYMENT="US",
@@ -120,7 +115,7 @@ class PublicConfigEndpointTest(TestCase):
         self.assertFalse(result["cloud"])
         self.assertIsNone(result["region"])
 
-    @requires_ee
+    @pytest.mark.requires_ee
     @patch("ee.usage.deployment._validate_cloud_secret", return_value=True)
     @override_settings(
         CLOUD_DEPLOYMENT="EU",

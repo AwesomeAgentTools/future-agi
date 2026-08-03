@@ -220,7 +220,7 @@ class TestLoginWith2FA:
         challenge_token = login_resp.json()["challenge_token"]
         verify_resp = client.post(
             "/accounts/2fa/verify/recovery/",
-            {"challenge_token": challenge_token, "code": "NOTAREALCODE"},
+            {"challenge_token": challenge_token, "code": "WRONGCODE1"},
             format="json",
         )
         assert verify_resp.status_code == 400
