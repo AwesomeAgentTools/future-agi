@@ -6705,6 +6705,240 @@ class TestLoadBalancedAssignment:
         assert item.assigned_to_id is None
 
 
+def _queries_by_table(ctx):
+    """{(verb, table): count} for a CaptureQueriesContext."""
+    import re
+
+    counts = {}
+    for q in ctx.captured_queries:
+        sql = re.sub(r"\s+", " ", q["sql"]).strip()
+        m = re.search(r'FROM "([a-z_]+)"|INTO "([a-z_]+)"|UPDATE "([a-z_]+)"', sql)
+        table = next((g for g in (m.groups() if m else []) if g), "?")
+        verb = sql.split()[0]
+        counts[(verb, table)] = counts.get((verb, table), 0) + 1
+    return counts
+
+
+@pytest.mark.django_db
+class TestAssignItemsQueryCount:
+    """TH-7211: assign was ~2 queries per item — 1,018 at batch 500.
+
+    The legacy ``assigned_to`` FK was resolved with a SELECT plus an UPDATE per
+    item. Everything else on this endpoint was already batched, so the test
+    pins the shape (flat total, one SELECT for the batch) rather than a
+    magic number.
+    """
+
+    def _add_items(self, auth_client, queue_id, ds, n, order_base):
+        rows = [Row.objects.create(dataset=ds, order=order_base + i) for i in range(n)]
+        auth_client.post(
+            add_items_url(queue_id),
+            {
+                "items": [
+                    {"source_type": "dataset_row", "source_id": str(r.id)} for r in rows
+                ]
+            },
+            format="json",
+        )
+        ids = list(
+            QueueItem.objects.filter(
+                queue_id=queue_id, dataset_row__in=rows, deleted=False
+            ).values_list("id", flat=True)
+        )
+        assert len(ids) == n
+        return ids
+
+    def _assign(self, auth_client, queue_id, item_ids, user_ids):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        with CaptureQueriesContext(connection) as ctx:
+            resp = auth_client.post(
+                assign_url(queue_id),
+                {
+                    "item_ids": [str(i) for i in item_ids],
+                    "user_ids": [str(u) for u in user_ids],
+                    "action": "add",
+                },
+                format="json",
+            )
+        assert resp.status_code == status.HTTP_200_OK, resp.data
+        assert _result(resp)["assigned"] == len(item_ids) * len(user_ids), _result(resp)
+        return ctx
+
+    def test_query_count_does_not_grow_with_batch_size(
+        self, auth_client, queue_with_items, dataset_rows, second_user, user
+    ):
+        queue_id, _, _ = queue_with_items
+        ds, _ = dataset_rows
+        AnnotationQueueAnnotator.objects.update_or_create(
+            queue_id=queue_id,
+            user=second_user,
+            defaults={
+                "role": AnnotatorRole.ANNOTATOR.value,
+                "roles": [AnnotatorRole.ANNOTATOR.value],
+            },
+        )
+        # ONE user, deliberately. The endpoint emits one UPDATE per distinct
+        # winning assignee, and with two users each item's winner is min(pk)
+        # over uuid4 keys — a coin flip. A 20-item batch then almost always
+        # spans both assignees (2 UPDATEs) while a 2-item batch collapses to one
+        # about half the time, so comparing totals across batch sizes fails
+        # ~50% of runs on correct code. With a single assignee the UPDATE count
+        # is deterministically 1 and the comparison measures only per-item
+        # growth, which is what it is for. Grouping across several assignees is
+        # asserted separately below.
+        user_ids = [user.id]
+
+        small = self._add_items(auth_client, queue_id, ds, 2, 600)
+        large = self._add_items(auth_client, queue_id, ds, 20, 700)
+
+        small_ctx = self._assign(auth_client, queue_id, small, user_ids)
+        large_ctx = self._assign(auth_client, queue_id, large, user_ids)
+
+        n_small = len(small_ctx.captured_queries)
+        n_large = len(large_ctx.captured_queries)
+        assert n_small == n_large, (
+            f"assign ran {n_small} queries for 2 items and {n_large} for 20 — "
+            f"{(n_large - n_small) / 18:.2f} per item. Something on this path is "
+            "querying per row again (TH-7211)."
+        )
+
+        counts = _queries_by_table(large_ctx)
+        # The legacy-FK resolve: one read for the whole batch...
+        assert counts.get(("SELECT", "model_hub_queueitemassignment"), 0) <= 2, (
+            "the assigned_to resolve is reading assignments per item again"
+        )
+        assert counts.get(("UPDATE", "model_hub_queueitem"), 0) == 1, (
+            "assigned_to is not being written in a single grouped UPDATE"
+        )
+
+    def test_updates_are_grouped_by_assignee_not_per_item(
+        self, auth_client, queue_with_items, dataset_rows, second_user, user
+    ):
+        """With several winning assignees the writes group by assignee.
+
+        Split out of the flatness test because the number of distinct winners is
+        random (min(pk) over uuid4 keys), which makes it unusable in a
+        cross-batch total comparison but fine as a bound.
+        """
+        queue_id, _, _ = queue_with_items
+        ds, _ = dataset_rows
+        AnnotationQueueAnnotator.objects.update_or_create(
+            queue_id=queue_id,
+            user=second_user,
+            defaults={
+                "role": AnnotatorRole.ANNOTATOR.value,
+                "roles": [AnnotatorRole.ANNOTATOR.value],
+            },
+        )
+        item_ids = self._add_items(auth_client, queue_id, ds, 20, 950)
+        ctx = self._assign(auth_client, queue_id, item_ids, [user.id, second_user.id])
+
+        n_updates = _queries_by_table(ctx).get(("UPDATE", "model_hub_queueitem"), 0)
+        distinct_assignees = len(
+            set(
+                QueueItem.objects.filter(pk__in=item_ids).values_list(
+                    "assigned_to_id", flat=True
+                )
+            )
+        )
+        assert 1 <= n_updates <= distinct_assignees, (
+            f"{n_updates} UPDATEs for 20 items resolving to {distinct_assignees} "
+            "distinct assignees — assigned_to is being written per item instead "
+            "of grouped by assignee"
+        )
+
+    def test_assigned_to_is_the_lowest_pk_assignment_not_scan_order(
+        self, auth_client, queue_with_items, dataset_rows, second_user, third_user, user
+    ):
+        """The per-item ``.first()`` this replaced ran on an unordered queryset,
+        and ``QuerySet.first()`` falls back to ``order_by("pk")`` there — so the
+        old code deterministically picked the lowest-pk assignment. Reading the
+        batch unordered would follow scan order instead, which is stable in a
+        clean fixture and not in general. Seeds a foreign assignee first so the
+        winner is decided by pk, not by insertion order or the request's
+        ``user_ids``."""
+        queue_id, _, _ = queue_with_items
+        ds, _ = dataset_rows
+        for annotator in (second_user, third_user):
+            AnnotationQueueAnnotator.objects.update_or_create(
+                queue_id=queue_id,
+                user=annotator,
+                defaults={
+                    "role": AnnotatorRole.ANNOTATOR.value,
+                    "roles": [AnnotatorRole.ANNOTATOR.value],
+                },
+            )
+        item_ids = self._add_items(auth_client, queue_id, ds, 4, 900)
+
+        # A live assignment from a user this request will never name.
+        for item_id in item_ids:
+            QueueItemAssignment.objects.create(queue_item_id=item_id, user=third_user)
+
+        self._assign(auth_client, queue_id, item_ids, [user.id, second_user.id])
+
+        for item_id in item_ids:
+            expected = (
+                QueueItemAssignment.objects.filter(queue_item_id=item_id, deleted=False)
+                .order_by("pk")
+                .values_list("user_id", flat=True)
+                .first()
+            )
+            actual = QueueItem.objects.get(pk=item_id).assigned_to_id
+            assert actual == expected, (
+                f"assigned_to={actual} but the lowest-pk live assignment is "
+                f"{expected} — the batched resolve is following scan order"
+            )
+
+    def test_assigned_to_still_mirrors_an_active_assignment(
+        self, auth_client, queue_with_items, dataset_rows, second_user, user
+    ):
+        """The batched resolve must pick the same kind of value the per-item
+        query did: some user who actually holds a live assignment, and NULL
+        once every assignment is gone."""
+        queue_id, _, _ = queue_with_items
+        ds, _ = dataset_rows
+        AnnotationQueueAnnotator.objects.update_or_create(
+            queue_id=queue_id,
+            user=second_user,
+            defaults={
+                "role": AnnotatorRole.ANNOTATOR.value,
+                "roles": [AnnotatorRole.ANNOTATOR.value],
+            },
+        )
+        item_ids = self._add_items(auth_client, queue_id, ds, 4, 800)
+        self._assign(auth_client, queue_id, item_ids, [user.id, second_user.id])
+
+        for item_id in item_ids:
+            item = QueueItem.objects.get(pk=item_id)
+            live = set(
+                QueueItemAssignment.objects.filter(
+                    queue_item_id=item_id, deleted=False
+                ).values_list("user_id", flat=True)
+            )
+            assert live == {user.id, second_user.id}
+            assert item.assigned_to_id in live, (
+                f"assigned_to={item.assigned_to_id} is not one of this item's "
+                f"live assignments {live}"
+            )
+
+        # Removing every assignment must clear the FK, not leave it pointing at
+        # a soft-deleted row.
+        resp = auth_client.post(
+            assign_url(queue_id),
+            {
+                "item_ids": [str(i) for i in item_ids],
+                "user_ids": [str(user.id), str(second_user.id)],
+                "action": "remove",
+            },
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_200_OK, resp.data
+        for item_id in item_ids:
+            assert QueueItem.objects.get(pk=item_id).assigned_to_id is None
+
+
 @pytest.mark.django_db
 class TestBulkReviewQueryCount:
     """TH-7211: bulk-review must not query per item — it was ~12/item, 5,512 at
@@ -6715,18 +6949,6 @@ class TestBulkReviewQueryCount:
         "model_hub_annotationqueuelabel": "the queue's label set (identical for every item)",
         "model_hub_score": "the submitted-annotation and own-annotation checks",
     }
-
-    def _queries_by_table(self, ctx):
-        import re
-
-        counts = {}
-        for q in ctx.captured_queries:
-            sql = re.sub(r"\s+", " ", q["sql"]).strip()
-            m = re.search(r'FROM "([a-z_]+)"|INTO "([a-z_]+)"|UPDATE "([a-z_]+)"', sql)
-            table = next((g for g in (m.groups() if m else []) if g), "?")
-            verb = sql.split()[0]
-            counts[(verb, table)] = counts.get((verb, table), 0) + 1
-        return counts
 
     def test_validation_and_persistence_are_batched(
         self,
@@ -6779,7 +7001,7 @@ class TestBulkReviewQueryCount:
         assert resp.status_code == status.HTTP_200_OK, resp.data
         assert _result(resp)["reviewed"] == 10, _result(resp)
 
-        counts = self._queries_by_table(ctx)
+        counts = _queries_by_table(ctx)
         for table, what in self.BATCHED_ONCE.items():
             n = counts.get(("SELECT", table), 0)
             assert n == 1, (
