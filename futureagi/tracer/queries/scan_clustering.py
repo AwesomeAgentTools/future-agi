@@ -872,3 +872,129 @@ def get_cluster_trace_embeddings(
         return None
     finally:
         db.close()
+
+
+# ---------------------------------------------------------------------------
+# Duplicate-cluster merge pass
+# ---------------------------------------------------------------------------
+# assign_to_cluster is online and incremental: an issue joins the nearest centroid
+# or seeds a new cluster, and there is NO merge step. Two consequences, both measured
+# on 261 real production issue briefs replayed through the real assignment loop:
+#
+#   * ORDER DEPENDENCE — the same issues in a different arrival order produce a
+#     different clustering (pairwise ARI 0.796 across 20 orderings, min 0.673). About
+#     a fifth of the grouping a user sees is decided by arrival order, not content.
+#   * DUPLICATES THAT CAN NEVER HEAL — 7 groups were split across 14 clusters, i.e.
+#     14% of the feed, with pairs as obviously identical as "Repeated same call log
+#     chain 12 times in redundant retries" and "Retried identical chain execution 11
+#     times producing empty outputs" shown as two separate entries.
+#
+# A full re-cluster would fix both but reassigns every issue and churns every cluster
+# id under live users. This is the smaller change that targets the measured defect:
+# a periodic pass that merges clusters whose CENTROIDS are already within threshold.
+# It needs no re-embedding (centroids are in ClickHouse), touches only genuine
+# duplicates, and moves the grouping toward the order-invariant answer over time.
+
+
+def _merge_cluster_pair(keep_id: str, absorb_id: str, project_id: str) -> None:
+    """Fold ``absorb`` into ``keep``: issues, junction rows, counts, centroid."""
+    keep = TraceErrorGroup.objects.get(cluster_id=keep_id, project_id=project_id)
+    absorb = TraceErrorGroup.objects.get(cluster_id=absorb_id, project_id=project_id)
+
+    TraceScanIssue.objects.filter(cluster=absorb).update(cluster=keep)
+
+    # The junction is unique per (cluster, trace); a trace present in both clusters
+    # would violate that on a blind update, so re-point only the rows keep lacks.
+    existing = set(
+        ErrorClusterTraces.objects.filter(cluster=keep).values_list("trace_id", flat=True)
+    )
+    for row in ErrorClusterTraces.objects.filter(cluster=absorb):
+        if row.trace_id in existing:
+            row.delete()
+        else:
+            row.cluster = keep
+            row.save(update_fields=["cluster"])
+
+    keep.error_count = (keep.error_count or 0) + (absorb.error_count or 0)
+    keep.total_events = (keep.total_events or 0) + (absorb.total_events or 0)
+    if absorb.first_seen and (not keep.first_seen or absorb.first_seen < keep.first_seen):
+        keep.first_seen = absorb.first_seen
+    if absorb.last_seen and (not keep.last_seen or absorb.last_seen > keep.last_seen):
+        keep.last_seen = absorb.last_seen
+    keep.unique_traces = keep.clusters.values("trace").distinct().count()
+    keep.save(update_fields=["error_count", "total_events", "first_seen", "last_seen",
+                             "unique_traces", "updated_at"])
+
+    absorb.delete()
+    delete_centroid(absorb_id, project_id)
+
+
+def merge_duplicate_clusters(
+    project_id: str, threshold: float = COSINE_THRESHOLD, max_merges: int = 50
+) -> int:
+    """Merge clusters whose centroids sit within ``threshold`` cosine distance.
+
+    Greedy closest-pair-first, so the tightest duplicates collapse before looser ones
+    and a chain of near-identical clusters converges on one survivor. The larger
+    cluster always absorbs the smaller, which keeps the surviving id the one users
+    have already seen in the feed. Returns the number of merges performed.
+
+    ``max_merges`` bounds a single pass: this runs periodically, so it is better to
+    make steady progress than to hold a long transaction over a pathological project.
+    """
+    db = ClickHouseVectorDB()
+    try:
+        ensure_centroid_table(db)
+        rows = db.client.execute(
+            f"""
+            SELECT cluster_id, argMax(centroid, last_updated), argMax(member_count, last_updated)
+            FROM {CENTROIDS_TABLE}
+            WHERE project_id = %(project_id)s
+            GROUP BY cluster_id
+            """,
+            {"project_id": str(project_id)},
+        )
+    finally:
+        db.close()
+    if len(rows) < 2:
+        return 0
+
+    live = set(
+        TraceErrorGroup.objects.filter(project_id=project_id).values_list(
+            "cluster_id", flat=True
+        )
+    )
+    items = [(str(cid), vec, cnt) for cid, vec, cnt in rows if str(cid) in live and vec]
+    if len(items) < 2:
+        return 0
+
+    pairs = []
+    for i in range(len(items)):
+        for j in range(i + 1, len(items)):
+            d = _cosine_distance(items[i][1], items[j][1])
+            if d <= threshold:
+                pairs.append((d, i, j))
+    pairs.sort()
+
+    gone: set[str] = set()
+    merged = 0
+    for _d, i, j in pairs:
+        if merged >= max_merges:
+            break
+        a, b = items[i], items[j]
+        if a[0] in gone or b[0] in gone:
+            continue
+        keep, absorb = (a, b) if (a[2] or 0) >= (b[2] or 0) else (b, a)
+        try:
+            _merge_cluster_pair(keep[0], absorb[0], project_id)
+        except TraceErrorGroup.DoesNotExist:
+            continue
+        gone.add(absorb[0])
+        merged += 1
+
+    if merged:
+        logger.info(
+            "scan_clusters_merged", project_id=str(project_id), merged=merged,
+            clusters_before=len(items),
+        )
+    return merged
