@@ -621,6 +621,13 @@ BUSINESS_YEARLY_STRIPE_PRICE_ID = os.getenv("BUSINESS_YEARLY_STRIPE_PRICE_ID")
 
 STRIPE_LIVE = bool(STRIPE_SECRET_KEY and STRIPE_SECRET_KEY.startswith("sk_live"))
 
+# Signing secret for the billing webhook endpoint. Keyed off the same
+# live/test signal StripeService._is_live() uses, so the secret can never
+# disagree with the API key the events were generated against.
+STRIPE_WEBHOOK_SECRET = os.getenv(
+    "WEBHOOK_SECRET_LIVE" if STRIPE_LIVE else "WEBHOOK_SECRET_TEST", ""
+)
+
 BUSINESS_MONTHLY_STRIPE_PRICE_IDS_ALL = [
     x
     for x in (os.getenv("BUSINESS_MONTHLY_STRIPE_PRICE_IDS_ALL") or "").split(",")
