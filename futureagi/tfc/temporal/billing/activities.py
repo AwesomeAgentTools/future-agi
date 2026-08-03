@@ -50,7 +50,7 @@ def _run_dunning_checks_sync() -> int:
         except ImportError:
             OrganizationSubscription = None
         try:
-            from ee.usage.services.dunning import DunningService
+            from ee.cloud.billing.dunning import DunningService
         except ImportError:
             DunningService = None
 
@@ -120,7 +120,7 @@ def _generate_monthly_invoices_sync(
     and admin "Generate Invoice" page all share identical logic.
     """
     try:
-        from ee.usage.services.invoice_generation import InvoiceGenerationService
+        from ee.cloud.billing.invoice_generation import InvoiceGenerationService
     except ImportError:
         InvoiceGenerationService = None
 

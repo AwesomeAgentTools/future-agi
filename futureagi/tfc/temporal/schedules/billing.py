@@ -34,13 +34,17 @@ def evaluate_budgets_catchup_activity():
     - total_spend scope budgets (require BillingEngine cost calculation)
     """
     from accounts.models.organization import Organization
+
     try:
         from ee.usage.models.usage import UsageBudget, UsageSummary
     except ImportError:
         UsageBudget = None
         UsageSummary = None
     try:
-        from ee.usage.services.budget_enforcement import evaluate_budgets_catchup, evaluate_total_spend_budget
+        from ee.cloud.billing.budget_enforcement import (
+            evaluate_budgets_catchup,
+            evaluate_total_spend_budget,
+        )
     except ImportError:
         evaluate_budgets_catchup = None
         evaluate_total_spend_budget = None
