@@ -136,8 +136,11 @@ FEATURE_SYNTHETIC_DATA = FeatureDefinition(
 FEATURE_SCENARIOS = FeatureDefinition(
     id="scenarios",
     display_name="Scenarios",
-    oss_baseline=False,
-    requires_license=True,
+    # Open (TH-7256): scenarios were never license-gated in production —
+    # generation runs on the deployment's own provider credentials. Managed
+    # models used inside scenario flows still gate via falcon/turing.
+    oss_baseline=True,
+    requires_license=False,
     execution_location=ExecutionLocation.LOCAL,
 )
 
@@ -287,7 +290,9 @@ PAID_FEATURES: frozenset[str] = frozenset(
 )
 
 MANAGED_SERVICE_FEATURES: frozenset[str] = frozenset(
-    f.id for f in _ALL_FEATURES if f.execution_location == ExecutionLocation.FUTUREAGI_SERVICE
+    f.id
+    for f in _ALL_FEATURES
+    if f.execution_location == ExecutionLocation.FUTUREAGI_SERVICE
 )
 
 

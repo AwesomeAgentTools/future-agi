@@ -3,11 +3,11 @@ import re
 import traceback
 import uuid
 
-from django.utils import timezone
 from django.db import close_old_connections, models, transaction
 from django.db.models import Count, Max, OuterRef, Q, Subquery
 from django.http import Http404
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.exceptions import NotFound
 from rest_framework.permissions import IsAuthenticated
@@ -194,13 +194,6 @@ class ScenariosListView(APIView):
     permission_classes = [IsAuthenticated]
     _gm = GeneralMethods()
 
-    def initial(self, request, *args, **kwargs):
-        super().initial(request, *args, **kwargs)
-        from tfc.ee_gating import EEFeature, check_ee_feature
-
-        org = getattr(request, "organization", None)
-        check_ee_feature(EEFeature.SCENARIOS, org_id=str(org.id) if org else None)
-
     def dispatch(self, request, *args, **kwargs):
         # Initialize request properly
         self.args = args
@@ -364,13 +357,6 @@ class CreateScenarioView(APIView):
     """
 
     permission_classes = [IsAuthenticated]
-
-    def initial(self, request, *args, **kwargs):
-        super().initial(request, *args, **kwargs)
-        from tfc.ee_gating import EEFeature, check_ee_feature
-
-        org = getattr(request, "organization", None)
-        check_ee_feature(EEFeature.SCENARIOS, org_id=str(org.id) if org else None)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -594,10 +580,10 @@ class CreateScenarioView(APIView):
             raise Exception(f"Failed to create simulator agent: {str(e)}")  # noqa: B904
 
 
-
 import logging
 
 logger = logging.getLogger(__name__)
+
 
 def get_dataset_column_config(dataset) -> dict[str, dict[str, str]] | None:
     if dataset is None:
@@ -620,7 +606,7 @@ def get_dataset_column_config(dataset) -> dict[str, dict[str, str]] | None:
                 extra={
                     "dataset_id": str(dataset.id),
                     "column_id": cid,
-                }
+                },
             )
             continue
 
@@ -629,6 +615,7 @@ def get_dataset_column_config(dataset) -> dict[str, dict[str, str]] | None:
             "type": columns_by_id[cid].data_type,
         }
     return config
+
 
 class ScenarioDetailView(APIView):
     """
@@ -711,7 +698,9 @@ class ScenarioDetailView(APIView):
                 response_data["dataset_rows"] = 0
 
             # Add dataset column config so frontend can show actual column names in eval mapping
-            response_data["dataset_column_config"] = get_dataset_column_config(scenario.dataset)
+            response_data["dataset_column_config"] = get_dataset_column_config(
+                scenario.dataset
+            )
 
             # Return the response — pass through serializer to whitelist permitted fields
             return Response(
@@ -765,13 +754,6 @@ class DeleteScenarioView(APIView):
     permission_classes = [IsAuthenticated]
     _gm = GeneralMethods()
 
-    def initial(self, request, *args, **kwargs):
-        super().initial(request, *args, **kwargs)
-        from tfc.ee_gating import EEFeature, check_ee_feature
-
-        org = getattr(request, "organization", None)
-        check_ee_feature(EEFeature.SCENARIOS, org_id=str(org.id) if org else None)
-
     @swagger_auto_schema(
         tags=["Scenarios"],
         operation_summary="Delete scenario",
@@ -823,13 +805,6 @@ class EditScenarioView(APIView):
     """
 
     permission_classes = [IsAuthenticated]
-
-    def initial(self, request, *args, **kwargs):
-        super().initial(request, *args, **kwargs)
-        from tfc.ee_gating import EEFeature, check_ee_feature
-
-        org = getattr(request, "organization", None)
-        check_ee_feature(EEFeature.SCENARIOS, org_id=str(org.id) if org else None)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)

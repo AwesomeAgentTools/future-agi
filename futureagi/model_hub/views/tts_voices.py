@@ -17,15 +17,6 @@ class TTSVoiceViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelViewSet):
         return super().get_queryset().order_by("-created_at")
 
     def create(self, request, *args, **kwargs):
-        from tfc.ee_gating import EEFeature, check_ee_feature
-
-        check_ee_feature(
-            EEFeature.VOICE_SIM,
-            org_id=str(
-                (getattr(request, "organization", None) or request.user.organization).id
-            ),
-        )
-
         try:
             serializer = self.get_serializer(data=request.data)
             serializer.is_valid(raise_exception=True)
