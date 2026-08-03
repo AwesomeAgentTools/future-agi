@@ -80,6 +80,44 @@ def test_normalize_retell_data_uses_only_provider_duration_ms():
     assert without_provider_duration["span_attributes"]["call.duration"] is None
 
 
+def test_normalize_retell_data_participant_phone_by_direction():
+    inbound = normalize_retell_data(
+        _retell_log(
+            direction="inbound",
+            from_number="+111",
+            to_number="+222",
+        )
+    )
+    inbound_missing_from = normalize_retell_data(
+        _retell_log(
+            direction="inbound",
+            from_number=None,
+            to_number="+222",
+        )
+    )
+    outbound = normalize_retell_data(
+        _retell_log(
+            direction="outbound",
+            from_number="+111",
+            to_number="+222",
+        )
+    )
+    unknown = normalize_retell_data(
+        _retell_log(
+            direction="",
+            from_number=None,
+            to_number="+222",
+        )
+    )
+
+    assert inbound["span_attributes"]["call.participant_phone_number"] == "+111"
+    assert (
+        inbound_missing_from["span_attributes"]["call.participant_phone_number"] is None
+    )
+    assert outbound["span_attributes"]["call.participant_phone_number"] == "+222"
+    assert unknown["span_attributes"]["call.participant_phone_number"] == "+222"
+
+
 def test_normalize_retell_data_counts_agent_interruptions_from_word_overlap():
     log = _retell_log(
         transcript_with_tool_calls=[

@@ -107,59 +107,87 @@ def fetch_logs_for_provider(
         last_fetched_at = start_time if start_time else provider.last_fetched_at
         end_time_to_use = end_time if end_time else now
 
-        try:
-            logs = ObservabilityService.get_call_logs(
-                provider=provider,
-                start_time=last_fetched_at,
-                end_time=end_time_to_use,
+        # Default: poll for every provider. Retell is the exception — after the
+        # first watermark, ongoing ingest is webhook-primary unless the caller
+        # passes start_time for an explicit backfill.
+        if (
+            provider.provider != ProviderChoices.RETELL
+            or provider.last_fetched_at is None
+            or start_time is not None
+        ):
+            logger.info(
+                "provider_log_fetch_started",
+                provider_type=provider.provider,
+                start_time=str(last_fetched_at) if last_fetched_at else None,
+                end_time=str(end_time_to_use),
             )
-        except HTTPError as e:
-            if e.response is not None and e.response.status_code in (401, 403):
+
+            try:
+                logs = ObservabilityService.get_call_logs(
+                    provider=provider,
+                    start_time=last_fetched_at,
+                    end_time=end_time_to_use,
+                )
+            except HTTPError as e:
+                if e.response is not None and e.response.status_code in (401, 403):
+                    logger.error(
+                        "authentication_failed_for_provider",
+                        provider_type=provider.provider,
+                        status_code=e.response.status_code,
+                    )
+                    return None
                 logger.error(
-                    "authentication_failed_for_provider",
+                    "provider_log_fetch_failed",
                     provider_type=provider.provider,
-                    status_code=e.response.status_code,
+                    status_code=(
+                        e.response.status_code if e.response is not None else None
+                    ),
+                    error_type=type(e).__name__,
                 )
                 return None
-            logger.error(
-                "provider_log_fetch_failed",
-                provider_type=provider.provider,
-                status_code=e.response.status_code if e.response is not None else None,
-                error_type=type(e).__name__,
-            )
-            return None
-        except Exception as exc:
-            logger.error(
-                "provider_log_fetch_failed",
-                provider_type=provider.provider,
-                error_type=type(exc).__name__,
-            )
-            return None
+            except Exception as exc:
+                logger.error(
+                    "provider_log_fetch_failed",
+                    provider_type=provider.provider,
+                    error_type=type(exc).__name__,
+                )
+                return None
 
-        # Only update last_fetched_at if we successfully got logs
-        try:
-            _update_last_fetched_at(provider, end_time_to_use)
-        except Exception as exc:
-            logger.warning(
-                "provider_watermark_update_failed",
-                provider_type=provider.provider,
-                error_type=type(exc).__name__,
-            )
+            # Only update last_fetched_at if we successfully got logs
+            try:
+                _update_last_fetched_at(provider, end_time_to_use)
+            except Exception as exc:
+                logger.warning(
+                    "provider_watermark_update_failed",
+                    provider_type=provider.provider,
+                    error_type=type(exc).__name__,
+                )
 
-        # Process and store logs
-        try:
-            process_and_store_logs(logs, provider)
-        except Exception as exc:
-            logger.error(
-                "provider_log_processing_failed",
+            # Process and store logs
+            try:
+                process_and_store_logs(logs, provider)
+            except Exception as exc:
+                logger.error(
+                    "provider_log_processing_failed",
+                    provider_type=provider.provider,
+                    logs_count=len(logs) if logs else 0,
+                    error_type=type(exc).__name__,
+                )
+                # Still return logs since we fetched them successfully
+                return logs
+
+            logger.info(
+                "provider_log_fetch_succeeded",
                 provider_type=provider.provider,
                 logs_count=len(logs) if logs else 0,
-                error_type=type(exc).__name__,
             )
-            # Still return logs since we fetched them successfully
             return logs
 
-        return logs
+        logger.info(
+            "provider_log_fetch_skipped_webhook_primary",
+            provider_type=provider.provider,
+        )
+        return []
 
     except Exception as exc:
         logger.error(

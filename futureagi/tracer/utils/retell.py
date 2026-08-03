@@ -342,6 +342,8 @@ def _extract_common_call_fields(log: dict, eval_attributes: dict):
     direction = log.get("direction", "")
     if direction == "outbound":
         participant_number = log.get("to_number")
+    elif direction == "inbound":
+        participant_number = log.get("from_number")
     else:
         participant_number = log.get("from_number") or log.get("to_number")
     eval_attributes[CallAttributes.PARTICIPANT_PHONE_NUMBER] = participant_number
@@ -415,6 +417,7 @@ def _speech_metrics(messages: list[dict]) -> dict:
             wpm_seconds += duration
             wpm_words += segment["word_count"]
         wpm_val = wpm_words * 60 / wpm_seconds if wpm_seconds > 0 else None
+        # 300 WPM ceiling: bad word timings can spike rates to absurd values.
         return min(wpm_val, 300) if wpm_val is not None else None
 
     return {
