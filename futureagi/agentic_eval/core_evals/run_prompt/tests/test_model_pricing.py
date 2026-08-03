@@ -18,8 +18,6 @@ Run with:
     python -m pytest agentic_eval/core_evals/run_prompt/tests/test_model_pricing.py -v -m unit
 """
 
-from pathlib import Path
-
 import pytest
 
 from agentic_eval.core_evals.fi_utils.token_count_helper import (
@@ -112,10 +110,7 @@ class TestTokenBasedPricing:
         assert result["prompt_cost"] == 0.0
         assert result["completion_cost"] == 0.0
 
-    @pytest.mark.skipif(
-        not (Path(__file__).resolve().parents[4] / "ee").is_dir(),
-        reason="turing pricing is registered by ee.turing; OSS builds have no such catalog entry",
-    )
+    @pytest.mark.requires_ee
     def test_turing_alias_pricing_lookup(self):
         """Test that evaluator aliases use catalog pricing instead of fallback."""
         expected_pricing = {
@@ -128,10 +123,7 @@ class TestTokenBasedPricing:
         for model_name, pricing in expected_pricing.items():
             assert get_model_pricing(model_name) == pricing
 
-    @pytest.mark.skipif(
-        not (Path(__file__).resolve().parents[4] / "ee").is_dir(),
-        reason="turing pricing is registered by ee.turing; OSS builds have no such catalog entry",
-    )
+    @pytest.mark.requires_ee
     def test_calculate_cost_turing_alias(self):
         token_usage = {
             "prompt_tokens": 1000,

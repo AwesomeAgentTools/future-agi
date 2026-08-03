@@ -20,8 +20,6 @@ when real ``ee/`` is present — against the stub it would be tautological.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 # Break the tracer.utils.eval ↔ model_hub.tasks import cycle for test-time
@@ -30,6 +28,7 @@ import model_hub.tasks  # noqa: F401
 
 from evaluations.engine.runner import EvalResult
 from tfc.constants.api_calls import APICallTypeChoices
+from tfc.ee_loader import has_ee
 
 
 PROMPT_TOKENS = 100
@@ -37,8 +36,7 @@ COMPLETION_TOKENS = 50
 TOTAL_TOKENS = PROMPT_TOKENS + COMPLETION_TOKENS
 RAW_COST_USD = 0.12345
 
-# Real ee package on disk (not the OSS conftest stubs).
-_EE_PRESENT = (Path(__file__).resolve().parents[2] / "ee").is_dir()
+_EE_PRESENT = has_ee("ee.usage")
 
 _CREDIT_EVENT_TYPES = {
     APICallTypeChoices.TURING_LARGE_EVALUATOR.value,
