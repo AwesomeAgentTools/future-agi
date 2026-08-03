@@ -36,17 +36,28 @@ logger = structlog.get_logger(__name__)
 
 # Cosine distance: 0 = identical, 2 = opposite.
 #
-# Tightened from 0.45 alongside PARTITION_BY_CATEGORY below. Those two numbers
-# are coupled: with the category partition ON, 0.45 was an *intra-category*
-# bound and every candidate had already cleared a categorical filter. Dropping
-# the partition removes that filter, so the identical 0.45 admits a strictly
-# larger candidate set — the effective constraint loosened without the constant
-# changing. A per-issue audit of the un-partitioned run put ~15% of merges
-# wrong (34 issues moved, 5-6 badly), all of them marginal pairings like
-# "responded as client rather than analyst" landing in "agent repeated itself",
-# while the merges the fix exists for had near-identical briefs well inside
-# 0.40. Tightening restores roughly the constraint that was there before.
-COSINE_THRESHOLD = 0.40
+# 0.40 was tried and reverted. The reasoning was that dropping
+# PARTITION_BY_CATEGORY (below) loosened the effective constraint — 0.45 had
+# been an *intra-category* bound, and without the partition the same number
+# admits a strictly larger candidate set — so tightening should shed the ~15%
+# of merges a per-issue audit found wrong while keeping the rest.
+#
+# Measured on the 203-issue corpus, it does not:
+#
+#   0.45, partition ON   91 clusters, 60 singletons   (pre-fix-4)
+#   0.45, partition OFF  74 clusters, 43 singletons   (what fix 4 buys)
+#   0.40, partition OFF  91 clusters, 62 singletons   (identical to pre-fix-4)
+#
+# The good merges do NOT sit well inside 0.40 — almost all 17 live between
+# 0.40 and 0.45, so tightening keeps only the two tightest (the period-mismatch
+# and empty-generation merges) and gives back everything else. 0.40 buys
+# precision by surrendering essentially all the recall fix 4 exists for.
+#
+# The ~15% bad-merge rate is therefore the standing price of fix 4 at this
+# threshold, not something a threshold tweak removes. Reducing it needs a
+# different mechanism (a category-agreement penalty folded into the distance
+# rather than a hard filter, per the original audit proposal).
+COSINE_THRESHOLD = 0.45
 
 # Whether centroid matching is confined to the issue's own category.
 #
