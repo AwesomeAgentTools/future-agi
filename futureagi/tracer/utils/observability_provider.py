@@ -1,5 +1,4 @@
 import json
-import time
 import uuid
 from datetime import datetime
 
@@ -313,11 +312,6 @@ def _export_provider_call_to_collector(span, provider: str, provider_log_id: str
                 error_type=type(exc).__name__,
             )
         start_ns = _to_epoch_ns(span.start_time)
-        end_ns = _to_epoch_ns(span.end_time)
-        # ClickHouse partitions spans by start date; always emit a non-zero
-        # timestamp so provider spans remain visible in current-period queries.
-        if start_ns is None:
-            start_ns = end_ns or time.time_ns()
         span_dict = {
             "trace_id": span.trace.id.hex,
             "span_id": _provider_collector_span_id(
@@ -327,8 +321,10 @@ def _export_provider_call_to_collector(span, provider: str, provider_log_id: str
             "parent_id": None,
             "name": span.name,
             "attributes": attrs,
-            "start_time": start_ns,
         }
+        if start_ns is not None:
+            span_dict["start_time"] = start_ns
+        end_ns = _to_epoch_ns(span.end_time)
         if end_ns is not None:
             span_dict["end_time"] = end_ns
         # Stamp OTLP status from call outcome so a failed call isn't recorded as completed (collector copies it into CH `spans.status`).

@@ -57,7 +57,6 @@ class VoiceCallListQueryBuilder(BaseQueryBuilder):
     TABLE = "spans"
     EVAL_TABLE = "tracer_eval_logger"
     ANNOTATION_TABLE = "model_hub_score"
-    VOICE_PROVIDERS = ("vapi", "retell", "eleven_labs", "bland", "twilio")
 
     def __init__(
         self,
@@ -105,7 +104,6 @@ class VoiceCallListQueryBuilder(BaseQueryBuilder):
 
         filter_fragment = f"AND {extra_where}" if extra_where else ""
         simulation_filter = self._build_simulation_filter()
-        provider_filter = self._build_provider_filter()
 
         # Light columns only — heavy span_attributes_raw fetched via
         # build_content_query() after pagination to avoid CH OOM.
@@ -126,7 +124,6 @@ class VoiceCallListQueryBuilder(BaseQueryBuilder):
           AND created_at >= %(start_date)s - INTERVAL 1 DAY
           AND start_time >= %(start_date)s
           AND start_time < %(end_date)s
-          {provider_filter}
           {filter_fragment}
           {simulation_filter}
         ORDER BY start_time DESC
@@ -153,7 +150,6 @@ class VoiceCallListQueryBuilder(BaseQueryBuilder):
         extra_where, extra_params = fb.translate(self.filters)
         self.params.update(extra_params)
         filter_fragment = f"AND {extra_where}" if extra_where else ""
-        provider_filter = self._build_provider_filter()
 
         query = f"""
         SELECT id
@@ -164,7 +160,6 @@ class VoiceCallListQueryBuilder(BaseQueryBuilder):
           AND created_at >= %(start_date)s - INTERVAL 1 DAY
           AND start_time >= %(start_date)s
           AND start_time < %(end_date)s
-          {provider_filter}
           {filter_fragment}
         ORDER BY start_time DESC
         LIMIT 1 BY trace_id
@@ -198,7 +193,6 @@ class VoiceCallListQueryBuilder(BaseQueryBuilder):
 
         filter_fragment = f"AND {extra_where}" if extra_where else ""
         simulation_filter = self._build_simulation_filter()
-        provider_filter = self._build_provider_filter()
 
         query = f"""
         SELECT uniqExact(trace_id) AS total
@@ -209,7 +203,6 @@ class VoiceCallListQueryBuilder(BaseQueryBuilder):
           AND created_at >= %(start_date)s - INTERVAL 1 DAY
           AND start_time >= %(start_date)s
           AND start_time < %(end_date)s
-          {provider_filter}
           {filter_fragment}
           {simulation_filter}
         """
@@ -224,11 +217,6 @@ class VoiceCallListQueryBuilder(BaseQueryBuilder):
         OOM.  This method is kept as a no-op to avoid breaking callers.
         """
         return ""
-
-    def _build_provider_filter(self) -> str:
-        """Keep non-voice LLM traces out of the voice-call endpoint."""
-        providers = ", ".join(f"'{provider}'" for provider in self.VOICE_PROVIDERS)
-        return f"AND (provider IS NULL OR provider = '' OR provider IN ({providers}))"
 
     # ------------------------------------------------------------------
     # Python-side simulation filter (used after Phase 1b)
