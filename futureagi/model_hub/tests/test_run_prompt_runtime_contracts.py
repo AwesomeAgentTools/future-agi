@@ -19,19 +19,8 @@ def prompt_config():
 
 # ────────────────────────────────────────────────────────────────────────
 # Endpoint × (canonical field, legacy camel-alias) matrix.
-#
-# All entries share the same shape assertion: POST the endpoint with a
-# valid payload + one legacy camelCase alias field → the serializer must
-# reject the alias with an "unknown field" error. The base serializer's
-# ``extra = "forbid"`` guard is a single library behaviour; testing it
-# once per endpoint (previously 5 nearly-identical tests) is what this
-# parametrization replaces. Mirrors the pattern applied to
-# ``test_dataset_runtime_contracts.py`` under TH-7128.
-#
 # Each case: (id, url_factory, payload, legacy_alias)
-# url_factory is a callable so per-test UUIDs are fresh (evaluating
-# ``uuid.uuid4()`` at import time would produce a shared value).
-# ────────────────────────────────────────────────────────────────────────
+# url_factory is a callable so per-test UUIDs are fresh.
 _REJECT_UNKNOWN_FIELD_CASES = [
     (
         "litellm_run_prompt",

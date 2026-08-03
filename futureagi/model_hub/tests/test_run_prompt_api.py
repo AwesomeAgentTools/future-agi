@@ -1598,14 +1598,7 @@ class TestRunPromptOrganizationIsolation:
 
 @pytest.mark.django_db
 class TestAddRunPromptColumnConfigVariations:
-    """Tests for various config variations in AddRunPromptColumnView.
-
-    All variants share the same shape: POST ``/develops/add_run_prompt_column/``
-    with a config dict that varies one field, assert 200, then verify a
-    downstream property on either the ``Column`` or the ``RunPrompter`` row.
-    Consolidated into a single parametrized method (11 cases) — mirrors the
-    pattern applied to ``TestDatatypeConverter`` under TH-7128.
-    """
+    """Tests for various config variations in AddRunPromptColumnView."""
 
     # ── Assertion helpers ──────────────────────────────────────────────
     @staticmethod
@@ -2280,11 +2273,6 @@ class TestRunPromptExtendedOrganizationIsolation:
 class TestRunPromptSerializerValidation:
     """Tests for serializer validation edge cases."""
 
-    # ── /develops/add_run_prompt_column/ rejection matrix ────────────────
-    # All 6 cases share the same shape: build a config dict with one invalid
-    # field, POST, assert 400. Consolidated per TH-7137 (mirrors the pattern
-    # applied to ``TestGroundTruthSetupAPI`` under TH-7128).
-    #
     # Each case: (id, config_dict, name_in_payload)
     _ADD_RUN_PROMPT_INVALID_CASES = [
         (
