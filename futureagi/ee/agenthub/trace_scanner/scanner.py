@@ -15,16 +15,19 @@ import structlog
 from ee.agenthub.trace_scanner.compress import (
     attribute_key_moments,
     compress_v2,
+    compress_v3,
     extract_programmatic_metadata,
     kevinify,
     recover_verbatim,
     structural_prefilter_with_ids,
 )
 from ee.agenthub.trace_scanner.prompt import (
+    DIMENSION_TO_SUBCATEGORY,
     SUBCAT_TO_FIX_LAYER,
     SUBCAT_TO_GROUP,
+    SYSTEM_V8,
     VALID_SUBCATEGORIES,
-    build_prompt,
+    build_prompt_v8,
 )
 from agentic_eval.core.utils.model_config import (
     LiteLlmProvider,
@@ -163,21 +166,28 @@ class TraceScanner:
             trace["_short_label"] = label
 
             prefilter = structural_prefilter_with_ids(trace)
-            compressed = compress_v2(trace, prefilter)
+            compressed = compress_v3(trace, prefilter)
             prog_meta = extract_programmatic_metadata(trace, prefilter)
 
             compressed_traces.append(compressed)
             trace_map[label] = (trace, prefilter, prog_meta)
 
-        # Build prompt and call LLM
-        prompt_text = build_prompt(compressed_traces)
-        messages = [{"role": "user", "content": prompt_text}]
+        # Build prompt and call LLM. BATCH_SIZE is 1, so this is one trace per call
+        # and the decomposed prompt gets the model's full attention on it.
+        messages = [
+            {"role": "system", "content": SYSTEM_V8},
+            {"role": "user", "content": build_prompt_v8(compressed_traces)},
+        ]
 
         try:
             raw_response = self._invoke_llm(messages)
             if raw_response is None:
                 raise RuntimeError("scanner_gateway_returned_none")
             parsed = self._parse_response(raw_response)
+            # V8 returns ONE flat object per trace; the mapping below expects the
+            # batched {label: {...}} shape the old multi-trace prompt produced.
+            if "dimensions" in parsed or "key_moments" in parsed:
+                parsed = {next(iter(trace_map)): self._v8_to_trace_output(parsed)}
         except Exception as e:
             logger.exception("scanner_llm_call_failed", error=str(e))
             return [
@@ -281,6 +291,35 @@ class TraceScanner:
                     pass
             logger.warning("scanner_json_parse_failed", raw_length=len(raw))
             return {}
+
+    @staticmethod
+    def _v8_to_trace_output(parsed: Dict[str, Any]) -> Dict[str, Any]:
+        """Translate V8's per-dimension verdicts into the shipped issue shape.
+
+        A dimension is only turned into an issue when it FAILED, so a hallucinated
+        entry in "issues" without a matching FAIL verdict is dropped rather than
+        surfaced — the evidence gate is the whole point of the prompt.
+        """
+        dims = parsed.get("dimensions") or {}
+        failed = {
+            k for k, v in dims.items()
+            if isinstance(v, dict) and str(v.get("verdict", "")).upper() == "FAIL"
+        }
+        briefs = {
+            i.get("dim"): i for i in (parsed.get("issues") or []) if isinstance(i, dict)
+        }
+        issues = []
+        for dim in failed:
+            subcat = DIMENSION_TO_SUBCATEGORY.get(dim)
+            if not subcat:
+                continue
+            item = briefs.get(dim) or {}
+            issues.append({
+                "cat": subcat,
+                "conf": item.get("conf", "M"),
+                "brief": item.get("brief") or str(dims[dim].get("evidence", ""))[:200],
+            })
+        return {"issues": issues, "key_moments": parsed.get("key_moments") or []}
 
     def _parse_issues(self, raw_issues: List[Dict]) -> List[ScanIssue]:
         """Validate and normalize issues from LLM output."""

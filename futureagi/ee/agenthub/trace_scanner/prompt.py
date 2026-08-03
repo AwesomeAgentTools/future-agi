@@ -207,3 +207,153 @@ def build_prompt(compressed_traces):
     """Build the full prompt from a list of compress_v2 outputs."""
     traces_json = json.dumps(compressed_traces, separators=(",", ":"))
     return CACHED_PREFIX + BATCH_TEMPLATE.format(traces_json=traces_json)
+
+
+# ---------------------------------------------------------------------------
+# V8 — decomposed, evidence-first scanner prompt
+# ---------------------------------------------------------------------------
+# Measured on a 1,037-trace production corpus with re-labelled gold, validated once
+# on a sealed 421-trace held-out split:
+#   this prompt   FPR  9.9%  precision 65.6%  recall 54.1%  F1 0.593
+#   CACHED_PREFIX FPR 17.6%  precision 47.6%  recall 45.9%  F1 0.467
+# +0.126 F1, 95% CI [+0.037,+0.216] by paired bootstrap. Same model, same one call
+# per trace (BATCH_SIZE is already 1), so cost is unchanged.
+#
+# The lever is DECOMPOSITION, not the input rework that ships alongside it: forcing a
+# separate verdict per failure dimension, each gated behind a verbatim quote, stops the
+# model scoring a holistic impression. An unquotable failure is a hallucinated one.
+# Reference: GPA (arXiv 2510.08847) reports a suite of specialised judges catching 95%
+# of annotated errors vs 54.8% for a monolithic judge. Running five SEPARATE judge calls
+# was also measured here and did NOT beat this single decomposed call (F1 0.794 vs 0.852,
+# n=86) at 5x the cost — the cheap half captures the effect.
+
+# Two additive subcategories: the grounding and completion dimensions have no home in the
+# original HIERARCHY, and remapping them onto the nearest existing label would mislabel
+# every issue of those kinds. Additive keeps stored issues and their categories valid.
+HIERARCHY["Context & Retrieval"].append("Unsupported Claim")
+HIERARCHY["Output Quality"].append("Incomplete Response")
+for _sc in ("Unsupported Claim", "Incomplete Response"):
+    _grp = "Context & Retrieval" if _sc == "Unsupported Claim" else "Output Quality"
+    SUBCAT_TO_GROUP[_sc] = _grp
+    SUBCAT_TO_FIX_LAYER[_sc] = GROUP_TO_FIX_LAYER[_grp]
+    VALID_SUBCATEGORIES.add(_sc)
+
+DIMENSION_TO_SUBCATEGORY = {
+    "goal": "Goal Deviation",
+    "grounding": "Unsupported Claim",
+    "tools": "Tool-related",
+    "instruction": "Instruction Non-compliance",
+    "completion": "Incomplete Response",
+}
+
+SYSTEM_V8 = """You audit ONE execution trace of an AI agent and decide whether the agent failed the user.
+
+You will judge FIVE independent dimensions. For each one you must first quote VERBATIM
+evidence, then give a verdict. If you cannot quote the required evidence, the verdict for
+that dimension is PASS. An unquotable failure is a hallucinated failure.
+
+WHAT COUNTS AS EVIDENCE — this is strict, and quoting the wrong thing invalidates the FAIL:
+- GOAL: quote the user's request AND the part of the agent's response that fails to address it.
+- GROUNDING: quote the unsupported claim FROM THE AGENT'S RESPONSE — not the tool output, not
+  the user's message. If the sentence you want to quote appears anywhere in a tool result or
+  in the user's own words, it IS sourced and this dimension PASSES. Numbers the agent
+  legitimately DERIVED (sums, counts, percentages of returned values) are grounded.
+- TOOLS: quote the tool error or wrong result AND the agent's contradicting assertion.
+- INSTRUCTION: quote TWO things — the rule as stated in the input, AND the response text that
+  violates it. Quoting the rule alone is not evidence of a violation.
+- COMPLETION: quote the end of the agent's response showing it stops early or is absent.
+
+Never cite a closing pleasantry ("You're welcome", "Have a great day", "Let me know if...")
+as evidence of any failure.
+
+DIMENSIONS
+
+1. GOAL — did the agent address what the user actually asked on this turn?
+   FAIL only if it answered a materially different question, or silently dropped part
+   of an explicit multi-part request.
+
+2. GROUNDING — is every factual claim in the response supported by tool output or the
+   user's own input?
+   FAIL if the agent asserted a value, status, or fact that appears nowhere in the trace,
+   or that contradicts what a tool returned.
+
+3. TOOLS — were tools used correctly and were their results respected?
+   FAIL if a tool errored/timed out and the agent asserted success anyway, if it used
+   obviously wrong arguments, or if it never called an available tool it plainly needed
+   and instead guessed.
+
+4. INSTRUCTION — did the agent honour explicit constraints (format, schema, length,
+   language, "only return X")?
+   FAIL only when the constraint is stated in the trace and visibly violated.
+
+5. COMPLETION — did the agent actually finish?
+   FAIL on empty output, truncation mid-answer, an unrecovered loop, or giving up while
+   a usable path remained.
+   A response marked "[non-textual response: ...]" is a normal successful reply (an
+   embedding vector or scores) — that is not empty, do not fail it.
+
+NOT FAILURES — do not flag any of these:
+- asking a clarifying question, or requesting information it genuinely needs
+- correctly refusing an out-of-scope, unsafe, or unsupported request
+- honestly reporting that data does not exist or that a tool failed
+- returning a download link, file reference, or ID instead of inlining data
+- terse, unpolished, or plainly-worded phrasing that is still correct
+- answering the user's goal from earlier context instead of echoing their last message
+- a tool returning a handled error that the agent relays accurately
+
+Speaker labels in conversation history are UNRELIABLE — infer who said what from content.
+
+OUTPUT — strict JSON, no prose outside it:
+{
+  "dimensions": {
+    "goal":        {"evidence": "<verbatim quote or empty>", "verdict": "PASS|FAIL"},
+    "grounding":   {"evidence": "...", "verdict": "PASS|FAIL"},
+    "tools":       {"evidence": "...", "verdict": "PASS|FAIL"},
+    "instruction": {"evidence": "...", "verdict": "PASS|FAIL"},
+    "completion":  {"evidence": "...", "verdict": "PASS|FAIL"}
+  },
+  "issues": [
+    {"dim": "goal|grounding|tools|instruction|completion",
+     "brief": "<one line, <=15 words, what the agent did wrong>",
+     "conf": "H|M"}
+  ],
+  "key_moments": ["<quote 1>","<quote 2>","<quote 3>"]
+}
+
+Emit an entry in "issues" for every dimension whose verdict is FAIL, and nothing else.
+If all five PASS, "issues" is an empty list.
+key_moments: 3-5 quotes copied VERBATIM from the trace (task, spans, result) telling the
+story of what happened — user request, key tool outputs, agent decisions, final response.
+Always provide key_moments, including for clean traces."""
+
+
+def build_prompt_v8(compressed_traces):
+    """One trace per call — matches the shipped BATCH_SIZE of 1."""
+    t = compressed_traces[0] if isinstance(compressed_traces, list) else compressed_traces
+    parts = [
+        f"TRACE {t.get('tid','t1')}",
+        f"\nUSER REQUEST:\n{t.get('task','')}",
+        f"\nAGENT RESPONSE:\n{t.get('result','')}",
+    ]
+    if t.get("prior_turns"):
+        parts.append("\nEARLIER TURNS (oldest first, speaker labels unreliable):\n" +
+                     "\n".join(f"- {p}" for p in t["prior_turns"]))
+    if t.get("tools_available"):
+        parts.append("\nTOOLS AVAILABLE: " + ", ".join(map(str, t["tools_available"]))[:1200])
+    if t.get("flow"):
+        parts.append(f"\nEXECUTION FLOW:\n{t['flow']}")
+    if t.get("signals"):
+        parts.append(f"\nSTRUCTURAL SIGNALS: {t['signals']}")
+    spans = t.get("spans") or []
+    if spans:
+        parts.append("\nSPANS (in = input, out = output; [FLAGGED] = structurally anomalous):")
+        for s in spans[:40]:
+            head = f"  {s.get('depth',0)*'  '}{s.get('name')} ({s.get('kind')}) status={s.get('status')}"
+            if s.get("flagged"):
+                head += " [FLAGGED]"
+            parts.append(head)
+            if s.get("in"):
+                parts.append(f"      in : {s['in']}")
+            if s.get("out"):
+                parts.append(f"      out: {s['out']}")
+    return "\n".join(parts)

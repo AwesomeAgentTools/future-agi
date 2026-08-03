@@ -925,3 +925,346 @@ def attribute_key_moments(quotes, trace_data):
         else:
             out.append({"role": "", "span": "", "status": "", "is_failure": False})
     return out
+
+
+# ---------------------------------------------------------------------------
+# compress_v3 — input-representation rework (ships with the V8 prompt)
+# ---------------------------------------------------------------------------
+# Same output contract as compress_v2. Four measured defects fixed:
+#  1. NEGATIONS SURVIVE. compress_v2 kevinify()s every span's evidence and NLTK's
+#     stopword list contains not/no/nor/don/didn/isn/wasn/couldn/t, so every negation
+#     is deleted from the text the model reasons over ("tool did not return data" ->
+#     "tool return data"). The earlier fix applied _plain to task/result only.
+#  2. PROVIDER ENVELOPES ARE UNWRAPPED (OpenAI choices / Gemini candidates /
+#     LangChain generations / Anthropic content), so the budget is not spent on
+#     metadata while the real answer never reaches the model.
+#  3. ALL FOUR PRODUCER MESSAGE SHAPES, plus answers handed to a delivery tool.
+#  4. VOICE/REALTIME traces reconstructed from the span timeline.
+# Budget raised 3000 -> 20000 chars; the 3000 figure predates long-context models.
+#
+# Helpers are prefixed _v3_ so this cannot shadow compress_v2's own _plain/_loads.
+# On its own this is NOT the accuracy win (measured tied with baseline); the win is
+# the V8 prompt. It ships together because that is the combination validated on the
+# sealed split.
+
+
+TOTAL_IO_BUDGET = 20000
+TASK_BUDGET = 3000
+RESULT_BUDGET = 3000
+
+_ENVELOPE_HINTS = ("choices", "candidates", "generations", "usage", "object", "created")
+
+
+def _v3_plain(text, max_len):
+    """Whitespace-normalised truncation. Grammar and negations preserved."""
+    if not text:
+        return ""
+    text = re.sub(r"\s+", " ", str(text)).strip()
+    return text if len(text) <= max_len else text[: max_len - 1] + "…"
+
+
+def _v3_loads(v):
+    if isinstance(v, (dict, list)):
+        return v
+    if not isinstance(v, str):
+        return None
+    s = v.strip()
+    if not s or s[0] not in "[{":
+        return None
+    try:
+        return json.loads(s)
+    except Exception:
+        return None
+
+
+_ANSWER_ARG_KEYS = ("response_text", "final_response", "answer", "message",
+                    "text", "content", "chart_summary")
+
+
+def _delivered_answer(all_flat):
+    """Recover an answer handed to a delivery tool instead of returned.
+
+    Matches spans whose name marks final delivery (display_final_response,
+    display_final_chart, final_answer, send_message...) and pulls the text out of
+    the tool ARGUMENTS. Multiple segments are concatenated in trace order.
+    """
+    parts = []
+    for span, _d in all_flat:
+        name = (span.get("span_name") or "").lower()
+        if not (("final" in name and ("display" in name or "response" in name or "answer" in name))
+                or name in ("send_message", "respond_to_user", "final_answer")):
+            continue
+        d = _v3_loads((span.get("span_attributes") or {}).get("input.value", ""))
+        if not isinstance(d, dict):
+            continue
+        for k in _ANSWER_ARG_KEYS:
+            v = d.get(k)
+            if isinstance(v, str) and v.strip():
+                parts.append(v.strip())
+                break
+    return "\n\n".join(parts)
+
+
+def _is_nontextual(d):
+    """True when a response legitimately carries no text: embeddings, rerank
+    scores, or a bare numeric payload. These must not be reported as empty."""
+    if not isinstance(d, dict):
+        return False
+    for k in ("data", "embedding", "embeddings", "predictions", "results", "scores"):
+        v = d.get(k)
+        if isinstance(v, list) and v:
+            head = v[0]
+            if isinstance(head, (int, float)):
+                return True
+            if isinstance(head, dict) and any(
+                isinstance(head.get(kk), list) and head.get(kk)
+                and isinstance(head[kk][0], (int, float))
+                for kk in ("embedding", "values", "vector", "scores")
+            ):
+                return True
+    if str(d.get("object", "")).lower() in ("list", "embedding"):
+        return True
+    return False
+
+
+def unwrap_output(raw):
+    """Pull the assistant's actual text out of a provider response envelope.
+
+    Handles OpenAI (choices[].message.content), Gemini
+    (candidates[].content.parts[].text), LangChain (generations[][].text),
+    Anthropic (content[].text). Returns the raw string unchanged when it is
+    already plain text or an unrecognised shape — never worse than the input.
+    """
+    d = _v3_loads(raw)
+    if d is None:
+        return raw or ""
+
+    def _txt(x):
+        if isinstance(x, str):
+            return x
+        if isinstance(x, list):
+            return " ".join(_txt(i) for i in x if _txt(i))
+        if isinstance(x, dict):
+            for k in ("text", "content", "output_text"):
+                if isinstance(x.get(k), str) and x[k].strip():
+                    return x[k]
+            # Structured-output agents answer ENTIRELY via function_call.arguments,
+            # with content=null. Without this the whole response reads as empty and
+            # the completion dimension fires. 11 corpus roots are function-call-only.
+            fc = x.get("function_call") or x.get("functionCall")
+            if isinstance(fc, dict) and str(fc.get("arguments") or "").strip():
+                return f"[function_call {fc.get('name','')}] {fc['arguments']}"
+            tcs = x.get("tool_calls")
+            if isinstance(tcs, list) and tcs:
+                got = []
+                for tc in tcs[:4]:
+                    fn = (tc or {}).get("function") or {}
+                    if str(fn.get("arguments") or "").strip():
+                        got.append(f"[tool_call {fn.get('name','')}] {fn['arguments']}")
+                if got:
+                    return "\n".join(got)
+            if isinstance(x.get("content"), (list, dict)):
+                return _txt(x["content"])
+            if isinstance(x.get("parts"), list):
+                return _txt(x["parts"])
+            if isinstance(x.get("message"), dict):
+                return _txt(x["message"])
+        return ""
+
+    if isinstance(d, dict):
+        for key in ("choices", "candidates", "generations", "content", "messages"):
+            v = d.get(key)
+            if isinstance(v, list) and v:
+                t = _txt(v)
+                if t.strip():
+                    return t
+        t = _txt(d)
+        if t.strip():
+            return t
+        # Non-textual responses are NOT empty. An embeddings call returns a vector
+        # and a rerank returns scores; both legitimately have no text. Measured:
+        # 4 of 10 sampled v8 false positives were `completion` firing on
+        # "[empty model output]" for embedding responses and voice session roots.
+        if _is_nontextual(d):
+            return "[non-textual response: embedding/scores returned as expected]"
+        # recognised envelope but no text found (e.g. empty generation) — say so
+        if any(h in d for h in _ENVELOPE_HINTS):
+            err = d.get("error") or (d.get("response_metadata") or {}).get("error")
+            return f"[empty model output]{' error=' + _v3_plain(json.dumps(err), 300) if err else ''}"
+    elif isinstance(d, list):
+        t = _txt(d)
+        if t.strip():
+            return t
+    return raw or ""
+
+
+def extract_messages(raw):
+    """[(role, content)] from any producer shape; [] if there is no message list."""
+    d = _v3_loads(raw)
+    out = []
+    if isinstance(d, list) and d and isinstance(d[0], dict) and "role" in d[0]:
+        src = d
+    elif isinstance(d, dict):
+        src = None
+        for k in ("messages", "contents"):
+            v = d.get(k)
+            if isinstance(v, list) and v and isinstance(v[0], dict):
+                src = v
+                break
+        if src is None:
+            return []
+    else:
+        return []
+    for m in src:
+        if not isinstance(m, dict):
+            continue
+        role = str(m.get("role") or "user")
+        c = m.get("content")
+        if c is None and isinstance(m.get("parts"), list):
+            c = " ".join(str(p.get("text", "")) for p in m["parts"] if isinstance(p, dict))
+        if isinstance(c, list):
+            c = " ".join(
+                (p.get("text") or p.get("content") or "") if isinstance(p, dict) else str(p)
+                for p in c
+            )
+        out.append((role, str(c or "")))
+    return out
+
+
+def _v3_flat(trace_data, flatten_spans):
+    fl = []
+    for top in trace_data.get("spans", []):
+        fl.extend(flatten_spans(top))
+    return fl
+
+
+def _v3_build(trace_data, prefilter_result, flatten_spans, build_flow_outline,
+          extract_task_hints, retry_ids=()):
+    """Produce the compress_v2 dict shape with properly extracted content."""
+    all_flat = _v3_flat(trace_data, flatten_spans)
+
+    # ---- the turn on trial -------------------------------------------------
+    # Richest message list wins, but ONLY from spans that are plausibly the main
+    # agent: a sub-agent span can carry more messages than the orchestrator, and
+    # picking it substitutes an internal step for the user's request (this is the
+    # measured failure mode of ee#186's extract_turn).
+    root_attrs = all_flat[0][0].get("span_attributes", {}) if all_flat else {}
+    root_input = root_attrs.get("input.value", "") or ""
+    root_output = root_attrs.get("output.value", "") or ""
+
+    # Message list is taken from the ROOT span first. Scanning all spans for the
+    # "richest" one is what made ee#186 substitute a sub-agent's internal step for
+    # the user's request (measured: recall 68.8%->58.4% on agentic traces). Only
+    # fall through to other spans when the root carries no message list at all.
+    best = extract_messages(root_input)
+    if not best:
+        for span, _d in all_flat:
+            msgs = extract_messages((span.get("span_attributes") or {}).get("input.value", ""))
+            if len(msgs) > len(best):
+                best = msgs
+
+    history, request = [], ""
+    if best:
+        for i in range(len(best) - 1, -1, -1):
+            role, content = best[i]
+            r = role.lower()
+            if r in ("tool", "assistant", "model"):
+                continue
+            if r == "system":
+                break
+            request = content.strip()
+            history = [c.strip() for rr, c in best[:i] if rr.lower() != "system" and c.strip()]
+            break
+
+    # Prefer the recovered user turn, but only when it actually reads like a
+    # request rather than a serialized blob — otherwise the root input is better.
+    root_plain = unwrap_output(root_input) or root_input or ""
+    if request and not request.lstrip().startswith(("{", "[")):
+        task = request
+    else:
+        task = root_plain or request
+
+    # Some agents deliver the final answer through a DELIVERY TOOL rather than
+    # returning it: display_final_response / display_final_chart take the text as
+    # a tool ARGUMENT (input.response_text) and return only "Response segment
+    # stored". 114 of 1037 corpus traces (11%) do this, and reading outputs finds
+    # the confirmation instead of the answer. Segments are concatenated in order.
+    delivered = _delivered_answer(all_flat)
+
+    # Final answer: the root's own output when it has one, else the LONGEST
+    # unwrapped span output. Taking the last span yields a streaming chunk —
+    # measured, one trace's `result` came out as the 3 characters "Cad".
+    result = delivered or unwrap_output(root_output)
+    if not result or result.startswith("[empty model output]"):
+        cands = []
+        for span, _d in all_flat:
+            o = (span.get("span_attributes") or {}).get("output.value", "")
+            if not o:
+                continue
+            u = unwrap_output(o)
+            if u and not u.startswith("[empty model output]"):
+                cands.append(u)
+        if cands:
+            tail = cands[-6:]
+            result = max(tail, key=len) if max(map(len, tail)) > 40 else "".join(cands[-20:])
+
+    # ---- span evidence -----------------------------------------------------
+    weights, meta = [], []
+    flagged = set(prefilter_result.get("anomalous_span_ids") or []) | set(retry_ids)
+    for span, depth in all_flat:
+        sid = span.get("span_id")
+        w = 3 if sid in flagged else 1
+        weights.append(w)
+        meta.append((span, depth, sid in flagged))
+    total = sum(weights) or 1
+
+    spans = []
+    for i, (span, depth, is_flagged) in enumerate(meta):
+        budget = max(200, int(TOTAL_IO_BUDGET * weights[i] / total))
+        a = span.get("span_attributes") or {}
+        inp = _v3_plain(a.get("input.value", ""), budget)
+        out = _v3_plain(unwrap_output(a.get("output.value", "")), budget)
+        if not (inp or out or span.get("status_code") not in (None, "Unset") or is_flagged):
+            continue
+        spans.append({
+            "id": span.get("span_id"), "name": span.get("span_name"),
+            "depth": depth, "kind": (a.get("span.kind") or "CHAIN"),
+            "status": span.get("status_code", "Unset"),
+            "in": inp, "out": out, **({"flagged": True} if is_flagged else {}),
+        })
+
+    # Voice/realtime: conversation lives in many tiny ordered spans and neither
+    # the root nor per-message attrs are populated.
+    if len(task) < 60 and len(result) < 60 and len(spans) > 20:
+        tl = []
+        for s in spans:
+            if s["in"]: tl.append(f"[{s['name']}] IN: {s['in'][:300]}")
+            if s["out"]: tl.append(f"[{s['name']}] OUT: {s['out'][:300]}")
+            if len(tl) >= 80: break
+        if tl:
+            task = task or "(streaming/voice session — conversation in span timeline)"
+            result = result or _v3_plain(" \n".join(tl[-40:]), RESULT_BUDGET)
+
+    res = {
+        "tid": trace_data.get("_short_label", trace_data.get("trace_id")),
+        "task": _v3_plain(task, TASK_BUDGET),
+        "result": _v3_plain(result, RESULT_BUDGET),
+        "flow": build_flow_outline(trace_data),
+        "signals": prefilter_result.get("signal_summary"),
+        "spans": spans,
+    }
+    if history:
+        res["prior_turns"] = [_v3_plain(h, 500) for h in history[-8:]]
+    tools = prefilter_result.get("available_tools") or []
+    if tools:
+        res["tools_available"] = tools
+    hints = extract_task_hints(task)
+    if hints:
+        res["task_hints"] = hints
+    return res
+
+
+def compress_v3(trace_data, prefilter_result, retry_ids=()):
+    """compress_v2-shaped payload with properly extracted content."""
+    return _v3_build(trace_data, prefilter_result, flatten_spans, build_flow_outline,
+                     extract_task_hints, retry_ids)
