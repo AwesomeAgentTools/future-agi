@@ -177,7 +177,8 @@ def fetch_logs_for_provider(
                 return logs
 
             logger.info(
-                "provider_log_fetch_succeeded",
+                "Successfully fetched and stored logs for provider",
+                provider_id=str(provider_id),
                 provider_type=provider.provider,
                 logs_count=len(logs) if logs else 0,
             )
