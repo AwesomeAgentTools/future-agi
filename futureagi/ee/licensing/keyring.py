@@ -14,8 +14,6 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
-# Bundled public keys. In production these would be loaded from a file
-# or packaged resource. For now, they're configured via Django settings.
 _KEY_RING: dict[str, "PublicKeyEntry"] = {}
 
 
@@ -24,6 +22,16 @@ class PublicKeyEntry:
     kid: str
     algorithm: str
     public_key: str
+
+
+# Official FutureAGI license-verification keys, baked into source so a
+# deployment cannot swap the trust root via environment variables (a
+# self-signed license against a self-provided env key must not validate
+# without a source edit). Public keys only — signing keys live in the
+# private cloud control plane. Drop the production key(s) here before GA.
+# Settings/env keys (EE_LICENSE_PUBLIC_KEY[S]) may only ADD rotation kids;
+# they can never replace a bundled kid.
+_BUNDLED_KEYS: tuple[PublicKeyEntry, ...] = ()
 
 
 ALLOWED_ALGORITHMS = frozenset({"RS256", "RS384", "RS512", "PS256", "PS384", "PS512"})
@@ -37,9 +45,16 @@ DEFAULT_CLOCK_SKEW_SECONDS = 300
 
 
 def load_keyring_from_settings() -> None:
-    """Replace the process keyring with the keys configured in Django settings."""
+    """Rebuild the process keyring: bundled trust root first, then settings.
+
+    Settings/env-provided keys may only add new kids (rotation); a key that
+    collides with a bundled kid is rejected. On any settings parse failure
+    the keyring falls back to the bundled keys — never to an empty ring
+    while a trust root is bundled.
+    """
     global _KEY_RING
-    _KEY_RING = {}
+    bundled = {entry.kid: entry for entry in _BUNDLED_KEYS}
+    _KEY_RING = dict(bundled)
 
     try:
         import json
@@ -81,7 +96,16 @@ def load_keyring_from_settings() -> None:
                     public_key=configured_key.strip(),
                 )
 
-        _KEY_RING = keyring
+        merged = dict(bundled)
+        for kid, entry in keyring.items():
+            if kid in bundled and bundled[kid].public_key != entry.public_key:
+                logger.error(
+                    "license_keyring_bundled_kid_override_rejected", kid=kid
+                )
+                continue
+            merged[kid] = entry
+
+        _KEY_RING = merged
         logger.debug("license_keyring_loaded", key_count=len(_KEY_RING))
     except (TypeError, ValueError, KeyError):
         logger.exception("license_keyring_load_failed")
