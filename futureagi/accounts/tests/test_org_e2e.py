@@ -453,14 +453,12 @@ class TestInvitePermissionBoundaries:
         # Since they're only org Member, the view should downgrade to Viewer.
         client = _make_client(ws_admin, second_ws)
         resp = _invite_user(client, ["downgraded@example.com"], Level.MEMBER)
-        # Either 403 (not org admin) or 200 with downgrade to Viewer
-        if resp.status_code == status.HTTP_200_OK:
-            user = User.objects.get(email="downgraded@example.com")
-            mem = OrganizationMembership.no_workspace_objects.get(
-                user=user, organization=org
-            )
-            # Should be capped at Viewer
-            assert mem.level == Level.VIEWER
+        assert resp.status_code == status.HTTP_200_OK
+        user = User.objects.get(email="downgraded@example.com")
+        mem = OrganizationMembership.no_workspace_objects.get(
+            user=user, organization=org
+        )
+        assert mem.level == Level.VIEWER
 
     def test_invite_invalid_workspace_in_different_org(self, owner_client, org, owner):
         """Cannot invite with workspace_access pointing to another org's workspace."""
@@ -1428,10 +1426,15 @@ class TestCrossOrgIsolation:
                 }
             ],
         )
-        assert resp.status_code in (
-            status.HTTP_400_BAD_REQUEST,
-            status.HTTP_403_FORBIDDEN,
-        )
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        assert not OrganizationInvite.objects.filter(
+            organization=org,
+            target_email="xorg@example.com",
+            status=InviteStatus.PENDING,
+        ).exists()
+        assert not WorkspaceMembership.no_workspace_objects.filter(
+            workspace=gamma_ws, user__email="xorg@example.com"
+        ).exists()
 
     def test_org_member_count_isolated(
         self, owner_client, org, default_ws, org_gamma, gamma_ws, gamma_owner, owner
@@ -1447,6 +1450,7 @@ class TestCrossOrgIsolation:
         )
 
         acme_resp = owner_client.get("/accounts/organization/members/")
+        assert acme_resp.status_code == status.HTTP_200_OK
         acme_count = acme_resp.json()["result"]["total"]
 
         gamma_client = _make_client(gamma_owner, gamma_ws)
@@ -1454,8 +1458,8 @@ class TestCrossOrgIsolation:
         assert gamma_resp.status_code == status.HTTP_200_OK, gamma_resp.json()
         gamma_count = gamma_resp.json()["result"]["total"]
 
-        # Counts should be independent
-        assert acme_count != gamma_count or acme_count == 1  # edge case: both have 1
+        assert acme_count == 2
+        assert gamma_count == 1
 
 
 # =====================================================================
@@ -1479,10 +1483,11 @@ class TestSoftDeleteVerification:
         )
 
         resp = owner_client.get("/accounts/organization/members/")
+        assert resp.status_code == status.HTTP_200_OK
         data = resp.json()["result"]
         member_row = [m for m in data["results"] if m["email"] == "deact@acme.com"]
-        if member_row:
-            assert member_row[0]["status"] == "Deactivated"
+        assert member_row
+        assert member_row[0]["status"] == "Deactivated"
 
     def test_deactivated_member_no_workspace_access(self, org, default_ws, second_ws):
         """Deactivated org member has no workspace access."""
