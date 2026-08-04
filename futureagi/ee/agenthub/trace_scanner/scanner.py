@@ -48,6 +48,9 @@ except ImportError:
 logger = structlog.get_logger(__name__)
 
 BATCH_SIZE = 1
+# Briefs become cluster titles and clustering keys; anything longer is an evidence quote
+# that has leaked into the wrong field.
+_MAX_BRIEF_CHARS = 110
 SCAN_VERSION = "v7.2"
 
 # Prefer the registry entry; fall back to an inline config so this module
@@ -317,10 +320,20 @@ class TraceScanner:
             subcat = cat if cat in VALID_SUBCATEGORIES else DIMENSION_TO_SUBCATEGORY.get(dim)
             if not subcat:
                 continue
+            # NEVER fall back to the evidence quote. `brief` is what _retitle_from_members
+            # turns into the cluster title and what scan_types embeds for clustering, and
+            # evidence is a VERBATIM span of this one trace. Using it made 76% of production
+            # briefs quotes rather than descriptions (median 19 words vs the <=15 spec, cut
+            # mid-sentence at the cap) — which is why cluster titles do not match their
+            # members and why near-identical defects fail to cluster at all. A short generic
+            # label groups correctly and reads honestly; a stray quote does neither.
+            brief = " ".join(str(item.get("brief") or "").split())
+            if not brief or len(brief) > _MAX_BRIEF_CHARS:
+                brief = subcat
             issues.append({
                 "cat": subcat,
                 "conf": item.get("conf", "M"),
-                "brief": item.get("brief") or str(dims[dim].get("evidence", ""))[:200],
+                "brief": brief[:_MAX_BRIEF_CHARS],
             })
         return {"issues": issues, "key_moments": parsed.get("key_moments") or []}
 
