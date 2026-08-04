@@ -9,10 +9,10 @@ Does NOT block application startup or user requests on failure.
 
 from __future__ import annotations
 
-import os
-import hmac
 import hashlib
+import hmac
 import json
+import os
 import secrets
 from datetime import UTC, datetime, timedelta
 
@@ -26,14 +26,19 @@ HEARTBEAT_SEQ_CACHE_KEY = "enterprise_heartbeat_sequence"
 
 
 def get_heartbeat_url() -> str:
-    return os.getenv(
-        "FUTURE_AGI_LICENSE_URL",
-        "https://api.futureagi.com",
-    ).rstrip("/") + HEARTBEAT_ENDPOINT_PATH
+    return (
+        os.getenv(
+            "FUTURE_AGI_LICENSE_URL",
+            "https://api.futureagi.com",
+        ).rstrip("/")
+        + HEARTBEAT_ENDPOINT_PATH
+    )
 
 
 def is_heartbeat_enabled() -> bool:
-    disabled = os.getenv("FUTURE_AGI_ENTERPRISE_HEARTBEAT_DISABLED", "false").strip().lower()
+    disabled = (
+        os.getenv("FUTURE_AGI_ENTERPRISE_HEARTBEAT_DISABLED", "false").strip().lower()
+    )
     return disabled not in {"1", "true", "yes", "on"}
 
 
@@ -92,13 +97,26 @@ def send_heartbeat() -> bool:
         return False
 
     try:
+        from ee.licensing.activation_client import _get_configured_license_key
+        from ee.licensing.state import get_snapshot
+        from ee.licensing.validator import hash_key
         from tfc.deployment_telemetry.config import detect_deployment_type, get_version
         from tfc.deployment_telemetry.state import get_or_create_telemetry_state
 
-        from ee.licensing.state import get_snapshot
-
         state = get_or_create_telemetry_state()
         snapshot = get_snapshot()
+
+        # Enterprise heartbeat is a licence-lifecycle signal — nothing to
+        # report without a licence identifier, and unsigned heartbeats
+        # cannot authenticate to the receiver, so skip silently.
+        if not snapshot.license_id:
+            return False
+
+        license_key = _get_configured_license_key()
+        if not license_key:
+            logger.debug("enterprise_heartbeat_skipped_no_license_key")
+            return False
+        heartbeat_secret = hash_key(license_key).encode()
 
         payload = build_heartbeat_payload(
             instance_id=str(state.instance_id),
@@ -112,14 +130,14 @@ def send_heartbeat() -> bool:
 
         url = get_heartbeat_url()
         body = json.dumps(payload, separators=(",", ":")).encode()
-        secret = os.getenv("FUTURE_AGI_ENTERPRISE_HEARTBEAT_SECRET", "")
-        headers = {"Content-Type": "application/json"}
-        if secret:
-            headers["X-FutureAGI-Heartbeat-Signature"] = hmac.new(
-                secret.encode(),
+        headers = {
+            "Content-Type": "application/json",
+            "X-FutureAGI-Heartbeat-Signature": hmac.new(
+                heartbeat_secret,
                 body,
                 hashlib.sha256,
-            ).hexdigest()
+            ).hexdigest(),
+        }
 
         response = httpx.post(
             url,

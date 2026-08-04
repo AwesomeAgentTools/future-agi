@@ -17,7 +17,6 @@ from typing import Optional
 import redis
 import structlog
 from django.conf import settings
-
 from ee.usage.schemas.events import UsageEvent
 from tfc.logging.sentry import capture_message
 
@@ -52,14 +51,12 @@ def emit(event: UsageEvent) -> None:
     global _consumer_started
     if not _consumer_started:
         try:
+            from ee.cloud.temporal.workflows import UsageConsumerWorkflow
             from temporalio.common import WorkflowIDConflictPolicy
-
-            from ee.usage.temporal.workflows import UsageConsumerWorkflow
             from tfc.temporal.common.client import (
                 _run_async_in_sync_context,
                 get_client_sync,
             )
-            from ee.cloud.temporal.workflows import UsageConsumerWorkflow
 
             client = get_client_sync()
             _run_async_in_sync_context(

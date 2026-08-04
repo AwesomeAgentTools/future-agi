@@ -12,13 +12,13 @@ Token lifecycle:
 
 from __future__ import annotations
 
-import hashlib
 import os
 import threading
 import time
 from dataclasses import dataclass
 
 import structlog
+from ee.licensing.validator import hash_key
 
 logger = structlog.get_logger(__name__)
 
@@ -44,10 +44,13 @@ _cached_token: ServiceToken | None = None
 
 
 def get_activation_url() -> str:
-    return os.getenv(
-        "FUTURE_AGI_LICENSE_URL",
-        "https://api.futureagi.com",
-    ).rstrip("/") + "/v1/self-hosted/activations"
+    return (
+        os.getenv(
+            "FUTURE_AGI_LICENSE_URL",
+            "https://api.futureagi.com",
+        ).rstrip("/")
+        + "/v1/self-hosted/activations"
+    )
 
 
 def get_service_token() -> ServiceToken | None:
@@ -85,7 +88,7 @@ def _activate() -> ServiceToken | None:
 
         license_key = _get_configured_license_key()
         if license_key:
-            payload["license_key_hash"] = hashlib.sha256(license_key.encode()).hexdigest()
+            payload["license_key_hash"] = hash_key(license_key)
 
         import httpx
 
@@ -134,7 +137,9 @@ def call_managed_service(
         raise ManagedServiceError("ACTIVATION_FAILED", "Could not obtain service token")
 
     if token.scope == "oss" and not token.access_token:
-        raise ManagedServiceError("NO_ENTERPRISE_LICENSE", "Managed AI requires an Enterprise license")
+        raise ManagedServiceError(
+            "NO_ENTERPRISE_LICENSE", "Managed AI requires an Enterprise license"
+        )
 
     import httpx
 
@@ -152,17 +157,25 @@ def call_managed_service(
     except httpx.TimeoutException:
         raise ManagedServiceError("GATEWAY_TIMEOUT", "Managed AI gateway timed out")
     except httpx.ConnectError:
-        raise ManagedServiceError("GATEWAY_UNREACHABLE", "Cannot reach managed AI gateway")
+        raise ManagedServiceError(
+            "GATEWAY_UNREACHABLE", "Cannot reach managed AI gateway"
+        )
 
     if response.status_code == 401:
         invalidate_token()
-        raise ManagedServiceError("TOKEN_EXPIRED", "Service token rejected — will refresh on next call")
+        raise ManagedServiceError(
+            "TOKEN_EXPIRED", "Service token rejected — will refresh on next call"
+        )
     if response.status_code == 403:
-        raise ManagedServiceError("FEATURE_DENIED", "Feature not included in license scope")
+        raise ManagedServiceError(
+            "FEATURE_DENIED", "Feature not included in license scope"
+        )
     if response.status_code == 429:
         raise ManagedServiceError("RATE_LIMITED", "Managed AI rate limit exceeded")
     if response.status_code >= 500:
-        raise ManagedServiceError("SERVICE_ERROR", f"Managed AI service error ({response.status_code})")
+        raise ManagedServiceError(
+            "SERVICE_ERROR", f"Managed AI service error ({response.status_code})"
+        )
 
     return response.json()
 
@@ -182,5 +195,5 @@ def _get_configured_license_key() -> str:
         if configured:
             return configured
     except Exception:
-        pass
+        logger.debug("activation_client_django_settings_unavailable", exc_info=True)
     return os.getenv("EE_LICENSE_KEY", "")
