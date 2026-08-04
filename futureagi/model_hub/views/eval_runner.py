@@ -236,8 +236,9 @@ def bulk_update_or_create_cells(
         key = (row_id, column_id, dataset_id)
 
         if key in existing_dict:
-            # Update existing cell
             cell = existing_dict[key]
+            if cell.status == CellStatus.PASS.value:
+                continue
             for field, value in new_values.items():
                 setattr(cell, field, value)
             cells_to_update.append(cell)

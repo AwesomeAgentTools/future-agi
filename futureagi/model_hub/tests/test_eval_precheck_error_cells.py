@@ -1,6 +1,5 @@
 """Tests for pre-check failures writing ERROR cells (OSS agent / usage limits)."""
 
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -131,3 +130,38 @@ class TestMarkCellsUsageLimitErrorCreatesMissingCells:
             (c.value_infos or {}).get("error_code") == "ENTITLEMENT_DENIED"
             for c in eval_cells
         )
+
+    def test_completed_cells_are_not_overwritten(self, organization, workspace):
+        from types import SimpleNamespace
+
+        from model_hub.models.develop_dataset import Row
+        from model_hub.tasks.user_evaluation import _mark_cells_usage_limit_error
+
+        uem, eval_col, _reason_col, Cell, CellStatus = self._seed(
+            organization, workspace
+        )
+        rows = list(Row.objects.filter(dataset=uem.dataset))
+        for row in rows:
+            Cell.objects.create(
+                row=row,
+                column=eval_col,
+                dataset=uem.dataset,
+                status=CellStatus.PASS.value,
+                value="real result",
+            )
+
+        _mark_cells_usage_limit_error(
+            uem,
+            SimpleNamespace(
+                error_code="ENTITLEMENT_DENIED",
+                reason="Upgrade plan to unlock",
+                dimension="",
+                current_usage=0,
+                limit=0,
+                upgrade_cta=None,
+            ),
+        )
+
+        for cell in Cell.objects.filter(column_id=eval_col.id, deleted=False):
+            assert cell.status == CellStatus.PASS.value
+            assert cell.value == "real result"
