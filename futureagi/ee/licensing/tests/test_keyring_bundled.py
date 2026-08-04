@@ -1,4 +1,4 @@
-"""Bundled trust-root behavior of the license keyring (TH-7256).
+"""Bundled trust-root behavior of the license keyring.
 
 The bundled keys are the trust root: env/settings keys may only add
 rotation kids and can never replace a bundled kid — otherwise a
@@ -11,7 +11,6 @@ from __future__ import annotations
 from unittest.mock import patch
 
 from django.test import override_settings
-
 from ee.licensing import keyring
 from ee.licensing.keyring import PublicKeyEntry, load_keyring_from_settings
 
@@ -81,9 +80,7 @@ class TestUnlicensedManagedTransport:
     def test_llm_does_not_require_managed_transport_off_ee(self):
         from agentic_eval.core.llm.llm import LLM
 
-        with patch(
-            "ee.usage.deployment.DeploymentMode.is_ee", return_value=False
-        ):
+        with patch("ee.usage.deployment.DeploymentMode.is_ee", return_value=False):
             llm = LLM.__new__(LLM)
             llm.model_name = "turing_large"
             assert llm._requires_managed_transport() is False
@@ -91,9 +88,7 @@ class TestUnlicensedManagedTransport:
     def test_llm_requires_managed_transport_for_managed_model_on_ee(self):
         from agentic_eval.core.llm.llm import LLM
 
-        with patch(
-            "ee.usage.deployment.DeploymentMode.is_ee", return_value=True
-        ):
+        with patch("ee.usage.deployment.DeploymentMode.is_ee", return_value=True):
             llm = LLM.__new__(LLM)
             llm.model_name = "vertex_ai/gemini-2.5-pro"
             # ordinary models never demand the managed transport, even on EE

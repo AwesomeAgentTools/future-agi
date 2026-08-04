@@ -15,10 +15,10 @@ Decision order:
 
 from __future__ import annotations
 
-import structlog
 from dataclasses import dataclass
 from typing import Protocol
 
+import structlog
 from tfc.capabilities.registry import (
     FEATURE_REGISTRY,
     FeatureDefinition,
@@ -141,6 +141,13 @@ def check(
     # 3. Cloud → delegate to cloud plan resolver
     if _deployment_location == DeploymentLocation.CLOUD:
         return _check_cloud(feature, org_id)
+
+    # 3.5 Self-hosted (OSS or EE, any license state): paid features are
+    # cloud-plan products unless explicitly oss_locked — everything else
+    # runs free off-cloud. Only oss_locked features fall through to the
+    # license checks below.
+    if not feature.oss_locked:
+        return CapabilityDecision(allowed=True, feature_id=feature_id)
 
     # 4. EE code not available → deny
     if _deployment_flavor == DeploymentFlavor.OSS:
@@ -267,7 +274,9 @@ def _check_self_hosted_ee(
             feature_id=feature.id,
             reason_code=DenialReason.FEATURE_NOT_IN_GRACE.value,
             license_state=live_state.value,
-            grace_ends_at=snapshot.grace_ends_at.isoformat() if snapshot.grace_ends_at else None,
+            grace_ends_at=(
+                snapshot.grace_ends_at.isoformat() if snapshot.grace_ends_at else None
+            ),
         )
 
     # Network requirement check (informational only — actual enforcement is

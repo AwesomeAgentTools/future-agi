@@ -30,7 +30,6 @@ from typing import Any, Callable, Optional, Union
 from rest_framework import status as drf_status
 from rest_framework.exceptions import APIException
 from temporalio.exceptions import ApplicationError
-
 from tfc.capabilities.registry import PAID_FEATURES
 from tfc.ee_loader import has_ee
 
@@ -183,7 +182,13 @@ def check_ee_feature(
 
     # Legacy fallback for early startup or when capability service isn't wired
     if is_oss():
-        _raise_denied(feature_str, activity=activity)
+        # Mirror the service's two-tier rule: only oss_locked features
+        # deny off-cloud; the rest of the paid set is free self-hosted.
+        from tfc.capabilities.registry import get_feature
+
+        definition = get_feature(feature_str)
+        if definition is None or definition.oss_locked:
+            _raise_denied(feature_str, activity=activity)
         return
 
     try:
@@ -218,9 +223,7 @@ def check_ee_feature(
         cta = None
         reason = None
         try:
-            result = Entitlements.check_feature(
-                str(org_id or ""), f"has_{feature_str}"
-            )
+            result = Entitlements.check_feature(str(org_id or ""), f"has_{feature_str}")
             reason = getattr(result, "reason", None)
             raw_cta = getattr(result, "upgrade_cta", None)
             if raw_cta is not None:
@@ -294,14 +297,18 @@ def check_ee_can_create(
 ) -> None:
     """Limit-based counterpart to `check_ee_feature` for `EEResource` keys.
 
-    No ee present → raises FeatureUnavailable.
-    EE/Cloud → calls `Entitlements.can_create(org_id, resource, count)` and
-    raises FeatureUnavailable if `allowed=False`. Threads `upgrade_cta`
-    through so Cloud users see their targeted upsell.
+    Count limits are a cloud-plan concept: self-hosted deployments (OSS or
+    EE) are uncapped — there is no billing to enforce against. Cloud calls
+    `Entitlements.can_create(org_id, resource, count)` and raises
+    FeatureUnavailable if `allowed=False`, threading `upgrade_cta` through
+    so Cloud users see their targeted upsell.
     """
     resource_str = resource.value if isinstance(resource, EEResource) else resource
-    if is_oss():
-        _raise_denied(resource_str, activity=False)
+    try:
+        from ee.usage.deployment import DeploymentMode
+    except ImportError:
+        return  # no ee code at all → self-hosted OSS → uncapped
+    if not DeploymentMode.is_cloud():
         return
     if not org_id:
         raise FeatureUnavailable(

@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
 import structlog
+from accounts.models.user import User
 from django.conf import settings
 from django.db import transaction
 from django.db.models import (
@@ -22,12 +23,6 @@ from django.db.models import (
 from django.db.models.functions import Coalesce, Lower, TruncDate
 from django.utils import timezone
 from drf_yasg.utils import swagger_auto_schema
-from rest_framework import serializers, status, viewsets
-from rest_framework.decorators import action
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.response import Response
-
-from accounts.models.user import User
 from model_hub.models.annotation_queues import (
     FULL_ACCESS_QUEUE_ROLES,
     SOURCE_TYPE_FK_MAP,
@@ -141,6 +136,10 @@ from model_hub.utils.annotation_queue_helpers import (
     resolve_source_objects_bulk,
 )
 from model_hub.utils.utils import send_message_to_channel
+from rest_framework import serializers, status, viewsets
+from rest_framework.decorators import action
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
 from simulate.models.test_execution import CallTranscript
 from simulate.utils.stored_transcript_roles import get_displayable_transcript_roles
 from tfc.utils.api_contracts import validated_request
@@ -2661,7 +2660,6 @@ def _restore_archived_default_queue(queue):
     (hourly/daily/etc) so the user sees a smooth ramp-back-up.
     """
     from django.utils import timezone as tz
-
     from model_hub.models.annotation_queues import AutomationRule
 
     queue.deleted = False
@@ -3877,7 +3875,10 @@ class AnnotationQueueViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelVie
                 Entitlements = None
 
             org = getattr(request, "organization", None) or request.user.organization
-            if Entitlements is not None:
+            from ee.usage.deployment import DeploymentMode
+
+            # Plan entitlements are a cloud concept; self-hosted runs free.
+            if Entitlements is not None and DeploymentMode.is_cloud():
                 feat_check = Entitlements.check_feature(
                     str(org.id), "has_agreement_metrics"
                 )
@@ -7822,7 +7823,6 @@ class AutomationRuleViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelView
         # row and ``QueueItem`` unique constraints make the bulk_create
         # idempotent.
         from temporalio.exceptions import WorkflowAlreadyStartedError
-
         from tfc.temporal.drop_in.runner import start_activity_sync
 
         task_id = f"automation-rule-eval-{rule.pk}"

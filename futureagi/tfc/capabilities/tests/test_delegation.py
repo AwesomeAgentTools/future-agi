@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
-
 from tfc.capabilities import service
 from tfc.ee_gating import EEFeature, FeatureUnavailable, check_ee_feature
 from tfc.licensing.types import (
@@ -58,7 +57,7 @@ class TestDelegation:
 
     def test_excluded_feature_raises(self):
         with pytest.raises(FeatureUnavailable):
-            check_ee_feature(EEFeature.SCIM, org_id="org_1")
+            check_ee_feature(EEFeature.PROTECT, org_id="org_1")
 
     def test_oss_baseline_always_passes(self):
         check_ee_feature("knowledge_base", org_id="org_1")
@@ -68,7 +67,7 @@ class TestDelegation:
         from temporalio.exceptions import ApplicationError
 
         with pytest.raises(ApplicationError) as exc_info:
-            check_ee_feature(EEFeature.SCIM, org_id="org_1", activity=True)
+            check_ee_feature(EEFeature.PROTECT, org_id="org_1", activity=True)
         assert exc_info.value.non_retryable is True
 
     def test_unknown_feature_passes_through(self):

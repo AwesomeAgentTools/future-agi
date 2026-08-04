@@ -3,6 +3,7 @@ import re
 import traceback
 import uuid
 
+from accounts.models.user import User
 from django.db import close_old_connections, models, transaction
 from django.db.models import Count, Max, OuterRef, Q, Subquery
 from django.http import Http404
@@ -13,8 +14,6 @@ from rest_framework.exceptions import NotFound
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-
-from accounts.models.user import User
 from tfc.ee_stub import _ee_stub
 
 try:
@@ -45,7 +44,6 @@ try:
 except ImportError:
     get_personas_by_language = None
 from drf_yasg.utils import swagger_auto_schema
-
 from simulate.models import AgentDefinition, AgentVersion, Persona, Scenarios
 from simulate.models.scenario_graph import ScenarioGraph
 from simulate.models.simulator_agent import SimulatorAgent
@@ -1165,7 +1163,10 @@ class AddScenarioColumnsView(APIView):
                 except ImportError:
                     Entitlements = None
 
-                if Entitlements is not None:
+                from ee.usage.deployment import DeploymentMode
+
+                # Plan entitlements are a cloud concept; self-hosted runs free.
+                if Entitlements is not None and DeploymentMode.is_cloud():
                     org = _request_organization(request)
                     feat_check = Entitlements.check_feature(
                         str(org.id), "has_agentic_eval"

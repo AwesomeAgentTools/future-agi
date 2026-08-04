@@ -9,9 +9,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
-
 from tfc.capabilities import service
-from tfc.capabilities.registry import PAID_FEATURES
+from tfc.capabilities.registry import OSS_LOCKED_FEATURES, PAID_FEATURES
 from tfc.ee_gating import FeatureUnavailable, check_ee_feature
 from tfc.licensing.types import (
     DeploymentFlavor,
@@ -31,6 +30,10 @@ class _FakeResolver:
 
 
 ALL_PAID = sorted(PAID_FEATURES)
+# Two-tier gating: only oss_locked features need a license off-cloud; the
+# rest of the paid set is free on self-hosted deployments.
+LOCKED = sorted(OSS_LOCKED_FEATURES)
+UNLOCKED = sorted(PAID_FEATURES - OSS_LOCKED_FEATURES)
 
 
 @pytest.fixture()
@@ -100,11 +103,15 @@ def ee_expired():
     service._configured = False
 
 
-class TestOSSImageDeniesAllPaidFeatures:
-    @pytest.mark.parametrize("feature_id", ALL_PAID)
-    def test_paid_feature_denied(self, oss_deployment, feature_id):
+class TestOSSImageDeniesLockedFeatures:
+    @pytest.mark.parametrize("feature_id", LOCKED)
+    def test_locked_feature_denied(self, oss_deployment, feature_id):
         with pytest.raises(FeatureUnavailable):
             check_ee_feature(feature_id, org_id="org_1")
+
+    @pytest.mark.parametrize("feature_id", UNLOCKED)
+    def test_unlocked_feature_allowed(self, oss_deployment, feature_id):
+        check_ee_feature(feature_id, org_id="org_1")
 
 
 class TestActiveAllFeaturesIncluded:
@@ -114,14 +121,26 @@ class TestActiveAllFeaturesIncluded:
 
 
 class TestActiveNoFeaturesIncluded:
-    @pytest.mark.parametrize("feature_id", ALL_PAID)
-    def test_paid_feature_denied_when_excluded(self, ee_active_no_features, feature_id):
+    @pytest.mark.parametrize("feature_id", LOCKED)
+    def test_locked_feature_denied_when_excluded(
+        self, ee_active_no_features, feature_id
+    ):
         with pytest.raises(FeatureUnavailable):
             check_ee_feature(feature_id, org_id="org_1")
 
+    @pytest.mark.parametrize("feature_id", UNLOCKED)
+    def test_unlocked_feature_allowed_when_excluded(
+        self, ee_active_no_features, feature_id
+    ):
+        check_ee_feature(feature_id, org_id="org_1")
 
-class TestExpiredDeniesAllPaidFeatures:
-    @pytest.mark.parametrize("feature_id", ALL_PAID)
-    def test_paid_feature_denied_when_expired(self, ee_expired, feature_id):
+
+class TestExpiredDeniesLockedFeatures:
+    @pytest.mark.parametrize("feature_id", LOCKED)
+    def test_locked_feature_denied_when_expired(self, ee_expired, feature_id):
         with pytest.raises(FeatureUnavailable):
             check_ee_feature(feature_id, org_id="org_1")
+
+    @pytest.mark.parametrize("feature_id", UNLOCKED)
+    def test_unlocked_feature_allowed_when_expired(self, ee_expired, feature_id):
+        check_ee_feature(feature_id, org_id="org_1")

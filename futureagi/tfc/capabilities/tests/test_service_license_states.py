@@ -9,7 +9,6 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
-
 from tfc.capabilities import service
 from tfc.capabilities.errors import CapabilityDenied
 from tfc.licensing.types import (
@@ -39,7 +38,8 @@ def _make_active_snapshot(features: frozenset[str] | None = None) -> LicenseSnap
         customer_id="cus_test_001",
         issued_to="Test Corp",
         band="business",
-        features=features or frozenset({"voice_sim", "agentic_eval", "falcon_ai", "turing_models"}),
+        features=features
+        or frozenset({"voice_sim", "agentic_eval", "falcon_ai", "turing_models"}),
         limits={"traces_monthly": 1_000_000, "gateway_requests_monthly": 500_000},
         max_instances=3,
         issued_at=now - timedelta(days=180),
@@ -71,7 +71,7 @@ class TestActiveLicense:
         assert decision.license_state == "active"
 
     def test_excluded_feature_denied(self, active_license):
-        decision = service.check("scim")
+        decision = service.check("protect")
         assert decision.allowed is False
         assert decision.reason_code == DenialReason.LICENSE_FEATURE_MISSING.value
 
@@ -117,7 +117,7 @@ class TestGraceLicense:
         assert decision.license_state == "grace"
 
     def test_grace_denies_excluded_feature(self):
-        decision = service.check("scim")
+        decision = service.check("protect")
         assert decision.allowed is False
         assert decision.reason_code == DenialReason.LICENSE_FEATURE_MISSING.value
 
@@ -190,7 +190,7 @@ class TestTrialActive:
         assert decision.license_state == "trial_active"
 
     def test_trial_denies_excluded_feature(self):
-        decision = service.check("scim")
+        decision = service.check("protect")
         assert decision.allowed is False
 
 
@@ -338,9 +338,9 @@ class TestCloudResolverFailure:
 class TestCheckOrRaise:
     def test_raises_capability_denied_on_denial(self, active_license):
         with pytest.raises(CapabilityDenied) as exc_info:
-            service.check_or_raise("scim")
+            service.check_or_raise("protect")
         assert exc_info.value.reason_code == DenialReason.LICENSE_FEATURE_MISSING.value
-        assert exc_info.value.feature_id == "scim"
+        assert exc_info.value.feature_id == "protect"
 
     def test_returns_decision_on_allow(self, active_license):
         decision = service.check_or_raise("voice_sim")
@@ -350,5 +350,5 @@ class TestCheckOrRaise:
         from temporalio.exceptions import ApplicationError
 
         with pytest.raises(ApplicationError) as exc_info:
-            service.check_or_raise("scim", activity=True)
+            service.check_or_raise("protect", activity=True)
         assert exc_info.value.non_retryable is True

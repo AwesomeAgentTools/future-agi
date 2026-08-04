@@ -1,4 +1,4 @@
-"""Error-feed license gating + opened-gate regressions (TH-7256).
+"""Error-feed license gating + opened-gate regressions.
 
 Error feed is the license-reserved feature: the code is public, but the
 API denies (HTTP 402) without an entitlement. Scenarios, optimization
@@ -8,11 +8,9 @@ added to them must stay out.
 
 from __future__ import annotations
 
-import pathlib
 from datetime import UTC, datetime
 
 import pytest
-
 from tfc.capabilities import service
 from tfc.ee_gating import EEFeature, FeatureUnavailable, check_ee_feature
 from tfc.licensing.types import (
@@ -23,8 +21,6 @@ from tfc.licensing.types import (
     LicenseType,
 )
 from tracer.views.feed._permissions import ErrorFeedLicenseRequired
-
-_REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 
 
 class _FakeResolver:
@@ -128,7 +124,7 @@ class TestErrorFeedGate:
 
 
 class TestOpenedGates:
-    """The licensing PR gated surfaces that ship open (TH-7256)."""
+    """The licensing PR gated surfaces that ship open."""
 
     def test_scenarios_open_on_oss(self):
         _configure_oss()
@@ -138,18 +134,66 @@ class TestOpenedGates:
         _configure_ee(_snapshot(LicenseState.EXPIRED, frozenset()))
         check_ee_feature(EEFeature.SCENARIOS, org_id="org_1")  # must not raise
 
+
+class TestTwoTierGating:
+    """Paid features are cloud-plan products; only oss_locked features
+    require a license off-cloud."""
+
     @pytest.mark.parametrize(
-        "relative",
-        [
-            "model_hub/views/develop_optimisation.py",
-            "model_hub/views/tts_voices.py",
-            "tfc/temporal/dataset_optimization/activities.py",
-        ],
+        "feature", ["optimization", "scim", "custom_roles", "synthetic_data"]
     )
-    def test_reopened_modules_carry_no_view_gates(self, relative):
-        """These endpoints are ungated in production; the PR-added
-        check_ee_feature calls must not come back."""
-        source = (_REPO_ROOT / relative).read_text()
-        assert (
-            "check_ee_feature" not in source
-        ), f"{relative} regained a license gate; it ships open (TH-7256)"
+    def test_unlocked_paid_features_open_on_oss(self, feature):
+        _configure_oss()
+        check_ee_feature(feature, org_id="org_1")  # must not raise
+
+    @pytest.mark.parametrize("feature", ["optimization", "agentic_eval"])
+    def test_unlocked_paid_features_open_on_unlicensed_ee(self, feature):
+        _configure_ee(_snapshot(LicenseState.EXPIRED, frozenset()))
+        check_ee_feature(feature, org_id="org_1")  # must not raise
+
+    @pytest.mark.parametrize(
+        "feature", ["turing_models", "falcon_ai", "protect", "voice_sim"]
+    )
+    def test_locked_features_deny_on_oss(self, feature):
+        _configure_oss()
+        with pytest.raises(FeatureUnavailable):
+            check_ee_feature(feature, org_id="org_1")
+
+    def test_locked_set_is_exactly_the_reserved_five(self):
+        from tfc.capabilities.registry import OSS_LOCKED_FEATURES, PAID_FEATURES
+
+        assert OSS_LOCKED_FEATURES == frozenset(
+            {"falcon_ai", "turing_models", "protect", "voice_sim", "error_feed"}
+        )
+        assert OSS_LOCKED_FEATURES <= PAID_FEATURES
+
+
+class TestCanCreateSelfHostedUncapped:
+    """Count limits are a cloud-plan concept; self-hosted is uncapped."""
+
+    def test_self_hosted_allows_over_any_limit(self):
+        from tfc.ee_gating import check_ee_can_create
+
+        # test env is self-hosted (no cloud secret) → no raise at any count
+        check_ee_can_create("monitors", org_id="org_1", current_count=10_000)
+
+    def test_cloud_still_enforces_limits(self):
+        from unittest.mock import patch
+
+        from tfc.ee_gating import check_ee_can_create
+
+        class _Deny:
+            allowed = False
+            reason = "limit reached"
+            upgrade_cta = None
+            error_code = "ENTITLEMENT_DENIED"
+
+        with (
+            patch("ee.usage.deployment.DeploymentMode.is_cloud", return_value=True),
+            patch(
+                "ee.usage.services.entitlements.Entitlements.can_create",
+                return_value=_Deny(),
+            ),
+        ):
+            with pytest.raises(FeatureUnavailable):
+                check_ee_can_create("monitors", org_id="org_1", current_count=3)

@@ -27,7 +27,12 @@ class FeatureDefinition:
     display_name: str
     oss_baseline: bool
     requires_license: bool
-    execution_location: ExecutionLocation
+    # Two-tier gating: requires_license=True features are cloud-plan products
+    # by default and run FREE on self-hosted deployments (OSS or EE, any
+    # license state). Setting oss_locked=True additionally requires a valid
+    # license off-cloud — reserved for managed compute and the error feed.
+    oss_locked: bool = False
+    execution_location: ExecutionLocation = ExecutionLocation.LOCAL
     required_service: str | None = None
     metering_dimension: str | None = None
     air_gap_behavior: AirGapBehavior = AirGapBehavior.AVAILABLE
@@ -75,6 +80,7 @@ FEATURE_GATEWAY_REQUESTS = FeatureDefinition(
 
 FEATURE_FALCON_AI = FeatureDefinition(
     id="falcon_ai",
+    oss_locked=True,
     display_name="Falcon AI",
     oss_baseline=False,
     requires_license=True,
@@ -86,6 +92,7 @@ FEATURE_FALCON_AI = FeatureDefinition(
 
 FEATURE_TURING_MODELS = FeatureDefinition(
     id="turing_models",
+    oss_locked=True,
     display_name="Turing Models",
     oss_baseline=False,
     requires_license=True,
@@ -97,6 +104,7 @@ FEATURE_TURING_MODELS = FeatureDefinition(
 
 FEATURE_PROTECT = FeatureDefinition(
     id="protect",
+    oss_locked=True,
     display_name="Protect",
     oss_baseline=False,
     requires_license=True,
@@ -108,6 +116,7 @@ FEATURE_PROTECT = FeatureDefinition(
 
 FEATURE_VOICE_SIM = FeatureDefinition(
     id="voice_sim",
+    oss_locked=True,
     display_name="Voice Simulation",
     oss_baseline=False,
     requires_license=True,
@@ -136,16 +145,14 @@ FEATURE_SYNTHETIC_DATA = FeatureDefinition(
 FEATURE_SCENARIOS = FeatureDefinition(
     id="scenarios",
     display_name="Scenarios",
-    # Open (TH-7256): scenarios were never license-gated in production —
-    # generation runs on the deployment's own provider credentials. Managed
-    # models used inside scenario flows still gate via falcon/turing.
-    oss_baseline=True,
-    requires_license=False,
+    oss_baseline=False,
+    requires_license=True,
     execution_location=ExecutionLocation.LOCAL,
 )
 
 FEATURE_ERROR_FEED = FeatureDefinition(
     id="error_feed",
+    oss_locked=True,
     display_name="Error Feed",
     oss_baseline=False,
     requires_license=True,
@@ -287,6 +294,12 @@ OSS_BASELINE_FEATURES: frozenset[str] = frozenset(
 
 PAID_FEATURES: frozenset[str] = frozenset(
     f.id for f in _ALL_FEATURES if f.requires_license
+)
+
+# Paid features that stay license-gated even off-cloud (managed compute +
+# the error feed). Everything else in PAID_FEATURES is free on self-hosted.
+OSS_LOCKED_FEATURES: frozenset[str] = frozenset(
+    f.id for f in _ALL_FEATURES if f.oss_locked
 )
 
 MANAGED_SERVICE_FEATURES: frozenset[str] = frozenset(

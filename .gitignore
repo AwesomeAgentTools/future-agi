@@ -221,7 +221,7 @@ plan/
 planning/
 scratch/
 
-# EE lives in-tree at futureagi/ee (TH-7256). Only the private cloud/billing
+# EE lives in-tree at futureagi/ee. Only the private cloud/billing
 # overlay pieces stay out of the public monorepo — never commit these:
 futureagi/ee/cloud/
 futureagi/ee/billing.yaml

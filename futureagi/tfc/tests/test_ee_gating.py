@@ -16,7 +16,6 @@ from unittest.mock import patch
 
 import pytest
 from rest_framework import status as drf_status
-
 from tfc.capabilities.registry import PAID_FEATURES
 from tfc.ee_gating import (
     EE_FEATURES_OSS,
@@ -29,7 +28,6 @@ from tfc.ee_gating import (
     require_ee_feature,
 )
 from tfc.ee_loader import has_ee
-
 
 # ── FeatureUnavailable ────────────────────────────────────────────────────
 
@@ -137,17 +135,30 @@ class TestCheckEEFeature:
     def setup_method(self):
         is_oss.cache_clear()
 
-    def test_oss_denies(self):
-        with patch("tfc.ee_gating.is_oss", return_value=True):
+    def test_oss_denies_locked_feature(self):
+        with (
+            patch("tfc.ee_gating._try_capability_service", return_value=False),
+            patch("tfc.ee_gating.is_oss", return_value=True),
+        ):
             with pytest.raises(FeatureUnavailable) as exc_info:
-                check_ee_feature(EEFeature.SCIM)
-            assert exc_info.value.feature == "scim"
+                check_ee_feature(EEFeature.PROTECT)
+            assert exc_info.value.feature == "protect"
+
+    def test_oss_allows_unlocked_paid_feature(self):
+        with (
+            patch("tfc.ee_gating._try_capability_service", return_value=False),
+            patch("tfc.ee_gating.is_oss", return_value=True),
+        ):
+            check_ee_feature(EEFeature.SCIM)  # unlocked → free off-cloud
 
     def test_oss_denies_with_activity_flag(self):
         """activity=True must raise a Temporal ApplicationError (non-retryable)."""
         from temporalio.exceptions import ApplicationError
 
-        with patch("tfc.ee_gating.is_oss", return_value=True):
+        with (
+            patch("tfc.ee_gating._try_capability_service", return_value=False),
+            patch("tfc.ee_gating.is_oss", return_value=True),
+        ):
             with pytest.raises(ApplicationError) as exc_info:
                 check_ee_feature(EEFeature.VOICE_SIM, activity=True)
             assert exc_info.value.non_retryable is True
@@ -155,6 +166,7 @@ class TestCheckEEFeature:
 
     def test_non_oss_without_org_id_uses_global_license(self):
         with (
+            patch("tfc.ee_gating._try_capability_service", return_value=False),
             patch("tfc.ee_gating.is_oss", return_value=False),
             patch("ee.usage.deployment.DeploymentMode.is_cloud", return_value=False),
             patch(
@@ -202,7 +214,7 @@ class TestCheckEEFeature:
     def test_entitlement_import_failure_denies(self):
         with (
             patch("tfc.ee_gating._try_capability_service", return_value=False),
-            patch("tfc.ee_gating.is_oss", return_value=False),
+            patch("ee.usage.deployment.DeploymentMode.is_cloud", return_value=True),
             patch.dict(
                 sys.modules,
                 {"ee.usage.services.entitlements": None},
@@ -236,9 +248,7 @@ class TestRaiseDeniedLogs:
         with pytest.raises(FeatureUnavailable):
             _raise_denied("knowledge_base", activity=False)
 
-        matches = [
-            r for r in caplog.records if r.message == "ee_feature_denied"
-        ]
+        matches = [r for r in caplog.records if r.message == "ee_feature_denied"]
         assert matches, "expected ee_feature_denied log record"
         assert matches[0].feature == "knowledge_base"
         assert matches[0].activity is False
@@ -249,11 +259,14 @@ class TestRequireEEFeatureDecorator:
         is_oss.cache_clear()
 
     def test_sync_fn_denied_in_oss(self):
-        @require_ee_feature(EEFeature.OPTIMIZATION)
+        @require_ee_feature(EEFeature.ERROR_FEED)
         def endpoint():
             return "ok"
 
-        with patch("tfc.ee_gating.is_oss", return_value=True):
+        with (
+            patch("tfc.ee_gating._try_capability_service", return_value=False),
+            patch("tfc.ee_gating.is_oss", return_value=True),
+        ):
             with pytest.raises(FeatureUnavailable):
                 endpoint()
 
@@ -280,7 +293,6 @@ class TestEEStub:
 
     def test_ee_activity_stub_raises_application_error(self):
         from temporalio.exceptions import ApplicationError
-
         from tfc.ee_stub import _ee_activity_stub
 
         Stub = _ee_activity_stub("FakeActivity")
@@ -317,15 +329,14 @@ class TestCheckEECanCreate:
     def setup_method(self):
         is_oss.cache_clear()
 
-    def test_oss_denies(self):
-        with patch("tfc.ee_gating.is_oss", return_value=True):
-            with pytest.raises(FeatureUnavailable):
-                check_ee_can_create(
-                    EEResource.GATEWAY_WEBHOOKS, org_id="org-1", current_count=0
-                )
+    def test_self_hosted_uncapped(self):
+        with patch("ee.usage.deployment.DeploymentMode.is_cloud", return_value=False):
+            check_ee_can_create(
+                EEResource.GATEWAY_WEBHOOKS, org_id="org-1", current_count=10_000
+            )  # count limits are cloud-only — must not raise
 
     def test_missing_org_id_denies(self):
-        with patch("tfc.ee_gating.is_oss", return_value=False):
+        with patch("ee.usage.deployment.DeploymentMode.is_cloud", return_value=True):
             with pytest.raises(FeatureUnavailable):
                 check_ee_can_create(
                     EEResource.GATEWAY_WEBHOOKS,
@@ -335,7 +346,7 @@ class TestCheckEECanCreate:
 
     def test_entitlement_import_failure_denies(self):
         with (
-            patch("tfc.ee_gating.is_oss", return_value=False),
+            patch("ee.usage.deployment.DeploymentMode.is_cloud", return_value=True),
             patch.dict(
                 sys.modules,
                 {"ee.usage.services.entitlements": None},
@@ -350,7 +361,7 @@ class TestCheckEECanCreate:
 
     def test_entitlement_resolver_failure_denies(self):
         with (
-            patch("tfc.ee_gating.is_oss", return_value=False),
+            patch("ee.usage.deployment.DeploymentMode.is_cloud", return_value=True),
             patch(
                 "ee.usage.services.entitlements.Entitlements.can_create",
                 side_effect=RuntimeError("resolver unavailable"),
@@ -365,7 +376,7 @@ class TestCheckEECanCreate:
 
     def test_missing_allowed_result_denies(self):
         with (
-            patch("tfc.ee_gating.is_oss", return_value=False),
+            patch("ee.usage.deployment.DeploymentMode.is_cloud", return_value=True),
             patch(
                 "ee.usage.services.entitlements.Entitlements.can_create",
                 return_value=SimpleNamespace(),
@@ -389,7 +400,7 @@ class TestCheckEECanCreate:
         )
 
         with (
-            patch("tfc.ee_gating.is_oss", return_value=False),
+            patch("ee.usage.deployment.DeploymentMode.is_cloud", return_value=True),
             patch(
                 "ee.usage.services.entitlements.Entitlements.can_create",
                 return_value=result,
