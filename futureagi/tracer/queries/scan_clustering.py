@@ -415,17 +415,30 @@ def _cosine_distance(a: List[float], b: List[float]) -> float:
     return 1.0 - dot / (na * nb)
 
 
-def _retitle_from_members(cluster, centroid: List[float]) -> None:
-    """Rename a cluster after its MEDOID — the member nearest the centroid.
+def _retitle_from_members(cluster) -> None:
+    """Rename a cluster after its MEDOID — the member nearest the members' mean.
 
     First-arrival titling has no relationship to what a cluster contains; the
     medoid is the most typical member by construction, so the title describes the
     group rather than an accident of ordering. Best-effort: any failure leaves
     the existing title alone, since a stale title beats a broken assignment.
+
+    The mean is computed HERE, over these raw briefs, rather than taken from the
+    stored centroid. The centroid is built from ``embedding_text``, which is the
+    DISTILLED phrase; measuring a raw brief against it compares two different
+    embedding spaces and the resulting "nearest" member is near-arbitrary. The
+    title has to read like something a person wrote, so it must come from a raw
+    brief — which means the distance that selects it has to be computed among
+    raw briefs too.
     """
+    # Ordered, because two things downstream depend on it and neither is
+    # allowed to vary between runs: ties in the medoid distance are broken by
+    # position, and the title generator samples this list evenly to cover the
+    # whole group. An unordered read makes a cluster's title a coin flip.
     briefs = list(
         TraceScanIssue.objects.filter(cluster=cluster)
         .exclude(brief="")
+        .order_by("created_at", "id")
         .values_list("brief", flat=True)
     )
     if len(briefs) < 2:
@@ -435,6 +448,9 @@ def _retitle_from_members(cluster, centroid: List[float]) -> None:
     except Exception:
         logger.warning("retitle_embed_failed", cluster_id=cluster.cluster_id)
         return
+
+    dim = len(vectors[0])
+    centroid = [sum(v[i] for v in vectors) / len(vectors) for i in range(dim)]
 
     best_brief, best_distance = None, None
     for brief, vector in zip(briefs, vectors):
@@ -637,7 +653,7 @@ def assign_to_cluster(
     if unique in _RETITLE_AT:
         try:
             previous_title = cluster.title
-            _retitle_from_members(cluster, new_centroid)
+            _retitle_from_members(cluster)
             # Severity reads the refreshed title, so it must run after it —
             # but ONLY when one of its two inputs actually moved.
             #
