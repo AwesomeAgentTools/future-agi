@@ -612,14 +612,29 @@ def assign_to_cluster(
     # Incrementally update centroid in ClickHouse
     db = ClickHouseVectorDB()
     try:
+        # Same ReplacingMergeTree hazard ``find_nearest_cluster`` documents above, on
+        # the write side: this function INSERTs a new row per member, so every
+        # historical version of a centroid coexists until a background merge. A bare
+        # ``LIMIT 1`` therefore reads an arbitrary version — and because
+        # ``member_count`` is the weight in ``_update_centroid``, a stale count does
+        # not merely skip an update, it mis-weights every later one.
+        #
+        # argMax needs no schema change and no FINAL. The key is a tuple because
+        # ``last_updated`` is second-granularity and two members joining one cluster
+        # inside the same second are otherwise unordered; ``member_count`` grows
+        # monotonically, so it orders them correctly. GROUP BY is load-bearing: an
+        # aggregate without it always returns one row, so a cluster with no stored
+        # centroid would come back as empty defaults instead of no rows.
         rows = db.client.execute(
             f"""
-            SELECT centroid, member_count
+            SELECT
+                argMax(centroid, (last_updated, member_count)),
+                argMax(member_count, (last_updated, member_count))
             FROM {CENTROIDS_TABLE}
-            WHERE cluster_id = %(cluster_id)s
-            LIMIT 1
+            WHERE project_id = %(project_id)s AND cluster_id = %(cluster_id)s
+            GROUP BY cluster_id
             """,
-            {"cluster_id": cluster_id},
+            {"project_id": project_id, "cluster_id": cluster_id},
         )
 
         if rows:
