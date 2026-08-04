@@ -310,15 +310,10 @@ class TraceScanner:
         }
         issues = []
         for dim in failed:
-            item = briefs.get(dim) or {}
-            # Prefer the model's own subcategory so the full taxonomy stays reachable.
-            # DIMENSION_TO_SUBCATEGORY alone can only ever emit 5 of the 20 subcategories,
-            # which silently retires the whole Infrastructure group and the Guardrails fix
-            # layer — invisible to a binary has_issues eval, visible to every user.
-            cat = str(item.get("cat") or "").strip()
-            subcat = cat if cat in VALID_SUBCATEGORIES else DIMENSION_TO_SUBCATEGORY.get(dim)
+            subcat = DIMENSION_TO_SUBCATEGORY.get(dim)
             if not subcat:
                 continue
+            item = briefs.get(dim) or {}
             issues.append({
                 "cat": subcat,
                 "conf": item.get("conf", "M"),
