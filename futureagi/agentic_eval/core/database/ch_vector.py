@@ -241,9 +241,8 @@ class ClickHouseVectorDB:
         convention so two replicated tables with the same short name in
         different databases do not coordinate on the same znode.
 
-        `keeper_table_name` is reserved for a verified table conversion: the
-        physical candidate table can use a temporary name while retaining the
-        canonical Keeper path after an atomic name exchange.
+        `keeper_table_name` overrides the Keeper path component (default: the
+        table name), so the conversion swap can keep the canonical path.
         """
         clustered = self._is_clustered()
         cluster_name = cluster or get_clickhouse_cluster_name()

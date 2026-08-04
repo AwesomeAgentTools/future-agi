@@ -1,42 +1,15 @@
-"""
-Convert a CH vector table (``syn`` / ``feedbacks``) from a
-plain, non-replicated engine to ``ReplicatedReplacingMergeTree`` IN PLACE,
-inside the single ``default`` database, without losing data.
+"""Convert a plain CH vector table (``syn`` / ``feedbacks``) to
+``ReplicatedReplacingMergeTree`` in place, without losing data.
 
-This command does not touch content sources or write to an already replicated
-table. It fixes the ENGINE of a table
-whose rows already exist but are split across replicas because a plain
-``MergeTree`` never replicated them. On a multi-replica cluster a plain engine
-means each replica holds its own slice (e.g. 2 / 3 / 0 rows), and a query is
-non-deterministic depending on which replica answers. This command gathers the
-UNION of rows across every replica and lands them in a properly replicated
-table, so all replicas converge on the full set.
+On a multi-replica cluster a plain engine leaves each replica holding its own
+slice (e.g. 2 / 3 / 0 rows), so reads are non-deterministic. This reads the
+union of rows across every replica (deduped by ``id``) into a replicated temp
+table, verifies per-replica parity, then swaps it in atomically and keeps the
+old plain data as ``<table>__plain_backup`` for rollback.
 
-It cannot be done with ``migrate_ch_vector_tables`` here: that command requires
-``source_db != target_db`` (it copies db-to-db), and we must stay in the single
-``default`` database with no new database.
-
-How it is safe:
-  - ``--dry-run`` is the DEFAULT. Nothing changes without ``--execute``.
-  - Reads the UNION via ``clusterAllReplicas`` first, so no replica's slice is
-    lost. Deduped by ``id`` with ``LIMIT 1 BY id``.
-  - Builds the replicated copy in a temp table and verifies per-replica parity
-    BEFORE any swap. If it does not converge, it aborts and leaves the temp
-    table for inspection; the live table is untouched.
-  - The cutover is an atomic ``EXCHANGE TABLES ... ON CLUSTER``. The old plain
-    data is preserved as ``<table>__plain_backup`` (never auto-dropped), so the
-    swap is reversible.
-  - No-op if the table is absent or already Replicated, or on a single node
-    (plain is correct there).
-
-Usage:
-    # Run once for each live vector table. Already-replicated tables are no-ops.
-    python manage.py convert_vector_table_to_replicated --table syn
-    python manage.py convert_vector_table_to_replicated --table feedbacks
-    # After a write freeze, execute only the table(s) reported as plain.
-    python manage.py convert_vector_table_to_replicated --table feedbacks --execute
-    # after verifying, optionally:
-    # DROP TABLE default.feedbacks__plain_backup ON CLUSTER '<cluster>' SYNC;
+Runs by default; ``--dry-run`` previews the plan. Executing requires
+``--write-freeze-confirmed``. No-op if the table is absent, already
+Replicated, or on a single node.
 """
 
 from __future__ import annotations
@@ -119,13 +92,12 @@ class Command(BaseCommand):
         parser.add_argument("--database", default=os.getenv("CH_DATABASE") or "default")
         parser.add_argument("--cluster", default=get_clickhouse_cluster_name())
         parser.add_argument(
-            "--execute", action="store_true",
-            help="Actually convert. Omit for a dry run (the default).",
+            "--dry-run", action="store_true",
+            help="Print the plan without changing anything.",
         )
-        parser.add_argument("--dry-run", action="store_true", help="Explicit dry-run alias.")
         parser.add_argument(
             "--write-freeze-confirmed", action="store_true",
-            help="Required with --execute after relevant vector writers are stopped.",
+            help="Required to convert, after relevant vector writers are stopped.",
         )
 
     def handle(self, *args, **opts):
@@ -134,11 +106,7 @@ class Command(BaseCommand):
             raise CommandError(f"--table must be one of {KNOWN_TABLES}, got {table!r}")
         database = require_identifier(opts["database"], "--database")
         cluster = require_identifier(opts["cluster"], "--cluster")
-        if opts["execute"] and opts["dry_run"]:
-            raise CommandError("--execute and --dry-run cannot be combined")
-        execute = opts["execute"]
-        if execute and not opts["write_freeze_confirmed"]:
-            raise CommandError("--execute requires --write-freeze-confirmed")
+        dry_run = opts["dry_run"]
 
         db = ClickHouseVectorDB()
         client = db.client
@@ -193,7 +161,7 @@ class Command(BaseCommand):
         self.stdout.write(f"  union distinct ids:          {union_count}")
         self.stdout.write(f"  expected replicas:           {expected_replicas}")
 
-        if not execute:
+        if dry_run:
             self.stdout.write(
                 "\nDRY-RUN. Would, in order:\n"
                 f"  1. CREATE {database}.{tmp} as ReplicatedReplacingMergeTree ON CLUSTER\n"
@@ -201,9 +169,15 @@ class Command(BaseCommand):
                 f"  3. verify parity ({union_count} on each of {expected_replicas} replicas)\n"
                 f"  4. EXCHANGE TABLES {database}.{table} <-> {database}.{tmp} ON CLUSTER\n"
                 f"  5. RENAME the old plain table to {database}.{backup} (kept for rollback)\n"
-                "Re-run with --execute to perform it."
+                "Re-run without --dry-run to perform it."
             )
             return
+
+        if not opts["write_freeze_confirmed"]:
+            raise CommandError(
+                "refusing to convert without --write-freeze-confirmed; "
+                "stop vector writers first, then re-run with the flag."
+            )
 
         # 1. Replicated temp table (own Keeper path via create_table).
         db.create_table(

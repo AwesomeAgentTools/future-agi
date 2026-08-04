@@ -78,7 +78,7 @@ def test_mixed_engines_abort():
         ),
     ):
         with pytest.raises(CommandError, match="engines differ across replicas"):
-            _run("--table", "feedbacks", "--execute", "--write-freeze-confirmed")
+            _run("--table", "feedbacks", "--write-freeze-confirmed")
     db.create_table.assert_not_called()
 
 
@@ -94,7 +94,7 @@ def test_dry_run_plain_writes_nothing():
         patch(f"{MOD}._table_hosts", side_effect=[{"r0", "r1", "r2"}, set(), set()]),
         patch(f"{MOD}._conflicting_ids", return_value=0),
     ):
-        out = _run("--table", "feedbacks")  # dry-run default
+        out = _run("--table", "feedbacks", "--dry-run")
     assert "DRY-RUN" in out
     db.create_table.assert_not_called()  # no temp table, no swap
 
@@ -113,8 +113,25 @@ def test_execute_aborts_before_swap_when_not_converged():
         patch(f"{MOD}.poll_replica_parity", return_value=({"r0": 5}, False)),
     ):
         with pytest.raises(CommandError, match="did not converge"):
-            _run("--table", "feedbacks", "--execute", "--write-freeze-confirmed")
+            _run("--table", "feedbacks", "--write-freeze-confirmed")
     # temp table created + insert attempted, but NO EXCHANGE was issued
     db.create_table.assert_called_once()
     issued = " ".join(str(c.args[0]) for c in db.client.execute.call_args_list)
     assert "EXCHANGE TABLES" not in issued
+
+
+def test_execute_without_write_freeze_aborts():
+    db = _db()
+    db.client.execute.return_value = [(5,)]
+    with (
+        patch(f"{MOD}.ClickHouseVectorDB", return_value=db),
+        patch(f"{MOD}._distinct_engines", return_value={"MergeTree"}),
+        patch(f"{MOD}.per_replica_counts", return_value={"r0": 2, "r1": 3, "r2": 0}),
+        patch(f"{MOD}.expected_replica_count", return_value=3),
+        patch(f"{MOD}._table_hosts", side_effect=[{"r0", "r1", "r2"}, set(), set()]),
+        patch(f"{MOD}._conflicting_ids", return_value=0),
+    ):
+        # no --dry-run and no --write-freeze-confirmed: must abort before any DDL
+        with pytest.raises(CommandError, match="write-freeze-confirmed"):
+            _run("--table", "feedbacks")
+    db.create_table.assert_not_called()

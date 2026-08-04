@@ -70,23 +70,24 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument(
-            "--execute", action="store_true", help="Write embeddings. Omit for dry-run."
+            "--dry-run", action="store_true", help="Print what would be restored; write nothing."
         )
         parser.add_argument(
             "--write-freeze-confirmed",
             action="store_true",
-            help="Required with --execute after KB ingestion writers are paused.",
+            help="Required to write, after KB ingestion writers are paused.",
         )
 
     def handle(self, *args, **opts):
-        if opts["execute"] and not opts["write_freeze_confirmed"]:
-            raise CommandError("--execute requires --write-freeze-confirmed")
+        dry_run = opts["dry_run"]
+        if not dry_run and not opts["write_freeze_confirmed"]:
+            raise CommandError("writing requires --write-freeze-confirmed")
 
         from model_hub.models.develop_dataset import KnowledgeBaseFile
 
         _assert_syn_is_replicated()
         present = _present_kb_ids()
-        if opts["execute"]:
+        if not dry_run:
             from model_hub.utils.kb_indexer import KBIndexer
 
         restored = skipped = failed = 0
@@ -104,7 +105,7 @@ class Command(BaseCommand):
                 )
                 skipped += 1
                 continue
-            if not opts["execute"]:
+            if dry_run:
                 self.stdout.write(f"[syn] {kb_id}: would restore {len(source_files)} files")
                 continue
 
