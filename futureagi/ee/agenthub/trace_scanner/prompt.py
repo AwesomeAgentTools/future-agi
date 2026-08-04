@@ -314,6 +314,7 @@ OUTPUT — strict JSON, no prose outside it:
   },
   "issues": [
     {"dim": "goal|grounding|tools|instruction|completion",
+     "cat": "<most specific subcategory from the list below>",
      "brief": "<one line, <=15 words, what the agent did wrong>",
      "conf": "H|M"}
   ],
@@ -322,6 +323,17 @@ OUTPUT — strict JSON, no prose outside it:
 
 Emit an entry in "issues" for every dimension whose verdict is FAIL, and nothing else.
 If all five PASS, "issues" is an empty list.
+
+"cat" MUST be copied EXACTLY from this list — it is what groups the issue in the product, so an
+invented value is worse than a generic one. Pick the most specific that fits; if none fits well
+pick the closest and let "brief" carry the detail. Labelling does NOT change which dimensions
+FAIL — decide the verdicts first, then label them:
+  Tool-related | Tool Selection Errors | Tool Output Misinterpretation | Formatting Errors
+  Language-only | Context Handling Failures | Poor Information Retrieval | Incorrect Memory Usage
+  Task Orchestration | Goal Deviation | Resource Abuse | Instruction Non-compliance
+  Incorrect Problem Identification | Unsupported Claim | Incomplete Response
+  Environment Setup Errors | Resource Not Found | Authentication Errors | Timeout Issues
+  Service Errors
 key_moments: 3-5 quotes copied VERBATIM from the trace (task, spans, result) telling the
 story of what happened — user request, key tool outputs, agent decisions, final response.
 Always provide key_moments, including for clean traces."""

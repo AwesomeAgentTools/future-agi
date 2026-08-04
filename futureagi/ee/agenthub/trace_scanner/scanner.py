@@ -310,10 +310,13 @@ class TraceScanner:
         }
         issues = []
         for dim in failed:
-            subcat = DIMENSION_TO_SUBCATEGORY.get(dim)
+            item = briefs.get(dim) or {}
+            # Prefer the model's own subcategory: DIMENSION_TO_SUBCATEGORY alone can only ever
+            # emit 5 of 20, which halves category accuracy on TRAIL (36.8% -> 18.8%).
+            cat = str(item.get("cat") or "").strip()
+            subcat = cat if cat in VALID_SUBCATEGORIES else DIMENSION_TO_SUBCATEGORY.get(dim)
             if not subcat:
                 continue
-            item = briefs.get(dim) or {}
             issues.append({
                 "cat": subcat,
                 "conf": item.get("conf", "M"),
