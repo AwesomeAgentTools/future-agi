@@ -1058,7 +1058,17 @@ def unwrap_output(raw):
             if isinstance(tcs, list) and tcs:
                 got = []
                 for tc in tcs[:4]:
-                    fn = (tc or {}).get("function") or {}
+                    # `(tc or {})` guarded None and empty but not a str, and some
+                    # producers emit tool_calls as a list of strings. Every other
+                    # branch in this function type-checks before descending; this one
+                    # did not, and it raised rather than degrading. The scanner fails
+                    # open, so the trace came back has_issues=False and was
+                    # indistinguishable from a clean one.
+                    if not isinstance(tc, dict):
+                        continue
+                    fn = tc.get("function")
+                    if not isinstance(fn, dict):
+                        continue
                     if str(fn.get("arguments") or "").strip():
                         got.append(f"[tool_call {fn.get('name','')}] {fn['arguments']}")
                 if got:
