@@ -7,6 +7,7 @@ Tests for user registration, logout, password reset, and account management.
 import pytest
 from rest_framework import status
 from rest_framework.test import APIClient
+from unittest.mock import patch
 
 
 def assert_unknown_field(response, field_name):
@@ -104,24 +105,31 @@ def other_org_client(other_org_user):
 class TestSignupAPI:
     """Tests for /accounts/signup/ endpoint."""
 
-    def test_signup_with_valid_data(self, api_client, db):
+    @patch.dict("os.environ", {"ENV_TYPE": "local"})
+    @patch("tfc.temporal.drop_in.start_activity")
+    def test_signup_with_valid_data(
+        self, mock_start_activity, api_client, db
+    ):
         """User can register with valid data."""
+        from accounts.models import User
+
+        email = "newuser@signup-test.dev"
         response = api_client.post(
             "/accounts/signup/",
             {
-                "email": "newuser@futureagi.com",
+                "email": email,
                 "password": "SecurePass123!",
-                "name": "New User",
-                "organization_name": "Test Org",
+                "full_name": "New User",
+                "company_name": "Test Org",
             },
             format="json",
         )
-        # Signup may return 201, 200, or 400 if missing required fields
-        assert response.status_code in [
-            status.HTTP_200_OK,
-            status.HTTP_201_CREATED,
-            status.HTTP_400_BAD_REQUEST,
-        ]
+
+        assert response.status_code == status.HTTP_200_OK
+        created_user = User.objects.get(email=email)
+        assert created_user.name == "New User"
+        assert created_user.organization is not None
+        assert created_user.is_active is True
 
     def test_signup_with_existing_email(self, api_client, user):
         """Signup fails with already registered email."""
@@ -179,29 +187,32 @@ class TestSignupAPI:
 class TestLogoutAPI:
     """Tests for /accounts/logout/ endpoint."""
 
-    def test_logout_authenticated_user(self, auth_client, user):
+    def test_logout_authenticated_user(self, api_client, user):
         """Authenticated user can logout."""
-        # First login to get refresh token
-        from rest_framework.test import APIClient
+        from django.utils import timezone
 
-        client = APIClient()
-        login_response = client.post(
-            "/accounts/token/",
-            {"email": user.email, "password": "testpassword123"},
-            format="json",
+        from accounts.authentication import generate_encrypted_message
+        from accounts.models.auth_token import AuthToken, AuthTokenType
+
+        access = AuthToken.objects.create(
+            user=user,
+            auth_type=AuthTokenType.ACCESS.value,
+            is_active=True,
+            last_used_at=timezone.now(),
         )
-        refresh_token = login_response.json().get("refresh", "")
+        access_token = generate_encrypted_message(
+            {"user_id": str(user.id), "id": str(access.id)}
+        )
 
-        response = auth_client.post(
+        response = api_client.post(
             "/accounts/logout/",
-            {"refresh": refresh_token},
             format="json",
+            HTTP_AUTHORIZATION=f"Bearer {access_token}",
         )
-        assert response.status_code in [
-            status.HTTP_200_OK,
-            status.HTTP_204_NO_CONTENT,
-            status.HTTP_400_BAD_REQUEST,  # If refresh token is invalid
-        ]
+
+        assert response.status_code == status.HTTP_200_OK
+        access.refresh_from_db()
+        assert access.is_active is False
 
     def test_logout_unauthenticated_user(self, api_client):
         """Unauthenticated logout request fails."""
@@ -278,7 +289,9 @@ class TestPasswordResetAPI:
             status.HTTP_404_NOT_FOUND,
         ]
 
-    def test_password_reset_confirm_rejects_unknown_request_fields(self, api_client, db):
+    def test_password_reset_confirm_rejects_unknown_request_fields(
+        self, api_client, db
+    ):
         response = api_client.post(
             "/accounts/password-reset-confirm/invalid-uid/invalid-token/",
             {
@@ -331,33 +344,27 @@ class TestUserProfileAPI:
 
     def test_update_user(self, auth_client, user):
         """Authenticated user can update their profile."""
-        # Try POST instead of PATCH
         response = auth_client.post(
             "/accounts/update-user/",
-            {"name": "Updated Name"},
+            {"user_id": str(user.id), "name": "Updated Name"},
             format="json",
         )
-        assert response.status_code in [
-            status.HTTP_200_OK,
-            status.HTTP_204_NO_CONTENT,
-            status.HTTP_400_BAD_REQUEST,  # May require additional fields
-            status.HTTP_405_METHOD_NOT_ALLOWED,
-        ]
+
+        assert response.status_code == status.HTTP_200_OK
+        user.refresh_from_db()
+        assert user.name == "Updated Name"
 
     def test_update_user_full_name(self, auth_client, user):
         """Authenticated user can update their full name."""
-        # Try POST instead of PATCH
         response = auth_client.post(
             "/accounts/update-user-full-name/",
             {"name": "New Full Name"},
             format="json",
         )
-        assert response.status_code in [
-            status.HTTP_200_OK,
-            status.HTTP_204_NO_CONTENT,
-            status.HTTP_400_BAD_REQUEST,  # May require additional fields
-            status.HTTP_405_METHOD_NOT_ALLOWED,
-        ]
+
+        assert response.status_code == status.HTTP_200_OK
+        user.refresh_from_db()
+        assert user.name == "New Full Name"
 
     def test_update_user_unauthenticated(self, api_client):
         """Unauthenticated user cannot update profile."""
@@ -456,36 +463,52 @@ class TestDeleteUsersAPI:
 
     def test_delete_user_same_org(self, owner_client, second_user):
         """Owner can delete user in same organization."""
+        from accounts.models import User
+
+        user_id = second_user.id
         response = owner_client.delete(
             "/accounts/delete-users/",
-            {"user_ids": [str(second_user.id)]},
+            {"user_ids": [str(user_id)]},
             format="json",
         )
+
         assert response.status_code == status.HTTP_200_OK
+        assert not User.objects.filter(pk=user_id).exists()
 
     def test_cannot_delete_user_different_org(self, auth_client, other_org_user):
         """Cannot delete user from different organization (IDOR prevention)."""
+        original_state = (
+            other_org_user.name,
+            other_org_user.email,
+            other_org_user.organization_id,
+        )
         response = auth_client.delete(
             "/accounts/delete-users/",
             {"user_ids": [str(other_org_user.id)]},
             format="json",
         )
-        # Should fail - user doesn't exist in this org
+
         assert response.status_code == status.HTTP_200_OK
-        result = response.json()
-        # Response should indicate user not found
-        assert any("error" in r for r in result if isinstance(r, dict))
+        other_org_user.refresh_from_db()
+        assert (
+            other_org_user.name,
+            other_org_user.email,
+            other_org_user.organization_id,
+        ) == original_state
 
     def test_delete_nonexistent_user(self, auth_client):
         """Deleting nonexistent user returns error in response."""
+        user_id = "00000000-0000-0000-0000-000000000000"
         response = auth_client.delete(
             "/accounts/delete-users/",
-            {"user_ids": ["00000000-0000-0000-0000-000000000000"]},
+            {"user_ids": [user_id]},
             format="json",
         )
+
         assert response.status_code == status.HTTP_200_OK
-        result = response.json()
-        assert any("error" in r for r in result if isinstance(r, dict))
+        assert response.json() == [
+            {"user_id": user_id, "error": "User does not exist."}
+        ]
 
 
 @pytest.mark.integration
@@ -493,7 +516,9 @@ class TestDeleteUsersAPI:
 class TestUpdateUserRoles:
     """Tests for role updates in /accounts/update-user/ endpoint."""
 
-    def test_update_user_rejects_unknown_request_fields(self, owner_client, second_user):
+    def test_update_user_rejects_unknown_request_fields(
+        self, owner_client, second_user
+    ):
         response = owner_client.post(
             "/accounts/update-user/",
             {
@@ -547,15 +572,25 @@ class TestUpdateUserRoles:
             },
             format="json",
         )
-        # Should fail if this is the only owner
+
         assert response.status_code == status.HTTP_400_BAD_REQUEST
-        assert (
-            "Cannot demote" in str(response.json())
-            or response.status_code == status.HTTP_400_BAD_REQUEST
-        )
+        assert response.json() == {
+            "status": False,
+            "type": "validation_error",
+            "code": "invalid",
+            "detail": "Cannot demote the last owner.",
+            "message": "Cannot demote the last owner.",
+            "error": "Cannot demote the last owner.",
+            "result": "Cannot demote the last owner.",
+        }
 
     def test_cannot_update_user_different_org(self, auth_client, other_org_user):
         """Cannot update user from different organization (IDOR prevention)."""
+        original_state = (
+            other_org_user.name,
+            other_org_user.email,
+            other_org_user.organization_id,
+        )
         response = auth_client.post(
             "/accounts/update-user/",
             {
@@ -564,8 +599,14 @@ class TestUpdateUserRoles:
             },
             format="json",
         )
-        # Should fail - user doesn't exist in this org
+
         assert response.status_code == status.HTTP_400_BAD_REQUEST
+        other_org_user.refresh_from_db()
+        assert (
+            other_org_user.name,
+            other_org_user.email,
+            other_org_user.organization_id,
+        ) == original_state
 
     def test_update_user_missing_user_id(self, auth_client):
         """Update user fails without user_id."""
@@ -888,3 +929,114 @@ class TestAccountTakeoverVulnerabilityFixed:
         attacker_users = UserModel.objects.filter(email=attacker_email)
         for u in attacker_users:
             assert u.id != user.id
+
+
+@pytest.mark.integration
+@pytest.mark.api
+class TestActivateAccountAPI:
+    """Tests for GET /accounts/activate/<uidb64>/<token>/."""
+
+    def _inactive_user(self, db):
+        from accounts.models import User
+
+        return User.objects.create_user(
+            email="inactive-activate@test.com",
+            password="testpassword123",
+            name="Inactive Activate",
+            is_active=False,
+        )
+
+    def _activation_url(self, user):
+        from django.utils.encoding import force_bytes
+        from django.utils.http import urlsafe_base64_encode
+
+        from accounts.views.signup import account_activation_token
+
+        uid = urlsafe_base64_encode(force_bytes(user.pk))
+        token = account_activation_token.make_token(user)
+        return f"/accounts/activate/{uid}/{token}/"
+
+    def test_activate_account_happy_path(self, api_client, db):
+        """Valid activation token activates user and creates owner org."""
+        from django.core.cache import cache
+
+        from accounts.models.organization_membership import OrganizationMembership
+
+        cache.clear()
+        user = self._inactive_user(db)
+        response = api_client.get(self._activation_url(user))
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json()["message"] == "Account successfully activated."
+
+        user.refresh_from_db()
+        assert user.is_active is True
+        assert user.organization is not None
+        assert user.organization_role == "Owner"
+        assert OrganizationMembership.objects.filter(
+            user=user, organization=user.organization, is_active=True, role="Owner"
+        ).exists()
+
+    def test_activate_account_invalid_token(self, api_client, db):
+        """Invalid token is rejected."""
+        from django.core.cache import cache
+        from django.utils.encoding import force_bytes
+        from django.utils.http import urlsafe_base64_encode
+
+        cache.clear()
+        user = self._inactive_user(db)
+        uid = urlsafe_base64_encode(force_bytes(user.pk))
+        response = api_client.get(f"/accounts/activate/{uid}/not-a-valid-token/")
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        user.refresh_from_db()
+        assert user.is_active is False
+
+    def test_activate_account_unknown_user(self, api_client, db):
+        """Unknown uid returns bad request."""
+        from django.core.cache import cache
+        from django.utils.encoding import force_bytes
+        from django.utils.http import urlsafe_base64_encode
+
+        cache.clear()
+        uid = urlsafe_base64_encode(force_bytes("00000000-0000-0000-0000-000000000000"))
+        response = api_client.get(f"/accounts/activate/{uid}/any-token/")
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+
+@pytest.mark.integration
+@pytest.mark.api
+class TestPasswordResetConfirmHappyPath:
+    """Happy-path coverage for POST /accounts/password-reset-confirm/."""
+
+    def test_password_reset_confirm_valid_token(self, api_client, user):
+        """Valid encrypted token resets password and returns success."""
+        from django.contrib.auth.hashers import check_password
+        from django.utils import timezone
+        from django.utils.encoding import force_bytes
+        from django.utils.http import urlsafe_base64_encode
+
+        from accounts.authentication import generate_encrypted_message
+        from accounts.models.auth_token import AuthToken, AuthTokenType
+
+        access = AuthToken.objects.create(
+            user=user,
+            auth_type=AuthTokenType.ACCESS.value,
+            is_active=True,
+            last_used_at=timezone.now(),
+        )
+        token = generate_encrypted_message(
+            {"user_id": str(user.id), "id": str(access.id)}
+        )
+        uidb64 = urlsafe_base64_encode(force_bytes(user.pk))
+        new_password = "BrandNewPass123!"
+
+        response = api_client.post(
+            f"/accounts/password-reset-confirm/{uidb64}/{token}/",
+            {"new_password": new_password, "repeat_password": new_password},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_200_OK, response.content
+
+        user.refresh_from_db()
+        assert check_password(new_password, user.password)
+        access.refresh_from_db()
+        assert access.is_active is False
