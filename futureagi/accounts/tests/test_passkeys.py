@@ -227,7 +227,7 @@ class TestPasskeyRegisterVerify:
         return_value=FakeRegistrationVerification(),
     )
     @patch(
-        "webauthn.helpers.base64url_to_bytes",
+        "accounts.services.webauthn_service.base64url_to_bytes",
         return_value=FAKE_CHALLENGE,
     )
     def test_register_verify_creates_passkey(
@@ -259,7 +259,7 @@ class TestPasskeyRegisterVerify:
         return_value=FakeRegistrationVerification(),
     )
     @patch(
-        "webauthn.helpers.base64url_to_bytes",
+        "accounts.services.webauthn_service.base64url_to_bytes",
         return_value=FAKE_CHALLENGE,
     )
     def test_register_verify_returns_recovery_codes_on_first_2fa(
@@ -294,7 +294,7 @@ class TestPasskeyRegisterVerify:
         side_effect=Exception("Invalid credential"),
     )
     @patch(
-        "webauthn.helpers.base64url_to_bytes",
+        "accounts.services.webauthn_service.base64url_to_bytes",
         return_value=FAKE_CHALLENGE,
     )
     def test_register_verify_invalid_credential(
@@ -542,7 +542,7 @@ class TestPasskeyAuthenticateVerify:
         return_value=FakeAuthenticationVerification(),
     )
     @patch(
-        "webauthn.helpers.base64url_to_bytes",
+        "accounts.services.webauthn_service.base64url_to_bytes",
         return_value=FAKE_CHALLENGE,
     )
     def test_authenticate_verify_returns_tokens(self, mock_b64, mock_verify, user):
@@ -627,7 +627,7 @@ class TestPasskeyAuthenticateVerify:
         side_effect=Exception("Invalid signature"),
     )
     @patch(
-        "webauthn.helpers.base64url_to_bytes",
+        "accounts.services.webauthn_service.base64url_to_bytes",
         return_value=FAKE_CHALLENGE,
     )
     def test_authenticate_verify_invalid_credential(self, mock_b64, mock_verify, user):
@@ -790,7 +790,7 @@ class TestPasskey2FAVerify:
         return_value=FakeAuthenticationVerification(),
     )
     @patch(
-        "webauthn.helpers.base64url_to_bytes",
+        "accounts.services.webauthn_service.base64url_to_bytes",
         return_value=FAKE_CHALLENGE,
     )
     def test_verify_accepts_stringified_credential(self, mock_b64, mock_verify, user):
@@ -830,7 +830,7 @@ class TestPasskey2FAVerify:
         return_value=FakeAuthenticationVerification(),
     )
     @patch(
-        "webauthn.helpers.base64url_to_bytes",
+        "accounts.services.webauthn_service.base64url_to_bytes",
         return_value=FAKE_CHALLENGE,
     )
     def test_verify_accepts_dict_credential(self, mock_b64, mock_verify, user):
