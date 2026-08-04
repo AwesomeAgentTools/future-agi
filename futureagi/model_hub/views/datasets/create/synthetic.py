@@ -102,10 +102,7 @@ class CreateSyntheticDataset(APIView):
                 org = (
                     getattr(request, "organization", None) or request.user.organization
                 )
-                from ee.usage.deployment import DeploymentMode
-
-                # Plan entitlements are a cloud concept; self-hosted runs free.
-                if Entitlements is not None and DeploymentMode.is_cloud():
+                if Entitlements is not None:
                     feat_check = Entitlements.check_feature(
                         str(org.id), "has_synthetic_data"
                     )

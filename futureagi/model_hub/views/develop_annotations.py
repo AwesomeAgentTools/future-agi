@@ -2079,10 +2079,7 @@ class AnnotationSummaryView(APIView):
                 except ImportError:
                     Entitlements = None
 
-                from ee.usage.deployment import DeploymentMode
-
-                # Plan entitlements are a cloud concept; self-hosted runs free.
-                if Entitlements is not None and DeploymentMode.is_cloud():
+                if Entitlements is not None:
                     feat_check = Entitlements.check_feature(
                         str(organization.id), "has_agreement_metrics"
                     )

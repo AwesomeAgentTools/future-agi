@@ -40,7 +40,9 @@ class TestEntitlementsUnit:
         """get_limit returns an integer via billing.yaml fallback."""
         with (
             patch("ee.usage.services.entitlements.get_redis") as mock_redis,
-            patch("ee.usage.services.entitlements._get_cached_plan", return_value="free"),
+            patch(
+                "ee.usage.services.entitlements._get_cached_plan", return_value="free"
+            ),
         ):
             mock_r = MagicMock()
             mock_redis.return_value = mock_r
@@ -60,7 +62,9 @@ class TestEntitlementsUnit:
         """has_feature returns a boolean via billing.yaml fallback."""
         with (
             patch("ee.usage.services.entitlements.get_redis") as mock_redis,
-            patch("ee.usage.services.entitlements._get_cached_plan", return_value="boost"),
+            patch(
+                "ee.usage.services.entitlements._get_cached_plan", return_value="boost"
+            ),
         ):
             mock_r = MagicMock()
             mock_redis.return_value = mock_r
@@ -83,9 +87,15 @@ class TestEntitlementsUnit:
             assert result.allowed is True
 
     def test_can_create_at_limit_denied(self):
-        """At the limit → denied."""
+        """At the limit → denied (cloud only; self-hosted is uncapped)."""
         E = self._get_entitlements()
-        with patch.object(E, "get_limit", return_value=3):
+        with (
+            patch(
+                "ee.usage.services.entitlements.DeploymentMode.is_cloud",
+                return_value=True,
+            ),
+            patch.object(E, "get_limit", return_value=3),
+        ):
             with patch(
                 "ee.usage.services.entitlements._find_upgrade_cta", return_value=None
             ):
@@ -101,9 +111,15 @@ class TestEntitlementsUnit:
             assert result.allowed is True
 
     def test_can_create_zero_limit_denied(self):
-        """Zero limit (feature not on plan) → denied with ENTITLEMENT_DENIED."""
+        """Zero limit (feature not on plan) → denied (cloud only)."""
         E = self._get_entitlements()
-        with patch.object(E, "get_limit", return_value=0):
+        with (
+            patch(
+                "ee.usage.services.entitlements.DeploymentMode.is_cloud",
+                return_value=True,
+            ),
+            patch.object(E, "get_limit", return_value=0),
+        ):
             with patch(
                 "ee.usage.services.entitlements._find_upgrade_cta", return_value=None
             ):
@@ -119,9 +135,15 @@ class TestEntitlementsUnit:
             assert result.allowed is True
 
     def test_check_feature_disabled(self):
-        """Boolean feature disabled → denied."""
+        """Boolean feature disabled → denied (cloud only; self-hosted passes)."""
         E = self._get_entitlements()
-        with patch.object(E, "has_feature", return_value=False):
+        with (
+            patch(
+                "ee.usage.services.entitlements.DeploymentMode.is_cloud",
+                return_value=True,
+            ),
+            patch.object(E, "has_feature", return_value=False),
+        ):
             with patch(
                 "ee.usage.services.entitlements._find_upgrade_cta", return_value=None
             ):
@@ -147,7 +169,9 @@ class TestEntitlementsUnit:
         """Per-org override should be returned over plan default."""
         with (
             patch("ee.usage.services.entitlements.get_redis") as mock_redis,
-            patch("ee.usage.services.entitlements._get_cached_plan", return_value="free"),
+            patch(
+                "ee.usage.services.entitlements._get_cached_plan", return_value="free"
+            ),
         ):
             mock_r = MagicMock()
             mock_redis.return_value = mock_r
@@ -167,7 +191,9 @@ class TestEntitlementsUnit:
         """Redis is a cache for entitlements, not the source of truth."""
         with (
             patch("ee.usage.services.entitlements.get_redis") as mock_redis,
-            patch("ee.usage.services.entitlements._get_cached_plan", return_value="free"),
+            patch(
+                "ee.usage.services.entitlements._get_cached_plan", return_value="free"
+            ),
         ):
             mock_r = MagicMock()
             mock_redis.return_value = mock_r
@@ -175,7 +201,9 @@ class TestEntitlementsUnit:
             mock_r.setex.side_effect = RedisConnectionError("redis down")
 
             with patch("ee.usage.models.usage.PlanEntitlement.objects") as mock_qs:
-                mock_qs.filter.return_value.values.return_value.first.return_value = None
+                mock_qs.filter.return_value.values.return_value.first.return_value = (
+                    None
+                )
                 E = self._get_entitlements()
 
                 assert E.has_feature("org-1", "has_voice_sim") is True
@@ -188,7 +216,9 @@ class TestEntitlementsUnit:
             mock_redis.return_value = mock_r
             mock_r.get.side_effect = RedisConnectionError("redis down")
 
-            with patch("ee.usage.models.usage.OrganizationSubscription.objects") as mock_qs:
+            with patch(
+                "ee.usage.models.usage.OrganizationSubscription.objects"
+            ) as mock_qs:
                 mock_qs.filter.return_value.values_list.return_value.first.return_value = (
                     "boost"
                 )
@@ -199,7 +229,9 @@ class TestEntitlementsUnit:
         from ee.usage.services.entitlements import Entitlements, get_cloud_plan_resolver
 
         resolver = get_cloud_plan_resolver()
-        with patch.object(Entitlements, "has_feature", return_value=True) as has_feature:
+        with patch.object(
+            Entitlements, "has_feature", return_value=True
+        ) as has_feature:
             assert resolver.has_feature("org-1", "scim") is True
 
         has_feature.assert_called_once_with("org-1", "has_scim")
@@ -264,7 +296,9 @@ class TestUpgradeCTA:
     def test_free_plan_gets_payg_cta(self):
         from ee.usage.services.entitlements import _find_upgrade_cta
 
-        with patch("ee.usage.services.entitlements._get_cached_plan", return_value="free"):
+        with patch(
+            "ee.usage.services.entitlements._get_cached_plan", return_value="free"
+        ):
             cta = _find_upgrade_cta("org-1", "has_knowledge_base")
             # KB is not on free or payg, available on boost
             if cta:

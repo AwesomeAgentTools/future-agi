@@ -16,12 +16,12 @@ from __future__ import annotations
 from typing import Any
 
 import structlog
-from redis.exceptions import RedisError
-
+from ee.usage.deployment import DeploymentMode
 from ee.usage.schemas.events import CheckResult, UpgradeCTA
 from ee.usage.services.config import BillingConfig
 from ee.usage.services.emitter import get_redis
 from ee.usage.services.metering import _get_cached_plan
+from redis.exceptions import RedisError
 
 logger = structlog.get_logger(__name__)
 
@@ -49,6 +49,7 @@ def _cache_setex(key: str, ttl: int, value: str) -> None:
         get_redis().setex(key, ttl, value)
     except RedisError:
         logger.warning("entitlement_cache_write_failed", cache_key=key)
+
 
 RESOURCE_DISPLAY_NAMES = {
     "monitors": "monitors & alerts",
@@ -106,7 +107,9 @@ class Entitlements:
                 if override["value_int"] is not None
                 else override["value_bool"]
             )
-            _cache_setex(cache_key, CACHE_TTL, str(val) if val is not None else "__none__")
+            _cache_setex(
+                cache_key, CACHE_TTL, str(val) if val is not None else "__none__"
+            )
             return val
 
         # 3. DB plan default
@@ -127,7 +130,9 @@ class Entitlements:
                 if default["value_int"] is not None
                 else default["value_bool"]
             )
-            _cache_setex(cache_key, CACHE_TTL, str(val) if val is not None else "__none__")
+            _cache_setex(
+                cache_key, CACHE_TTL, str(val) if val is not None else "__none__"
+            )
             return val
 
         # 4. billing.yaml fallback
@@ -164,6 +169,10 @@ class Entitlements:
         Returns:
             CheckResult with allowed=True/False.
         """
+        # Count limits are a cloud-plan concept: self-hosted is uncapped.
+        if not DeploymentMode.is_cloud():
+            return CheckResult(allowed=True)
+
         limit = Entitlements.get_limit(org_id, resource)
 
         if limit == -1:
@@ -206,6 +215,12 @@ class Entitlements:
 
         Returns CheckResult for consistency with can_create.
         """
+        # Plan entitlements are a cloud concept: self-hosted deployments
+        # (OSS or EE) have no plans, so plan checks pass. License-gated
+        # features enforce off-cloud via tfc.capabilities, not here.
+        if not DeploymentMode.is_cloud():
+            return CheckResult(allowed=True)
+
         if Entitlements.has_feature(org_id, feature):
             return CheckResult(allowed=True)
 
