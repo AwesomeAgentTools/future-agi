@@ -64,11 +64,25 @@ COSINE_THRESHOLD = 0.40
 # and likewise the hallucinated-holding bug across Poor Information Retrieval and
 # Tool Output Misinterpretation. No embedding could ever merge those.
 #
-# An earlier attempt at this was measured on the pre-fix-5 corpus and showed no
-# benefit — but that corpus was ~78% fabricated briefs, so the ground truth it
-# was scored against was noise. Kept as a switch so it can be reverted without a
-# code change if cross-category merging proves too loose.
-PARTITION_BY_CATEGORY = False
+# That argument is now mostly spent, because distilling the brief before
+# embedding fixes the same problem at its source: the phrase is stable, so what
+# is left wavering is only the scanner's category choice, and it wavers on 1.2%
+# of distinct phrases / 4.5% of issues. Turned back ON after replaying one
+# project's 1,277 real issues both ways and reading the four groups that exist
+# only WITHOUT it:
+#
+#   316 members, 302 Language-only + 14 strays  — one bug, mis-categorised. good
+#   183 members, 158 + 24, all "greeting -> unrelated response"            good
+#   130 members, 116 Incorrect Memory Usage + strays                       good
+#   312 members over 8 categories, none above 45% — "gives investment advice
+#       despite policy prohibiting it" filed with "responds with irrelevant
+#       disclaimer" and "queried unrelated financial data"                  BAD
+#
+# So the partition costs a handful of small stray fragments and prevents one
+# 312-member entry that mixes a guardrail violation with two unrelated bugs.
+# Kept as a switch: if the strays turn out to hurt more than the mixing, this
+# reverts without a code change.
+PARTITION_BY_CATEGORY = True
 
 
 def _severity_to_impact(severity: str | None) -> str:
