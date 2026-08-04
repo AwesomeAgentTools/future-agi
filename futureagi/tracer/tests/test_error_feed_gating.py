@@ -11,6 +11,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
+
 from tfc.capabilities import service
 from tfc.ee_gating import EEFeature, FeatureUnavailable, check_ee_feature
 from tfc.licensing.types import (
@@ -151,19 +152,17 @@ class TestTwoTierGating:
         _configure_ee(_snapshot(LicenseState.EXPIRED, frozenset()))
         check_ee_feature(feature, org_id="org_1")  # must not raise
 
-    @pytest.mark.parametrize(
-        "feature", ["turing_models", "falcon_ai", "protect", "voice_sim"]
-    )
+    @pytest.mark.parametrize("feature", ["turing_models", "falcon_ai", "protect"])
     def test_locked_features_deny_on_oss(self, feature):
         _configure_oss()
         with pytest.raises(FeatureUnavailable):
             check_ee_feature(feature, org_id="org_1")
 
-    def test_locked_set_is_exactly_the_reserved_five(self):
+    def test_locked_set_is_exactly_the_reserved_four(self):
         from tfc.capabilities.registry import OSS_LOCKED_FEATURES, PAID_FEATURES
 
         assert OSS_LOCKED_FEATURES == frozenset(
-            {"falcon_ai", "turing_models", "protect", "voice_sim", "error_feed"}
+            {"falcon_ai", "turing_models", "protect", "error_feed"}
         )
         assert OSS_LOCKED_FEATURES <= PAID_FEATURES
 

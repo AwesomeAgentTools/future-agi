@@ -7,6 +7,7 @@ when ee/ is stripped (OSS image scenario). No Django DB needed.
 from __future__ import annotations
 
 import pytest
+
 from tfc.capabilities import service
 from tfc.capabilities.errors import CapabilityDenied
 from tfc.capabilities.registry import (
@@ -50,7 +51,7 @@ class TestOSSBaseline:
         assert decision.feature_id == feature_id
 
     @pytest.mark.parametrize(
-        "feature_id", sorted(MANAGED_SERVICE_FEATURES | {"error_feed", "voice_sim"})
+        "feature_id", sorted(MANAGED_SERVICE_FEATURES | {"error_feed"})
     )
     def test_locked_features_denied_on_oss_image(self, feature_id: str):
         decision = service.check(feature_id)
@@ -59,7 +60,7 @@ class TestOSSBaseline:
 
     @pytest.mark.parametrize(
         "feature_id",
-        sorted(PAID_FEATURES - MANAGED_SERVICE_FEATURES - {"error_feed", "voice_sim"}),
+        sorted(PAID_FEATURES - MANAGED_SERVICE_FEATURES - {"error_feed"}),
     )
     def test_unlocked_paid_features_allowed_on_oss_image(self, feature_id: str):
         decision = service.check(feature_id)

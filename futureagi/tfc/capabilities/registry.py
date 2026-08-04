@@ -116,7 +116,6 @@ FEATURE_PROTECT = FeatureDefinition(
 
 FEATURE_VOICE_SIM = FeatureDefinition(
     id="voice_sim",
-    oss_locked=True,
     display_name="Voice Simulation",
     oss_baseline=False,
     requires_license=True,

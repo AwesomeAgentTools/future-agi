@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
+
 from tfc.capabilities import service
 from tfc.capabilities.errors import CapabilityDenied
 from tfc.licensing.types import (
@@ -39,7 +40,7 @@ def _make_active_snapshot(features: frozenset[str] | None = None) -> LicenseSnap
         issued_to="Test Corp",
         band="business",
         features=features
-        or frozenset({"voice_sim", "agentic_eval", "falcon_ai", "turing_models"}),
+        or frozenset({"falcon_ai", "agentic_eval", "falcon_ai", "turing_models"}),
         limits={"traces_monthly": 1_000_000, "gateway_requests_monthly": 500_000},
         max_instances=3,
         issued_at=now - timedelta(days=180),
@@ -66,7 +67,7 @@ def active_license():
 
 class TestActiveLicense:
     def test_included_feature_allowed(self, active_license):
-        decision = service.check("voice_sim")
+        decision = service.check("falcon_ai")
         assert decision.allowed is True
         assert decision.license_state == "active"
 
@@ -94,7 +95,7 @@ class TestGraceLicense:
             license_type=LicenseType.PRODUCTION,
             license_id="lic_test_002",
             band="business",
-            features=frozenset({"voice_sim", "agentic_eval", "optimization"}),
+            features=frozenset({"falcon_ai", "agentic_eval", "optimization"}),
             expires_at=now - timedelta(days=5),
             grace_ends_at=now + timedelta(days=30),
             validated_at=now,
@@ -112,7 +113,7 @@ class TestGraceLicense:
         )
 
     def test_grace_allows_included_feature(self):
-        decision = service.check("voice_sim")
+        decision = service.check("falcon_ai")
         assert decision.allowed is True
         assert decision.license_state == "grace"
 
@@ -134,7 +135,7 @@ class TestExpiredLicense:
             license_type=LicenseType.PRODUCTION,
             license_id="lic_test_003",
             band="business",
-            features=frozenset({"voice_sim", "agentic_eval"}),
+            features=frozenset({"falcon_ai", "agentic_eval"}),
             validated_at=datetime(2025, 6, 1, tzinfo=UTC),
         )
         resolver = _FakeLicenseResolver(snapshot)
@@ -150,7 +151,7 @@ class TestExpiredLicense:
         )
 
     def test_expired_denies_all_paid_features(self):
-        decision = service.check("voice_sim")
+        decision = service.check("falcon_ai")
         assert decision.allowed is False
         assert decision.reason_code == DenialReason.LICENSE_EXPIRED.value
 
@@ -168,7 +169,7 @@ class TestTrialActive:
             license_type=LicenseType.TRIAL,
             license_id="lic_trial_001",
             band="business",
-            features=frozenset({"voice_sim", "agentic_eval", "falcon_ai"}),
+            features=frozenset({"falcon_ai", "agentic_eval", "falcon_ai"}),
             expires_at=now + timedelta(days=14),
             validated_at=now,
         )
@@ -185,7 +186,7 @@ class TestTrialActive:
         )
 
     def test_trial_allows_included_feature(self):
-        decision = service.check("voice_sim")
+        decision = service.check("falcon_ai")
         assert decision.allowed is True
         assert decision.license_state == "trial_active"
 
@@ -202,7 +203,7 @@ class TestTrialExpired:
             license_type=LicenseType.TRIAL,
             license_id="lic_trial_002",
             band="business",
-            features=frozenset({"voice_sim", "agentic_eval"}),
+            features=frozenset({"falcon_ai", "agentic_eval"}),
             validated_at=datetime(2025, 6, 1, tzinfo=UTC),
         )
         resolver = _FakeLicenseResolver(snapshot)
@@ -218,7 +219,7 @@ class TestTrialExpired:
         )
 
     def test_trial_expired_denies_paid_features(self):
-        decision = service.check("voice_sim")
+        decision = service.check("falcon_ai")
         assert decision.allowed is False
         assert decision.reason_code == DenialReason.LICENSE_TRIAL_EXPIRED.value
 
@@ -245,7 +246,7 @@ class TestMissingLicense:
         )
 
     def test_missing_denies_paid_features(self):
-        decision = service.check("voice_sim")
+        decision = service.check("falcon_ai")
         assert decision.allowed is False
         assert decision.reason_code == DenialReason.LICENSE_MISSING.value
 
@@ -272,7 +273,7 @@ class TestInvalidLicense:
         )
 
     def test_invalid_denies_paid_features(self):
-        decision = service.check("voice_sim")
+        decision = service.check("falcon_ai")
         assert decision.allowed is False
         assert decision.reason_code == DenialReason.LICENSE_INVALID.value
 
@@ -288,7 +289,7 @@ class TestResolverFailure:
             location=DeploymentLocation.SELF_HOSTED,
             license_resolver=None,
         )
-        decision = service.check("voice_sim")
+        decision = service.check("falcon_ai")
         assert decision.allowed is False
         assert decision.reason_code == DenialReason.RESOLVER_UNAVAILABLE.value
 
@@ -318,7 +319,7 @@ class TestCloudResolverFailure:
             cloud_plan_resolver=_FakeCloudPlanResolver(),
         )
 
-        decision = service.check("voice_sim", org_id=None)
+        decision = service.check("falcon_ai", org_id=None)
 
         assert decision.allowed is False
         assert decision.reason_code == DenialReason.RESOLVER_UNAVAILABLE.value
@@ -343,7 +344,7 @@ class TestCheckOrRaise:
         assert exc_info.value.feature_id == "protect"
 
     def test_returns_decision_on_allow(self, active_license):
-        decision = service.check_or_raise("voice_sim")
+        decision = service.check_or_raise("falcon_ai")
         assert decision.allowed is True
 
     def test_temporal_activity_raises_application_error(self, active_license):

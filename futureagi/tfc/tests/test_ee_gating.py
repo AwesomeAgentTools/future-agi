@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 import pytest
 from rest_framework import status as drf_status
+
 from tfc.capabilities.registry import PAID_FEATURES
 from tfc.ee_gating import (
     EE_FEATURES_OSS,
@@ -160,7 +161,7 @@ class TestCheckEEFeature:
             patch("tfc.ee_gating.is_oss", return_value=True),
         ):
             with pytest.raises(ApplicationError) as exc_info:
-                check_ee_feature(EEFeature.VOICE_SIM, activity=True)
+                check_ee_feature(EEFeature.PROTECT, activity=True)
             assert exc_info.value.non_retryable is True
             assert exc_info.value.type == "FeatureUnavailable"
 
@@ -293,6 +294,7 @@ class TestEEStub:
 
     def test_ee_activity_stub_raises_application_error(self):
         from temporalio.exceptions import ApplicationError
+
         from tfc.ee_stub import _ee_activity_stub
 
         Stub = _ee_activity_stub("FakeActivity")

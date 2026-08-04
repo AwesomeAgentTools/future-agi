@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
+
 from tfc.capabilities import service
 from tfc.ee_gating import EEFeature, FeatureUnavailable, check_ee_feature
 from tfc.licensing.types import (
@@ -53,7 +54,7 @@ def configure_capability_service():
 
 class TestDelegation:
     def test_included_feature_passes(self):
-        check_ee_feature(EEFeature.VOICE_SIM, org_id="org_1")
+        check_ee_feature(EEFeature.FALCON_AI, org_id="org_1")
 
     def test_excluded_feature_raises(self):
         with pytest.raises(FeatureUnavailable):
@@ -79,4 +80,4 @@ class TestFallbackWhenNotConfigured:
         service._configured = False
         monkeypatch.setattr("tfc.ee_gating.is_oss", lambda: True)
         with pytest.raises(FeatureUnavailable):
-            check_ee_feature(EEFeature.VOICE_SIM)
+            check_ee_feature(EEFeature.FALCON_AI)
