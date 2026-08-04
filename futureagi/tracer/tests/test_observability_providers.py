@@ -1176,6 +1176,40 @@ class TestFetchLogsForProviderAuthErrors:
     @patch("tracer.utils.observability_provider._update_last_fetched_at")
     @patch("tracer.utils.observability_provider.ObservabilityService.get_call_logs")
     @patch("tracer.utils.observability_provider.ObservabilityProvider.objects")
+    def test_retell_provider_polls_when_last_fetched_at_is_none(
+        self,
+        mock_provider_objects,
+        mock_get_call_logs,
+        mock_update_last_fetched_at,
+        mock_process_and_store_logs,
+    ):
+        """Retell bootstrap: null watermark means poll once, then webhook-primary."""
+        from tracer.utils.observability_provider import fetch_logs_for_provider
+
+        end_time = Mock()
+        mock_provider = Mock()
+        mock_provider.provider = ProviderChoices.RETELL
+        mock_provider.last_fetched_at = None
+        mock_provider_objects.get.return_value = mock_provider
+        mock_get_call_logs.return_value = []
+
+        result = fetch_logs_for_provider(
+            provider_id="test-provider-id", end_time=end_time
+        )
+
+        assert result == []
+        mock_get_call_logs.assert_called_once_with(
+            provider=mock_provider,
+            start_time=None,
+            end_time=end_time,
+        )
+        mock_update_last_fetched_at.assert_called_once_with(mock_provider, end_time)
+        mock_process_and_store_logs.assert_called_once_with([], mock_provider)
+
+    @patch("tracer.utils.observability_provider.process_and_store_logs")
+    @patch("tracer.utils.observability_provider._update_last_fetched_at")
+    @patch("tracer.utils.observability_provider.ObservabilityService.get_call_logs")
+    @patch("tracer.utils.observability_provider.ObservabilityProvider.objects")
     def test_retell_provider_polls_when_start_time_override(
         self,
         mock_provider_objects,

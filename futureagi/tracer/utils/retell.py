@@ -1,4 +1,5 @@
 import json
+import math
 from datetime import UTC, datetime, timedelta
 
 from simulate.temporal.utils.async_storage import convert_audio_url_to_s3_sync
@@ -218,7 +219,7 @@ def _first_number(*values):
             number = float(value)
         except (TypeError, ValueError):
             continue
-        if number == number and number not in (float("inf"), float("-inf")):
+        if math.isfinite(number):
             return number
     return None
 
