@@ -1576,20 +1576,34 @@ class RunTestKPIsView(APIView):
             if choice_metric_ids:
                 simulate_eval_configs = SimulateEvalConfig.objects.filter(
                     id__in=list(choice_metric_ids)
-                )
+                ).select_related("eval_template")
                 config_choices_map = {}
                 for sec in simulate_eval_configs:
-                    cfg = (sec.config or {}).get("config", {})
-                    choices = cfg.get("choices", [])
+                    binding_config = sec.config or {}
+                    runtime_config = binding_config.get("run_config") or binding_config.get(
+                        "config", {}
+                    )
+                    choices = (
+                        runtime_config.get("choices")
+                        or sec.eval_template.choices
+                        or list((sec.eval_template.choice_scores or {}).keys())
+                    )
                     if choices:
                         config_choices_map[str(sec.id)] = choices
 
                 for base_name, data in choice_counts.items():
                     mid = data.pop("_metric_id")
-                    eval_averages[base_name] = data
                     choices_list = config_choices_map.get(str(mid), [])
+                    if not choices_list:
+                        choices_list = list(data)
                     if choices_list:
+                        eval_averages[base_name] = {
+                            str(choice): data.get(str(choice).lower(), 0)
+                            for choice in choices_list
+                        }
                         eval_averages[base_name]["choices"] = choices_list
+                    else:
+                        eval_averages[base_name] = data
 
             # --- Scenario graphs ---
             scenario_graphs = {}
