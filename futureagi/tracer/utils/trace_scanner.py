@@ -21,6 +21,7 @@ except ImportError:
     TraceScanner = _ee_stub("TraceScanner")
 from tracer.models.trace_error_analysis import TraceErrorGroup
 from tracer.queries.scan_clustering import (
+    merge_duplicate_clusters,
     assign_to_cluster,
     create_cluster,
     delete_centroid,

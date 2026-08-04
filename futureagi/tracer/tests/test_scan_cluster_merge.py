@@ -20,7 +20,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 from django.utils import timezone
 
-from tracer.models.trace_error_analysis import ErrorClusterTraces, TraceErrorGroup
+from tracer.models.trace_error_analysis import (
+    ErrorClusterTraces,
+    FeedIssueStatus,
+    TraceErrorGroup,
+)
 from tracer.queries.scan_clustering import merge_duplicate_clusters
 
 
@@ -61,6 +65,8 @@ class TestMergeDuplicateClusters:
         rows = [("C1", NEAR_A, 9), ("C2", NEAR_B, 2)]
         with patch("tracer.queries.scan_clustering.ClickHouseVectorDB", _ch(rows)), \
              patch("tracer.queries.scan_clustering.ensure_centroid_table"), \
+             patch("tracer.queries.scan_clustering._absorb_centroid"), \
+             patch("tracer.queries.scan_clustering._absorb_centroid"), \
              patch("tracer.queries.scan_clustering.delete_centroid") as dc:
             merged = merge_duplicate_clusters(pid)
 
@@ -82,6 +88,7 @@ class TestMergeDuplicateClusters:
         rows = [("C1", NEAR_A, 5), ("C2", FAR, 5)]
         with patch("tracer.queries.scan_clustering.ClickHouseVectorDB", _ch(rows)), \
              patch("tracer.queries.scan_clustering.ensure_centroid_table"), \
+             patch("tracer.queries.scan_clustering._absorb_centroid"), \
              patch("tracer.queries.scan_clustering.delete_centroid"):
             merged = merge_duplicate_clusters(pid)
 
@@ -96,6 +103,7 @@ class TestMergeDuplicateClusters:
         rows = [("C1", NEAR_A, 5), ("GHOST", NEAR_B, 4)]
         with patch("tracer.queries.scan_clustering.ClickHouseVectorDB", _ch(rows)), \
              patch("tracer.queries.scan_clustering.ensure_centroid_table"), \
+             patch("tracer.queries.scan_clustering._absorb_centroid"), \
              patch("tracer.queries.scan_clustering.delete_centroid"):
             merged = merge_duplicate_clusters(pid)
 
@@ -109,6 +117,7 @@ class TestMergeDuplicateClusters:
         rows = [(f"C{i}", [1.0 - i * 0.005, i * 0.005, 0.0], 6 - i) for i in range(6)]
         with patch("tracer.queries.scan_clustering.ClickHouseVectorDB", _ch(rows)), \
              patch("tracer.queries.scan_clustering.ensure_centroid_table"), \
+             patch("tracer.queries.scan_clustering._absorb_centroid"), \
              patch("tracer.queries.scan_clustering.delete_centroid"):
             merged = merge_duplicate_clusters(pid, max_merges=2)
 
@@ -120,6 +129,7 @@ class TestMergeDuplicateClusters:
         _cluster(pid, "C1", members=3, traces=[])
         with patch("tracer.queries.scan_clustering.ClickHouseVectorDB", _ch([("C1", NEAR_A, 3)])), \
              patch("tracer.queries.scan_clustering.ensure_centroid_table"), \
+             patch("tracer.queries.scan_clustering._absorb_centroid"), \
              patch("tracer.queries.scan_clustering.delete_centroid"):
             assert merge_duplicate_clusters(pid) == 0
 
@@ -141,6 +151,7 @@ class TestJunctionReconciliation:
         rows = [("C1", NEAR_A, 4), ("C2", NEAR_B, 2)]
         with patch("tracer.queries.scan_clustering.ClickHouseVectorDB", _ch(rows)), \
              patch("tracer.queries.scan_clustering.ensure_centroid_table"), \
+             patch("tracer.queries.scan_clustering._absorb_centroid"), \
              patch("tracer.queries.scan_clustering.delete_centroid"):
             assert merge_duplicate_clusters(pid) == 1
 
@@ -153,3 +164,45 @@ class TestJunctionReconciliation:
         assert traces == {shared, only_in_absorb}       # deduped, nothing lost
         assert ErrorClusterTraces.objects.filter(cluster=survivor).count() == 2
         assert survivor.unique_traces == 2
+
+
+@pytest.mark.django_db
+class TestTriageIsNeverTrampled:
+    """A merge must not launder a human-triaged cluster back into the feed.
+
+    ``_refresh_status`` already refuses to overwrite acknowledged/resolved. Absorbing
+    such a cluster into a for_review one would dissolve that decision by the back door
+    — same harm, extra steps.
+    """
+
+    def _run(self, pid):
+        rows = [("C1", NEAR_A, 9), ("C2", NEAR_B, 2)]
+        with patch("tracer.queries.scan_clustering.ClickHouseVectorDB", _ch(rows)), \
+             patch("tracer.queries.scan_clustering.ensure_centroid_table"), \
+             patch("tracer.queries.scan_clustering._absorb_centroid"), \
+             patch("tracer.queries.scan_clustering.delete_centroid"):
+            return merge_duplicate_clusters(pid)
+
+    def test_triaged_cluster_survives_even_when_smaller(self, project):
+        pid = project.id
+        big = _cluster(pid, "C1", members=9, traces=[])          # would normally win
+        small = _cluster(pid, "C2", members=2, traces=[])
+        small.status = FeedIssueStatus.RESOLVED
+        small.save(update_fields=["status"])
+
+        assert self._run(pid) == 1
+        survivor = TraceErrorGroup.objects.get(project_id=pid)
+        assert survivor.cluster_id == "C2"                        # the triaged one survives
+        assert survivor.status == FeedIssueStatus.RESOLVED        # and keeps its decision
+        assert survivor.error_count == 11                         # nothing lost
+        assert not TraceErrorGroup.objects.filter(cluster_id=big.cluster_id).exists()
+
+    def test_two_triaged_clusters_are_left_alone(self, project):
+        pid = project.id
+        for cid, st in (("C1", FeedIssueStatus.ACKNOWLEDGED), ("C2", FeedIssueStatus.RESOLVED)):
+            c = _cluster(pid, cid, members=5, traces=[])
+            c.status = st
+            c.save(update_fields=["status"])
+
+        assert self._run(pid) == 0
+        assert TraceErrorGroup.objects.filter(project_id=pid).count() == 2

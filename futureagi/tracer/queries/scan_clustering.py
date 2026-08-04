@@ -896,10 +896,42 @@ def get_cluster_trace_embeddings(
 # duplicates, and moves the grouping toward the order-invariant answer over time.
 
 
-def _merge_cluster_pair(keep_id: str, absorb_id: str, project_id: str) -> None:
-    """Fold ``absorb`` into ``keep``: issues, junction rows, counts, centroid."""
+_TRIAGED = (FeedIssueStatus.ACKNOWLEDGED, FeedIssueStatus.RESOLVED)
+
+
+def _merge_cluster_pair(keep_id: str, absorb_id: str, project_id: str) -> bool:
+    """Fold ``absorb`` into ``keep``: issues, junction rows, counts, centroid.
+
+    Refuses to dissolve a cluster a person has triaged. ``_refresh_status`` already
+    guarantees automation never overwrites acknowledged/resolved; absorbing such a
+    cluster into a for_review one would launder a triaged issue back into the feed
+    by the back door, which is the same harm with extra steps.
+    """
+    with transaction.atomic():
+        # _merge_pg may SWAP the pair (it refuses to dissolve a triaged cluster), so the
+        # centroid ops must use the ids it actually merged, not the ones passed in.
+        pair = _merge_pg(keep_id, absorb_id, project_id)
+    if pair is None:
+        return False
+    kept, absorbed = pair
+    _absorb_centroid(kept, absorbed, project_id)
+    delete_centroid(absorbed, project_id)
+    return True
+
+
+def _merge_pg(keep_id: str, absorb_id: str, project_id: str):
+    """PG side of the merge, atomic — a partial move would strand issues on a
+    cluster row that the next statement deletes.
+
+    Returns the (kept_id, absorbed_id) actually merged, or None when the pair was
+    skipped because both sides are human-triaged."""
     keep = TraceErrorGroup.objects.get(cluster_id=keep_id, project_id=project_id)
     absorb = TraceErrorGroup.objects.get(cluster_id=absorb_id, project_id=project_id)
+    if absorb.status in _TRIAGED:
+        if keep.status in _TRIAGED:
+            return None                 # both triaged: leave both alone
+        keep, absorb = absorb, keep     # survive the triaged one instead
+        keep_id, absorb_id = absorb_id, keep_id
 
     TraceScanIssue.objects.filter(cluster=absorb).update(cluster=keep)
 
@@ -926,7 +958,47 @@ def _merge_cluster_pair(keep_id: str, absorb_id: str, project_id: str) -> None:
                              "unique_traces", "updated_at"])
 
     absorb.delete()
-    delete_centroid(absorb_id, project_id)
+    return keep_id, absorb_id
+
+
+def _absorb_centroid(keep_id: str, absorb_id: str, project_id: str) -> None:
+    """Move the absorbed cluster's centroid MASS onto the survivor.
+
+    Without this the survivor's centroid never moves and its member_count never grows,
+    so the merged cluster under-represents up to half its own members — and repeated
+    passes cannot converge on the order-invariant grouping, because the evidence needed
+    to converge is exactly what got deleted. Weighted mean, matching the incremental
+    update ``assign_to_cluster`` already performs.
+    """
+    db = ClickHouseVectorDB()
+    try:
+        rows = db.client.execute(
+            f"""
+            SELECT cluster_id, argMax(centroid, last_updated), argMax(member_count, last_updated),
+                   argMax(family, last_updated)
+            FROM {CENTROIDS_TABLE}
+            WHERE project_id = %(p)s AND cluster_id IN (%(a)s, %(b)s)
+            GROUP BY cluster_id
+            """,
+            {"p": str(project_id), "a": keep_id, "b": absorb_id},
+        )
+        by = {str(r[0]): (r[1], r[2] or 1, r[3]) for r in rows}
+        k, a = by.get(keep_id), by.get(absorb_id)
+        if not k or not a:
+            return
+        nk, na = max(int(k[1]), 1), max(int(a[1]), 1)
+        merged = [(x * nk + y * na) / (nk + na) for x, y in zip(k[0], a[0])]
+        db.client.execute(
+            f"""
+            INSERT INTO {CENTROIDS_TABLE}
+            (cluster_id, project_id, centroid, member_count, family, last_updated)
+            VALUES (%(cluster_id)s, %(project_id)s, %(centroid)s, %(member_count)s, %(family)s, now())
+            """,
+            {"cluster_id": keep_id, "project_id": str(project_id), "centroid": merged,
+             "member_count": nk + na, "family": k[2]},
+        )
+    finally:
+        db.close()
 
 
 def merge_duplicate_clusters(
@@ -986,7 +1058,10 @@ def merge_duplicate_clusters(
             continue
         keep, absorb = (a, b) if (a[2] or 0) >= (b[2] or 0) else (b, a)
         try:
-            _merge_cluster_pair(keep[0], absorb[0], project_id)
+            # a pair can be declined (both sides human-triaged) — only a real merge counts,
+            # and only a real merge retires an id from the candidate pool
+            if not _merge_cluster_pair(keep[0], absorb[0], project_id):
+                continue
         except TraceErrorGroup.DoesNotExist:
             continue
         gone.add(absorb[0])
