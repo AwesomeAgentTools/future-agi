@@ -94,7 +94,7 @@ async def run_llm_analysis(input: RunAnalysisInput) -> str:
     """Run LLM analysis using Falcon's LLM client. Returns markdown."""
     from tfc.ee_gating import EEFeature, check_ee_feature
 
-    check_ee_feature(EEFeature.FALCON_AI, activity=True)
+    check_ee_feature(EEFeature.FALCON_AI, org_id=input.org_id, activity=True)
 
     try:
         from ee.falcon_ai.llm_client import FalconLLMClient

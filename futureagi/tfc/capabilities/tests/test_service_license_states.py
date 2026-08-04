@@ -6,7 +6,7 @@ active, grace, expired, trial_active, trial_expired, missing, invalid.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -31,6 +31,7 @@ class _FakeLicenseResolver:
 
 
 def _make_active_snapshot(features: frozenset[str] | None = None) -> LicenseSnapshot:
+    now = datetime.now(UTC)
     return LicenseSnapshot(
         state=LicenseState.ACTIVE,
         license_type=LicenseType.PRODUCTION,
@@ -41,9 +42,10 @@ def _make_active_snapshot(features: frozenset[str] | None = None) -> LicenseSnap
         features=features or frozenset({"voice_sim", "agentic_eval", "falcon_ai", "turing_models"}),
         limits={"traces_monthly": 1_000_000, "gateway_requests_monthly": 500_000},
         max_instances=3,
-        issued_at=datetime(2025, 1, 1, tzinfo=UTC),
-        expires_at=datetime(2026, 1, 1, tzinfo=UTC),
-        validated_at=datetime(2025, 6, 1, tzinfo=UTC),
+        issued_at=now - timedelta(days=180),
+        expires_at=now + timedelta(days=180),
+        grace_ends_at=now + timedelta(days=270),
+        validated_at=now,
     )
 
 
@@ -86,14 +88,16 @@ class TestActiveLicense:
 class TestGraceLicense:
     @pytest.fixture(autouse=True)
     def grace_license(self):
+        now = datetime.now(UTC)
         snapshot = LicenseSnapshot(
             state=LicenseState.GRACE,
             license_type=LicenseType.PRODUCTION,
             license_id="lic_test_002",
             band="business",
             features=frozenset({"voice_sim", "agentic_eval", "optimization"}),
-            grace_ends_at=datetime(2026, 4, 1, tzinfo=UTC),
-            validated_at=datetime(2025, 6, 1, tzinfo=UTC),
+            expires_at=now - timedelta(days=5),
+            grace_ends_at=now + timedelta(days=30),
+            validated_at=now,
         )
         resolver = _FakeLicenseResolver(snapshot)
         service.configure(
@@ -158,14 +162,15 @@ class TestExpiredLicense:
 class TestTrialActive:
     @pytest.fixture(autouse=True)
     def trial_license(self):
+        now = datetime.now(UTC)
         snapshot = LicenseSnapshot(
             state=LicenseState.TRIAL_ACTIVE,
             license_type=LicenseType.TRIAL,
             license_id="lic_trial_001",
             band="business",
             features=frozenset({"voice_sim", "agentic_eval", "falcon_ai"}),
-            expires_at=datetime(2025, 7, 1, tzinfo=UTC),
-            validated_at=datetime(2025, 6, 1, tzinfo=UTC),
+            expires_at=now + timedelta(days=14),
+            validated_at=now,
         )
         resolver = _FakeLicenseResolver(snapshot)
         service.configure(

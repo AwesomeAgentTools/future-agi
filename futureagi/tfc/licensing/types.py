@@ -12,7 +12,7 @@ that can be imported anywhere without side effects.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 
 
@@ -131,22 +131,60 @@ class LicenseSnapshot:
     validated_at: datetime | None = None
     denial_reason: DenialReason | None = None
 
+    def live_state(self, now: datetime | None = None) -> LicenseState:
+        """Recompute the effective state against the current clock.
+
+        The snapshot is frozen at process start, so a long-lived worker
+        would otherwise keep serving paid features past expires_at until
+        it restarts. Recheck expires_at / grace_ends_at on every call and
+        return the transitioned state.
+        """
+        base = self.state
+        if base in (
+            LicenseState.MISSING,
+            LicenseState.INVALID,
+            LicenseState.NOT_APPLICABLE,
+            LicenseState.EXPIRED,
+            LicenseState.TRIAL_EXPIRED,
+        ):
+            return base
+
+        current = now or datetime.now(UTC)
+
+        if base == LicenseState.TRIAL_ACTIVE:
+            if self.expires_at and current >= self.expires_at:
+                return LicenseState.TRIAL_EXPIRED
+            return base
+
+        # ACTIVE or GRACE — check active window then grace window.
+        if base == LicenseState.ACTIVE and self.expires_at and current >= self.expires_at:
+            if self.grace_ends_at and current < self.grace_ends_at:
+                return LicenseState.GRACE
+            return LicenseState.EXPIRED
+
+        if base == LicenseState.GRACE:
+            if self.grace_ends_at and current >= self.grace_ends_at:
+                return LicenseState.EXPIRED
+            return base
+
+        return base
+
     @property
     def is_active(self) -> bool:
-        return self.state in (LicenseState.ACTIVE, LicenseState.TRIAL_ACTIVE)
+        return self.live_state() in (LicenseState.ACTIVE, LicenseState.TRIAL_ACTIVE)
 
     @property
     def is_grace(self) -> bool:
-        return self.state == LicenseState.GRACE
+        return self.live_state() == LicenseState.GRACE
 
     @property
     def is_expired(self) -> bool:
-        return self.state in (LicenseState.EXPIRED, LicenseState.TRIAL_EXPIRED)
+        return self.live_state() in (LicenseState.EXPIRED, LicenseState.TRIAL_EXPIRED)
 
     @property
     def is_usable(self) -> bool:
         """True if the license allows any paid feature access (active or grace)."""
-        return self.state in (
+        return self.live_state() in (
             LicenseState.ACTIVE,
             LicenseState.GRACE,
             LicenseState.TRIAL_ACTIVE,

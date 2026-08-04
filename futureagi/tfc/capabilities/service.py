@@ -15,7 +15,7 @@ Decision order:
 
 from __future__ import annotations
 
-import logging
+import structlog
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -31,7 +31,7 @@ from tfc.licensing.types import (
     LicenseState,
 )
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -212,39 +212,43 @@ def _check_self_hosted_ee(
         )
 
     snapshot = _license_resolver.get_snapshot()
+    # Recompute the state against the clock so that a snapshot frozen at
+    # process start does not keep serving paid features past expires_at /
+    # grace_ends_at in long-lived workers.
+    live_state = snapshot.live_state()
 
     # Missing or invalid license
-    if snapshot.state == LicenseState.MISSING:
+    if live_state == LicenseState.MISSING:
         return CapabilityDecision(
             allowed=False,
             feature_id=feature.id,
             reason_code=DenialReason.LICENSE_MISSING.value,
-            license_state=snapshot.state.value,
+            license_state=live_state.value,
         )
 
-    if snapshot.state == LicenseState.INVALID:
+    if live_state == LicenseState.INVALID:
         return CapabilityDecision(
             allowed=False,
             feature_id=feature.id,
             reason_code=DenialReason.LICENSE_INVALID.value,
-            license_state=snapshot.state.value,
+            license_state=live_state.value,
         )
 
     # Expired states
-    if snapshot.state == LicenseState.EXPIRED:
+    if live_state == LicenseState.EXPIRED:
         return CapabilityDecision(
             allowed=False,
             feature_id=feature.id,
             reason_code=DenialReason.LICENSE_EXPIRED.value,
-            license_state=snapshot.state.value,
+            license_state=live_state.value,
         )
 
-    if snapshot.state == LicenseState.TRIAL_EXPIRED:
+    if live_state == LicenseState.TRIAL_EXPIRED:
         return CapabilityDecision(
             allowed=False,
             feature_id=feature.id,
             reason_code=DenialReason.LICENSE_TRIAL_EXPIRED.value,
-            license_state=snapshot.state.value,
+            license_state=live_state.value,
         )
 
     # Active or grace: check feature inclusion
@@ -253,16 +257,16 @@ def _check_self_hosted_ee(
             allowed=False,
             feature_id=feature.id,
             reason_code=DenialReason.LICENSE_FEATURE_MISSING.value,
-            license_state=snapshot.state.value,
+            license_state=live_state.value,
         )
 
     # Grace: check if feature is allowed during grace
-    if snapshot.state == LicenseState.GRACE and not feature.allowed_during_grace:
+    if live_state == LicenseState.GRACE and not feature.allowed_during_grace:
         return CapabilityDecision(
             allowed=False,
             feature_id=feature.id,
             reason_code=DenialReason.FEATURE_NOT_IN_GRACE.value,
-            license_state=snapshot.state.value,
+            license_state=live_state.value,
             grace_ends_at=snapshot.grace_ends_at.isoformat() if snapshot.grace_ends_at else None,
         )
 
@@ -273,7 +277,7 @@ def _check_self_hosted_ee(
     return CapabilityDecision(
         allowed=True,
         feature_id=feature.id,
-        license_state=snapshot.state.value,
+        license_state=live_state.value,
         requires_network=requires_network,
     )
 

@@ -6,12 +6,12 @@ resolvers into the capability service. Called from CapabilitiesConfig.ready().
 
 from __future__ import annotations
 
-import logging
+import structlog
 
 from tfc.ee_loader import has_ee
 from tfc.licensing.types import DeploymentFlavor, DeploymentLocation
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 def _detect_flavor() -> DeploymentFlavor:
