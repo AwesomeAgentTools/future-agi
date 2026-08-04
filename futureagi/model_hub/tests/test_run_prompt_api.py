@@ -358,7 +358,7 @@ class TestAddRunPromptColumnView:
         self, auth_client, dataset, input_column, valid_run_prompt_config
     ):
         """Null values inside run_prompt_config mean "use provider default"
-        and must not be rejected (TH-6409)."""
+        and must not be rejected."""
         config = {
             **valid_run_prompt_config,
             "run_prompt_config": {
