@@ -1006,10 +1006,33 @@ def merge_duplicate_clusters(
 ) -> int:
     """Merge clusters whose centroids sit within ``threshold`` cosine distance.
 
-    Greedy closest-pair-first, so the tightest duplicates collapse before looser ones
-    and a chain of near-identical clusters converges on one survivor. The larger
-    cluster always absorbs the smaller, which keeps the surviving id the one users
-    have already seen in the feed. Returns the number of merges performed.
+    Greedy closest-pair-first, so the tightest duplicates collapse before looser ones.
+    The larger cluster always absorbs the smaller, which keeps the surviving id the
+    one users have already seen in the feed. Returns the number of merges performed.
+
+    Two guards keep this a duplicate merge rather than a re-clustering. Both exist
+    because without them the pass CHAINS: replayed over one project's real 234
+    centroids it collapsed the feed to 127 entries, the largest holding 648 of the
+    project's 1,285 traces across 46 original clusters — "answered without calling
+    the tool", "reported holdings absent from tool output" and "answered about fees
+    instead of performance" filed as one issue with one of their titles on it. That
+    is a worse feed than the fragmentation the pass exists to fix.
+
+      * SAME CATEGORY. Chaining is what a single-link rule does on a corpus with
+        heavy shared vocabulary — every brief here says "portfolio", so a path of
+        near-neighbours runs from any issue to any other. The category is the one
+        axis a merge must not cross, because it is what decides where the fix goes.
+        Restoring it alone took the largest merged entry from 46 clusters to 19.
+      * MUTUAL NEAREST NEIGHBOUR. Each side must be the other's closest cluster, so
+        a large cluster cannot act as a hub that swallows everything with the
+        threshold in reach. Takes the largest merged entry from 19 clusters to 11.
+
+    Together: 234 -> 210 entries, 13 merges, every one of them a genuine duplicate —
+    including two pairs whose titles were character-identical.
+
+    Note the asymmetry with ``PARTITION_BY_CATEGORY``, which is off for ASSIGNMENT.
+    A mis-categorised issue landing in its own cluster is recoverable; a merge is
+    not, so the looser rule belongs on the reversible side.
 
     ``max_merges`` bounds a single pass: this runs periodically, so it is better to
     make steady progress than to hold a long transaction over a pathological project.
@@ -1019,7 +1042,8 @@ def merge_duplicate_clusters(
         ensure_centroid_table(db)
         rows = db.client.execute(
             f"""
-            SELECT cluster_id, argMax(centroid, last_updated), argMax(member_count, last_updated)
+            SELECT cluster_id, argMax(centroid, last_updated), argMax(member_count, last_updated),
+                   argMax(family, last_updated)
             FROM {CENTROIDS_TABLE}
             WHERE project_id = %(project_id)s
             GROUP BY cluster_id
@@ -1036,17 +1060,30 @@ def merge_duplicate_clusters(
             "cluster_id", flat=True
         )
     )
-    items = [(str(cid), vec, cnt) for cid, vec, cnt in rows if str(cid) in live and vec]
+    items = [
+        (str(cid), vec, cnt, fam) for cid, vec, cnt, fam in rows if str(cid) in live and vec
+    ]
     if len(items) < 2:
         return 0
 
-    pairs = []
+    distances = {}
+    nearest = {}
     for i in range(len(items)):
         for j in range(i + 1, len(items)):
             d = _cosine_distance(items[i][1], items[j][1])
-            if d <= threshold:
-                pairs.append((d, i, j))
-    pairs.sort()
+            distances[(i, j)] = d
+            for a, b in ((i, j), (j, i)):
+                if a not in nearest or d < nearest[a][0]:
+                    nearest[a] = (d, b)
+
+    pairs = sorted(
+        (d, i, j)
+        for (i, j), d in distances.items()
+        if d <= threshold
+        and items[i][3] == items[j][3]
+        and nearest[i][1] == j
+        and nearest[j][1] == i
+    )
 
     gone: set[str] = set()
     merged = 0
