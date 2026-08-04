@@ -210,6 +210,24 @@ _ENTITY_GIVEAWAY = re.compile(
 )
 
 
+def _spread(items: list[str], k: int) -> list[str]:
+    """Evenly spaced sample, in order.
+
+    The title has to fit EVERY member, so it must be written from a sample of
+    the group rather than the front of one. On this project's largest cluster
+    the first 25 members happened to be the fabricated-number variants and the
+    title came back "Fabricated quantitative data instead of calling tools",
+    which over-claims against the members that merely answered in prose; an
+    evenly spread 25 gave "provided text answers instead of executing required
+    data retrieval tools", which fits all of them. Deterministic rather than
+    random so a cluster does not get a different title on every recompute.
+    """
+    if len(items) <= k:
+        return list(items)
+    step = len(items) / k
+    return [items[int(i * step)] for i in range(k)]
+
+
 def generate_scan_cluster_title(briefs: list[str]) -> Optional[str]:
     """One entity-free title describing what a cluster's members share.
 
@@ -219,7 +237,7 @@ def generate_scan_cluster_title(briefs: list[str]) -> Optional[str]:
     """
     if not briefs or len(briefs) < 2:
         return None
-    sample = briefs[:25]
+    sample = _spread(briefs, 25)
     lines = "\n".join(f"- {b.strip()[:200]}" for b in sample)
     try:
         raw = _invoke(
