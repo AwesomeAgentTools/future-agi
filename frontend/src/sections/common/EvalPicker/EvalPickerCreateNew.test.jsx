@@ -112,6 +112,10 @@ vi.mock("src/sections/evals/hooks/useCompositeChildrenKeys", () => ({
   useCompositeChildrenUnionKeys: () => [],
 }));
 
+vi.mock("src/hooks/useCapabilities", () => ({
+  useFeatureAllowed: () => ({ allowed: true, isLoading: false }),
+  useCapabilities: () => ({ data: undefined, isLoading: false }),
+}));
 vi.mock("src/hooks/useDeploymentMode", () => ({
   useDeploymentMode: () => ({ isOSS: false }),
 }));

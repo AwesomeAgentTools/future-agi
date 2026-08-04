@@ -21,7 +21,7 @@ import {
   getEvalBaseName,
 } from "src/sections/common/EvaluationDrawer/common";
 import { FAGI_MODEL_VALUES } from "src/sections/evals/components/ModelSelector";
-import { useDeploymentMode } from "src/hooks/useDeploymentMode";
+import { useFeatureAllowed } from "src/hooks/useCapabilities";
 import { FUTUREAGI_LLM_MODELS } from "src/sections/common/EvaluationDrawer/validation";
 import { useEvalPickerContext } from "./context/EvalPickerContext";
 import { normalizeEvalPickerEval } from "./evalPickerValue";
@@ -115,7 +115,8 @@ function autoMapVariables(variables, sourceColumns) {
 
 const EvalPickerConfig = ({ evalData, onBack, onSave, isSaving }) => {
   const theme = useTheme();
-  const { isOSS } = useDeploymentMode();
+  const { allowed: turingAllowed } = useFeatureAllowed("turing_models");
+  const fagiLocked = !turingAllowed;
   const { sourceColumns } = useEvalPickerContext();
   const normalizedEvalData = useMemo(
     () => normalizeEvalPickerEval(evalData),
@@ -148,7 +149,7 @@ const EvalPickerConfig = ({ evalData, onBack, onSave, isSaving }) => {
   });
   const [model, setModel] = useState(() => {
     const seeded = normalizedEvalData?.model || DEFAULT_EVAL_MODEL;
-    return isOSS && FAGI_MODEL_VALUES.has(seeded) ? "" : seeded;
+    return fagiLocked && FAGI_MODEL_VALUES.has(seeded) ? "" : seeded;
   });
   const [mapping, setMapping] = useState(() =>
     autoMapVariables(variables, sourceColumns),

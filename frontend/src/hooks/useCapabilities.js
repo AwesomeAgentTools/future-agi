@@ -13,3 +13,17 @@ export function useCapabilities() {
     retry: 1,
   });
 }
+
+/**
+ * Convenience: is a single capability allowed for this deployment/org?
+ * Backed by the same cached /api/capabilities/ query.
+ *
+ *   const { allowed, isLoading } = useFeatureAllowed("turing_models");
+ */
+export function useFeatureAllowed(featureId) {
+  const { data, isLoading } = useCapabilities();
+  return {
+    allowed: data?.features?.[featureId]?.allowed === true,
+    isLoading,
+  };
+}

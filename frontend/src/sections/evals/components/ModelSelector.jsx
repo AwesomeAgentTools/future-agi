@@ -24,7 +24,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import Iconify from "src/components/iconify";
 import KeysDrawer from "src/components/custom-model-dropdown/KeysDrawer";
 import { useDebounce } from "src/hooks/use-debounce";
-import { useDeploymentMode } from "src/hooks/useDeploymentMode";
+import { useFeatureAllowed } from "src/hooks/useCapabilities";
 import { useNavigate } from "react-router";
 import axios, { endpoints } from "src/utils/axios";
 import { getProviderLogoFilterSx } from "./modelLogo";
@@ -669,20 +669,23 @@ const ModelSelector = ({
   const debouncedKbSearch = useDebounce(kbSearch.trim(), 400);
   const [keysDrawerModel, setKeysDrawerModel] = useState(null);
   const navigate = useNavigate();
-  const { isOSS, isLoading: deploymentModeLoading } = useDeploymentMode();
-  const fagiModelsLocked = isOSS && !deploymentModeLoading;
+  const { allowed: turingAllowed, isLoading: capabilitiesLoading } =
+    useFeatureAllowed("turing_models");
+  const { allowed: falconAllowed } = useFeatureAllowed("falcon_ai");
+  const fagiModelsLocked = !turingAllowed && !capabilitiesLoading;
 
   const currentMode = MODES.find((m) => m.value === mode) || MODES[1];
 
-  // Fetch real MCP connectors from Falcon AI API. Falcon AI is EE-only;
-  // skip the call in OSS so the ee_stub 402 doesn't fire a snackbar.
+  // Fetch real MCP connectors from Falcon AI API. Falcon AI needs a
+  // license/plan; skip the call when locked so the 402 doesn't fire a
+  // snackbar.
   const { data: connectorsData } = useInfiniteQuery({
     queryKey: ["falcon-mcp-connectors"],
     queryFn: () => axios.get(endpoints.falconAI.connectors),
     getNextPageParam: () => null,
     initialPageParam: 1,
     staleTime: 60000,
-    enabled: !isOSS,
+    enabled: falconAllowed,
   });
 
   const connectors = useMemo(() => {

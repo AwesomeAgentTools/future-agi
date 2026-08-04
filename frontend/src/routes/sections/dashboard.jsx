@@ -489,7 +489,7 @@ const DashboardRoutes = () => {
 export const dashboardRoutes = (
   user,
   workspaceRole,
-  { isOSS = false } = {},
+  { isCloud = false } = {},
 ) => {
   const userOrgRole = user?.organization_role;
   const userDefaultWsRole = user?.default_workspace_role;
@@ -693,7 +693,7 @@ export const dashboardRoutes = (
   // - Role-gated in Cloud/EE mode
   const billingAllowedRoles = ["Owner", "Admin", "workspace_admin"];
   const hasBillingAccess =
-    !isOSS && (isOwner || billingAllowedRoles.includes(effectiveWsRole));
+    isCloud && (isOwner || billingAllowedRoles.includes(effectiveWsRole));
 
   if (hasBillingAccess) {
     settingsRoute.push(
@@ -1112,18 +1112,16 @@ export const dashboardRoutes = (
           index: true,
           element: <Develop />,
         },
-        ...(!isOSS
-          ? [
-              {
-                path: "create-synthetic-dataset",
-                element: <CreateSyntheticData />,
-              },
-              {
-                path: "edit-synthetic-dataset/:dataset",
-                element: <EditSyntheticDataDrawer />,
-              },
-            ]
-          : []),
+        // Synthetic data ships open on self-hosted; cloud plans enforce
+        // via the backend capability check.
+        {
+          path: "create-synthetic-dataset",
+          element: <CreateSyntheticData />,
+        },
+        {
+          path: "edit-synthetic-dataset/:dataset",
+          element: <EditSyntheticDataDrawer />,
+        },
 
         {
           path: ":dataset",

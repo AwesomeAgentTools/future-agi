@@ -16,7 +16,7 @@ import {
 import CustomTooltip from "src/components/tooltip/CustomTooltip";
 import { LoadingButton } from "@mui/lab";
 import { enqueueSnackbar } from "notistack";
-import { useDeploymentMode } from "src/hooks/useDeploymentMode";
+import { useFeatureAllowed } from "src/hooks/useCapabilities";
 import { FAGI_MODEL_VALUES } from "src/sections/evals/components/ModelSelector";
 import PropTypes from "prop-types";
 import React, {
@@ -120,7 +120,10 @@ const getEvalPromptText = (evalData, config = {}) =>
   evalData?.instructions || config?.rule_prompt || "";
 
 const EvalPickerConfigFull = ({ evalData, onBack, onSave, isSaving }) => {
-  const { isOSS } = useDeploymentMode();
+  const { allowed: turingAllowed } = useFeatureAllowed("turing_models");
+  const { allowed: agentEvalAllowed } = useFeatureAllowed("agentic_eval");
+  const fagiLocked = !turingAllowed;
+  const agentEvalLocked = !agentEvalAllowed;
   const {
     source,
     sourceId,
@@ -176,7 +179,7 @@ const EvalPickerConfigFull = ({ evalData, onBack, onSave, isSaving }) => {
   const [knowledgeBaseIds, setKnowledgeBaseIds] = useState([]);
   const [contextOptions, setContextOptions] = useState(["variables_only"]);
   const [errorLocalizerEnabled, setErrorLocalizerEnabled] = useState(false);
-  const errorLocalizerActive = errorLocalizerEnabled && !isOSS;
+  const errorLocalizerActive = errorLocalizerEnabled && agentEvalAllowed;
   // Name for the UserEvalMetric — defaults to template name, user can customise
   const [evalName, setEvalName] = useState("");
   const [dataReady, setDataReady] = useState(false);
@@ -824,21 +827,21 @@ const EvalPickerConfigFull = ({ evalData, onBack, onSave, isSaving }) => {
   // "Add Evaluation" button.
   const handleSaveVersion = useCallback(async () => {
     if (isSystemEval) return;
-    if (isOSS && evalType === "agent") {
+    if (agentEvalLocked && evalType === "agent") {
       enqueueSnackbar(
         "Agent evaluations are not available on OSS. Use LLM-as-a-Judge or Code evaluations instead.",
         { variant: "error" },
       );
       return;
     }
-    if (isOSS && FAGI_MODEL_VALUES.has(model)) {
+    if (fagiLocked && FAGI_MODEL_VALUES.has(model)) {
       enqueueSnackbar(
         "Turing models are not available in OSS. Please select your own model.",
         { variant: "error" },
       );
       return;
     }
-    if (isOSS && evalType !== "code" && !model) {
+    if (fagiLocked && evalType !== "code" && !model) {
       enqueueSnackbar("Please select a model.", { variant: "error" });
       return;
     }
@@ -908,7 +911,8 @@ const EvalPickerConfigFull = ({ evalData, onBack, onSave, isSaving }) => {
     }
   }, [
     isSystemEval,
-    isOSS,
+    agentEvalLocked,
+    fagiLocked,
     evalType,
     instructions,
     code,
@@ -1697,7 +1701,7 @@ const EvalPickerConfigFull = ({ evalData, onBack, onSave, isSaving }) => {
                   introspects model traces, which code evals don't produce. */}
               {!isComposite && evalType !== "code" && (
                 <CustomTooltip
-                  show={isOSS}
+                  show={agentEvalLocked}
                   type=""
                   arrow
                   title={ERROR_LOCALIZER_OSS_TOOLTIP}
@@ -1706,7 +1710,7 @@ const EvalPickerConfigFull = ({ evalData, onBack, onSave, isSaving }) => {
                     control={
                       <Checkbox
                         checked={errorLocalizerActive}
-                        disabled={isOSS}
+                        disabled={agentEvalLocked}
                         onChange={(e) => {
                           setErrorLocalizerEnabled(e.target.checked);
                           setIsDirty(true);

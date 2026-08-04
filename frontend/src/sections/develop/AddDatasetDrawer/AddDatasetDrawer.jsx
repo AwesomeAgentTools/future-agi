@@ -12,7 +12,7 @@ import AddSDKModal from "./AddSDKModal";
 import SyntheticDataDrawer from "../AddRowDrawer/CreateSyntheticData";
 import { trackEvent, Events, PropertyName } from "src/utils/Mixpanel";
 import ExistingDatasetModal from "../AddRowDrawer/ExistingDatasetModal";
-import { useDeploymentMode } from "src/hooks/useDeploymentMode";
+import { useFeatureAllowed } from "src/hooks/useCapabilities";
 
 const options = [
   {
@@ -89,10 +89,10 @@ const AddDatasetDrawer = ({ open, onClose, refreshGrid }) => {
   const [syntheticDataDrawerOpen, setSyntheticDataDrawerOpen] = useState(false);
 
   const navigate = useNavigate();
-  const { isOSS } = useDeploymentMode();
-  const filteredOptions = isOSS
-    ? options.filter((o) => o.id !== "synthetic-data")
-    : options;
+  const { allowed: syntheticAllowed } = useFeatureAllowed("synthetic_data");
+  const filteredOptions = syntheticAllowed
+    ? options
+    : options.filter((o) => o.id !== "synthetic-data");
 
   return (
     <>

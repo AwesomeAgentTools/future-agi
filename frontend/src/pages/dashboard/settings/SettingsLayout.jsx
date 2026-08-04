@@ -55,7 +55,7 @@ TabErrorBoundary.propTypes = {
 const SettingsLayout = React.memo(() => {
   const theme = useTheme();
   const { user } = useAuthContext();
-  const { isOSS } = useDeploymentMode();
+  const { isCloud } = useDeploymentMode();
   const userOrgRole = user?.organization_role;
   const isOwner = userOrgRole === "Owner";
   const isAdmin = userOrgRole === "Admin";
@@ -67,15 +67,15 @@ const SettingsLayout = React.memo(() => {
       // Administration items - only shown to owners
       ...(isOwner
         ? [
-            ...(isOSS
-              ? []
-              : [
+            ...(isCloud
+              ? [
                   {
                     path: "/dashboard/settings/usage-summary",
                     title: "Usage Summary",
                     icon: ICONS.Summary,
                   },
-                ]),
+                ]
+              : []),
             {
               path: "/dashboard/settings/user-management",
               title: "User Management",
@@ -146,7 +146,7 @@ const SettingsLayout = React.memo(() => {
       },
     ];
     return allTabs;
-  }, [isOwner, isOwnerOrAdmin, isOSS]);
+  }, [isOwner, isOwnerOrAdmin, isCloud]);
 
   // Memoized styles to prevent recreation
   const containerStyles = useMemo(

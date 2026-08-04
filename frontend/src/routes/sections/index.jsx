@@ -23,12 +23,12 @@ const SharedView = lazyWithRetry(() => import("src/pages/shared/SharedView"));
 export default function Router() {
   const { user } = useAuthContext();
   const { currentWorkspaceRole } = useWorkspace();
-  const { isOSS, isLoading: isDeploymentModeLoading } = useDeploymentMode();
+  const { isCloud, isLoading: isDeploymentModeLoading } = useDeploymentMode();
   const postLoginPath = usePostLoginPath();
 
   const dashboardRoutesArray = useMemo(
-    () => dashboardRoutes(user, currentWorkspaceRole, { isOSS }),
-    [user, currentWorkspaceRole, isOSS],
+    () => dashboardRoutes(user, currentWorkspaceRole, { isCloud }),
+    [user, currentWorkspaceRole, isCloud],
   );
 
   const element = useRoutes([
@@ -77,8 +77,8 @@ export default function Router() {
   ]);
 
   // Wait for deployment-mode resolution before rendering the route tree.
-  // Otherwise the first render uses the hook's default `isOSS=true`, which
-  // omits non-OSS routes (billing/pricing/etc.). Stripe Checkout redirects
+  // Otherwise the first render uses the hook's default (self-hosted), which
+  // omits cloud routes (billing/pricing/etc.). Stripe Checkout redirects
   // back to /dashboard/settings/pricing?upgrade=success&session_id=... — if
   // that route isn't registered yet, the catch-all sends users to /404 and
   // the session_id is lost before PricingPage can confirm the upgrade.

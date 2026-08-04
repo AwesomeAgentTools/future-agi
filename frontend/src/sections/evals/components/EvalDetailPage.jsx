@@ -27,7 +27,7 @@ import React, {
 import { useNavigate, useParams } from "react-router";
 import { useSearchParams } from "react-router-dom";
 import { useSnackbar } from "notistack";
-import { useDeploymentMode } from "src/hooks/useDeploymentMode";
+import { useFeatureAllowed } from "src/hooks/useCapabilities";
 import Iconify from "src/components/iconify";
 import CustomTooltip from "src/components/tooltip/CustomTooltip";
 import axios, { endpoints } from "src/utils/axios";
@@ -129,7 +129,10 @@ const EvalDetailPage = () => {
     RolePermission.EVALS[PERMISSIONS.EDIT_CREATE_DELETE_EVALS][role];
   const [searchParams, setSearchParams] = useSearchParams();
   const { enqueueSnackbar } = useSnackbar();
-  const { isOSS } = useDeploymentMode();
+  const { allowed: turingAllowed } = useFeatureAllowed("turing_models");
+  const { allowed: agentEvalAllowed } = useFeatureAllowed("agentic_eval");
+  const fagiLocked = !turingAllowed;
+  const agentEvalLocked = !agentEvalAllowed;
 
   const {
     data: evalData,
@@ -168,7 +171,7 @@ const EvalDetailPage = () => {
       "mustache",
   );
   const [errorLocalizerEnabled, setErrorLocalizerEnabled] = useState(false);
-  const errorLocalizerActive = errorLocalizerEnabled && !isOSS;
+  const errorLocalizerActive = errorLocalizerEnabled && agentEvalAllowed;
 
   // Dataset columns for autocomplete
   const [datasetColumns, setDatasetColumns] = useState([]);
@@ -502,7 +505,7 @@ const EvalDetailPage = () => {
         isPopulatingRef.current = false;
       }, 0);
     },
-    [defaultVersion, evalData, isDirty, isComposite, setSearchParams, isOSS],
+    [defaultVersion, evalData, isDirty, isComposite, setSearchParams],
   );
 
   // Three-dot menu
@@ -760,21 +763,21 @@ const EvalDetailPage = () => {
 
   // Save version
   const handleSaveVersion = useCallback(async () => {
-    if (isOSS && evalType === "agent") {
+    if (agentEvalLocked && evalType === "agent") {
       enqueueSnackbar(
         "Agent evaluations are not available on OSS. Use LLM-as-a-Judge or Code evaluations instead.",
         { variant: "error" },
       );
       return;
     }
-    if (isOSS && FAGI_MODEL_VALUES.has(model)) {
+    if (fagiLocked && FAGI_MODEL_VALUES.has(model)) {
       enqueueSnackbar(
         "Turing models are not available in OSS. Please select your own model.",
         { variant: "error" },
       );
       return;
     }
-    if (isOSS && evalType !== "code" && !model) {
+    if (fagiLocked && evalType !== "code" && !model) {
       enqueueSnackbar("Please select a model.", { variant: "error" });
       return;
     }
@@ -877,7 +880,8 @@ const EvalDetailPage = () => {
     }
   }, [
     evalType,
-    isOSS,
+    agentEvalLocked,
+    fagiLocked,
     evalData,
     instructions,
     code,
@@ -1692,7 +1696,7 @@ const EvalDetailPage = () => {
                 {!isComposite && evalType !== "code" && (
                   <Box>
                     <CustomTooltip
-                      show={isOSS}
+                      show={agentEvalLocked}
                       type=""
                       arrow
                       title={ERROR_LOCALIZER_OSS_TOOLTIP}
@@ -1702,7 +1706,7 @@ const EvalDetailPage = () => {
                           control={
                             <Checkbox
                               checked={errorLocalizerActive}
-                              disabled={isOSS}
+                              disabled={agentEvalLocked}
                               onChange={(e) => {
                                 setErrorLocalizerEnabled(e.target.checked);
                                 markDirty();
