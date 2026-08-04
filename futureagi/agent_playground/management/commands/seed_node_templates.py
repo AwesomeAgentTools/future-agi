@@ -1,10 +1,10 @@
 """
 Seed system-defined NodeTemplate records (idempotent).
 
-Core logic lives in :func:`seed_node_templates` so this command and the data
-migration (``agent_playground/migrations/0012_seed_node_templates.py``) share
-one implementation. The migration is what actually seeds templates on
-deploy; this command is kept for manual re-seeding / dry-run inspection.
+Core logic lives in :func:`seed_node_templates` so both the post_migrate
+signal (AgentPlaygroundConfig) and this command share one implementation.
+New templates are auto-seeded on deploy; this command is kept for manual
+re-seeding / dry-run inspection.
 
 Usage:
     python manage.py seed_node_templates
