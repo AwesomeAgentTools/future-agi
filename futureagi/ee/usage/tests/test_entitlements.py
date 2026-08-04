@@ -110,6 +110,24 @@ class TestEntitlementsUnit:
             result = E.can_create("org-1", "monitors", current_count=9999)
             assert result.allowed is True
 
+    def test_can_create_unconfigured_limit_denies_not_crashes(self):
+        """Cloud + limit=None (unconfigured resource) → clean 402, not a
+        TypeError on the None >= int comparison."""
+        E = self._get_entitlements()
+        with (
+            patch(
+                "ee.usage.services.entitlements.DeploymentMode.is_cloud",
+                return_value=True,
+            ),
+            patch.object(E, "get_limit", return_value=None),
+            patch(
+                "ee.usage.services.entitlements._find_upgrade_cta", return_value=None
+            ),
+        ):
+            result = E.can_create("org-1", "unknown_resource", current_count=5)
+            assert result.allowed is False
+            assert result.error_code == "ENTITLEMENT_DENIED"
+
     def test_can_create_zero_limit_denied(self):
         """Zero limit (feature not on plan) → denied (cloud only)."""
         E = self._get_entitlements()

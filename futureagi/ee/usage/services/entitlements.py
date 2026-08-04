@@ -178,6 +178,19 @@ class Entitlements:
         if limit == -1:
             return CheckResult(allowed=True)
 
+        if limit is None:
+            # Unconfigured resource on cloud: quota is billing — fail closed
+            # with a clear denial instead of a TypeError on the comparison.
+            return CheckResult(
+                allowed=False,
+                error_code="ENTITLEMENT_DENIED",
+                reason=(
+                    f"{_display_name(resource).title()} is not configured "
+                    "for your plan"
+                ),
+                upgrade_cta=_find_upgrade_cta(org_id, resource),
+            )
+
         if limit == 0:
             # Feature not available on this plan
             return CheckResult(
