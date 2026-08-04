@@ -448,7 +448,12 @@ class QueueItemListSerializer(serializers.ListSerializer):
 
     def to_representation(self, data):
         items = list(data)
-        self.context["ch_source_cache"] = CollectorSourceCache.for_items(items)
+        # Only items WITHOUT a captured preview need the CH read. Once a page is
+        # fully captured this collapses to zero reads, which is the whole point of
+        # QueueItem.source_preview (TH-7211) — building the cache unconditionally
+        # would keep paying the ``spans FINAL`` merge the capture exists to avoid.
+        uncaptured = [item for item in items if not item.source_preview]
+        self.context["ch_source_cache"] = CollectorSourceCache.for_items(uncaptured)
         return super().to_representation(items)
 
 
@@ -516,21 +521,27 @@ class QueueItemSerializer(serializers.ModelSerializer):
         ]
 
     def get_source_preview(self, obj):
+        # Captured at add time for CH-backed sources, so rendering a page costs no
+        # ``spans FINAL`` merge (TH-7211). NULL means "not captured" — a row added
+        # before this existed, or a Postgres-backed source that was always cheap —
+        # and falls back to the live read, same shape either way.
+        if obj.source_preview:
+            return obj.source_preview
         return resolve_source_preview(obj, ch_cache=self.context.get("ch_source_cache"))
 
     def get_workflow_status(self, obj):
-        if (
-            obj.review_status == "pending_review"
-            and QueueItemReviewThread.objects.filter(
-                queue_item=obj,
-                blocking=True,
-                status=QueueItemReviewThread.STATUS_ADDRESSED,
-                deleted=False,
-            ).exists()
-        ):
-            return "resubmitted"
         if obj.review_status == "pending_review":
-            return "in_review"
+            # Annotated by QueueItemViewSet.get_queryset; the query is the fallback
+            # for callers that serialize an item they fetched themselves.
+            has_addressed = getattr(obj, "_has_addressed_review", None)
+            if has_addressed is None:
+                has_addressed = QueueItemReviewThread.objects.filter(
+                    queue_item=obj,
+                    blocking=True,
+                    status=QueueItemReviewThread.STATUS_ADDRESSED,
+                    deleted=False,
+                ).exists()
+            return "resubmitted" if has_addressed else "in_review"
         if obj.review_status == "rejected":
             return "needs_changes"
         return obj.status
