@@ -4,8 +4,10 @@
 On a multi-replica cluster a plain engine leaves each replica holding its own
 slice (e.g. 2 / 3 / 0 rows), so reads are non-deterministic. This reads the
 union of rows across every replica (deduped by ``id``) into a replicated temp
-table, verifies per-replica parity, then swaps it in atomically and keeps the
-old plain data as ``<table>__plain_backup`` for rollback.
+table, verifies per-replica parity, then swaps it in via ``EXCHANGE TABLES ...
+ON CLUSTER`` and keeps the old plain data as ``<table>__plain_backup`` for
+rollback. The EXCHANGE runs per node, not globally atomically, so nodes briefly
+disagree; the required write freeze covers that window.
 
 Runs by default; ``--dry-run`` previews the plan. Executing requires
 ``--write-freeze-confirmed``. No-op if the table is absent, already
@@ -46,8 +48,8 @@ def _distinct_engines(client, database: str, table: str, cluster: str) -> set[st
     return {r[0] for r in rows}
 
 
-def _shared_columns_same_db(client, database: str, a: str, b: str) -> list[str]:
-    """Ordered columns present in BOTH tables in the same db (never SELECT *)."""
+def _shared_columns_same_db(client, database: str, live: str, target: str) -> list[str]:
+    """Ordered ``live`` columns; aborts if any is absent from ``target`` (never SELECT *)."""
 
     def cols(table: str) -> list[str]:
         rows = client.execute(
@@ -57,9 +59,16 @@ def _shared_columns_same_db(client, database: str, a: str, b: str) -> list[str]:
         )
         return [r[0] for r in rows]
 
-    a_cols = cols(a)
-    b_set = set(cols(b))
-    return [c for c in a_cols if c in b_set]
+    live_cols = cols(live)
+    target_set = set(cols(target))
+    missing = [c for c in live_cols if c not in target_set]
+    if missing:
+        raise CommandError(
+            f"{database}.{live} has column(s) {missing} absent from the replicated "
+            f"schema {database}.{target}; converting would drop them. Reconcile the "
+            "schema before retrying."
+        )
+    return live_cols
 
 
 def _table_hosts(client, database: str, table: str, cluster: str) -> set[str]:
@@ -222,7 +231,17 @@ class Command(BaseCommand):
             f"RENAME TABLE {database}.{tmp} TO {database}.{backup} ON CLUSTER '{cluster}'"
         )
 
-        after = per_replica_counts(client, database, table, cluster)
+        # Verify the swap reached every node before printing success.
+        after, after_converged = poll_replica_parity(
+            client, database=database, table=table, cluster=cluster,
+            expected=union_count, expected_replicas=expected_replicas,
+        )
+        if not after_converged:
+            raise CommandError(
+                f"{database}.{table}: post-swap parity not reached (per-replica {after}, "
+                f"expected {union_count} on {expected_replicas}); the EXCHANGE may be "
+                f"partially applied. Old plain data is preserved at {database}.{backup}."
+            )
         logger.info(
             "convert_vector_table_done",
             table=f"{database}.{table}", union_count=union_count,

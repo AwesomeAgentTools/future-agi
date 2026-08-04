@@ -125,6 +125,18 @@ class Command(BaseCommand):
             except Exception as exc:
                 failed += 1
                 logger.exception("missing_kb_embedding_restore_failed", kb_id=kb_id)
+                # Roll back partial vectors so a re-run retries this KB cleanly.
+                try:
+                    remover = KBIndexer()
+                    try:
+                        for file_id, _ in source_files:
+                            remover.remove_chunks_from_kb(
+                                file_id, kb_id, str(kb.organization_id)
+                            )
+                    finally:
+                        remover.embedding_manager.close()
+                except Exception:
+                    logger.exception("missing_kb_embedding_rollback_failed", kb_id=kb_id)
                 self.stdout.write(f"[syn] {kb_id}: failed ({exc})")
                 continue
 

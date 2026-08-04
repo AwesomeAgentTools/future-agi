@@ -118,6 +118,10 @@ def test_execute_aborts_before_swap_when_not_converged():
     db.create_table.assert_called_once()
     issued = " ".join(str(c.args[0]) for c in db.client.execute.call_args_list)
     assert "EXCHANGE TABLES" not in issued
+    # Lock the copy shape: explicit column list + LIMIT 1 BY id, never SELECT *.
+    assert "`id`, `eval_id`, `vector`" in issued
+    assert "LIMIT 1 BY id" in issued
+    assert "SELECT *" not in issued
 
 
 def test_execute_without_write_freeze_aborts():
@@ -135,3 +139,17 @@ def test_execute_without_write_freeze_aborts():
         with pytest.raises(CommandError, match="write-freeze-confirmed"):
             _run("--table", "feedbacks")
     db.create_table.assert_not_called()
+
+
+def test_shared_columns_aborts_on_extra_live_column():
+    from model_hub.management.commands.convert_vector_table_to_replicated import (
+        _shared_columns_same_db,
+    )
+
+    client = MagicMock()
+    client.execute.side_effect = [
+        [("id",), ("eval_id",), ("legacy_col",)],  # live table columns
+        [("id",), ("eval_id",)],  # target (new-schema) columns
+    ]
+    with pytest.raises(CommandError, match="legacy_col"):
+        _shared_columns_same_db(client, "db", "syn", "syn__repl_tmp")
