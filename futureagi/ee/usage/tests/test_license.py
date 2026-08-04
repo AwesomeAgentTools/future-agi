@@ -85,10 +85,15 @@ class TestUnifiedFeatureCheck:
 
         assert Entitlements.has_feature_unified("org-1", "knowledge_base") is True
 
-    def test_oss_denies_paid_feature(self):
+    def test_oss_denies_locked_feature(self):
         from ee.usage.services.entitlements import Entitlements
 
-        assert Entitlements.has_feature_unified("org-1", "scim") is False
+        assert Entitlements.has_feature_unified("org-1", "protect") is False
+
+    def test_oss_allows_unlocked_paid_feature(self):
+        from ee.usage.services.entitlements import Entitlements
+
+        assert Entitlements.has_feature_unified("org-1", "scim") is True
 
     def test_unregistered_feature_is_not_gated(self):
         from ee.usage.services.entitlements import Entitlements
@@ -101,7 +106,7 @@ class TestUnifiedFeatureCheck:
         state.set_snapshot(
             LicenseSnapshot(
                 state=LicenseState.ACTIVE,
-                features=frozenset({"scim"}),
+                features=frozenset({"protect"}),
             )
         )
         service.configure(
@@ -110,8 +115,8 @@ class TestUnifiedFeatureCheck:
             license_resolver=state.get_resolver(),
         )
 
-        assert Entitlements.has_feature_unified("org-1", "scim") is True
-        assert Entitlements.has_feature_unified("org-1", "audit_logs") is False
+        assert Entitlements.has_feature_unified("org-1", "protect") is True
+        assert Entitlements.has_feature_unified("org-1", "error_feed") is False
 
     def test_cloud_uses_plan_resolver(self):
         from ee.usage.services.entitlements import Entitlements
