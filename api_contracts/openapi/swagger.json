@@ -37960,10 +37960,52 @@
             "delete": {
                 "operationId": "model-hub_knowledge-base_delete",
                 "description": "",
-                "parameters": [],
+                "parameters": [
+                    {
+                        "name": "data",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/LegacyKnowledgeBaseBulkDeleteRequest"
+                        }
+                    }
+                ],
                 "responses": {
-                    "204": {
-                        "description": ""
+                    "200": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ModelHubStringResultResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ModelHubErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ModelHubErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ModelHubErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ModelHubErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ModelHubErrorResponse"
+                        }
                     },
                     "default": {
                         "description": "Default error response",
@@ -37974,7 +38016,9 @@
                 },
                 "tags": [
                     "model-hub"
-                ]
+                ],
+                "x-runtime-request-validation": true,
+                "x-runtime-response-validation": true
             },
             "parameters": []
         },
@@ -38045,10 +38089,52 @@
             "delete": {
                 "operationId": "model-hub_knowledge-base_files_delete",
                 "description": "",
-                "parameters": [],
+                "parameters": [
+                    {
+                        "name": "data",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/LegacyKnowledgeBaseFileDeleteRequest"
+                        }
+                    }
+                ],
                 "responses": {
-                    "204": {
-                        "description": ""
+                    "200": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ModelHubStringResultResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ModelHubErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ModelHubErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ModelHubErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ModelHubErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ModelHubErrorResponse"
+                        }
                     },
                     "default": {
                         "description": "Default error response",
@@ -38059,7 +38145,9 @@
                 },
                 "tags": [
                     "model-hub"
-                ]
+                ],
+                "x-runtime-request-validation": true,
+                "x-runtime-response-validation": true
             },
             "parameters": []
         },
@@ -104100,7 +104188,8 @@
                 "organization": {
                     "title": "Organization",
                     "type": "string",
-                    "format": "uuid"
+                    "format": "uuid",
+                    "readOnly": true
                 },
                 "created_at": {
                     "title": "Created at",
@@ -104395,6 +104484,19 @@
                 }
             }
         },
+        "LegacyKnowledgeBaseBulkDeleteRequest": {
+            "type": "object",
+            "properties": {
+                "kb_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "format": "uuid"
+                    },
+                    "default": []
+                }
+            }
+        },
         "LegacyKnowledgeBaseFilesRequest": {
             "required": [
                 "kb_id"
@@ -104526,6 +104628,46 @@
                 },
                 "result": {
                     "$ref": "#/definitions/LegacyKnowledgeBaseFilesResult"
+                }
+            }
+        },
+        "LegacyKnowledgeBaseFileDeleteRequest": {
+            "type": "object",
+            "properties": {
+                "kb_id": {
+                    "title": "Kb id",
+                    "type": "string",
+                    "format": "uuid",
+                    "x-nullable": true
+                },
+                "delete_all": {
+                    "title": "Delete all",
+                    "type": "boolean",
+                    "default": false
+                },
+                "file_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "format": "uuid"
+                    },
+                    "default": []
+                },
+                "excluded_file_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "format": "uuid"
+                    },
+                    "default": []
+                },
+                "file_names": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "minLength": 1
+                    },
+                    "default": []
                 }
             }
         },
