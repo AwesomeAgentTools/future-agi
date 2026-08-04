@@ -498,10 +498,6 @@ EE_LICENSE_PRIVATE_KEY = os.environ.get("EE_LICENSE_PRIVATE_KEY", "").replace(
 # Cloud API key for managed AI features (self-hosted → cloud Agentcc gateway)
 FUTUREAGI_CLOUD_API_KEY = os.environ.get("FUTUREAGI_CLOUD_API_KEY", "")
 
-ENTERPRISE_HEARTBEAT_SECRET = os.environ.get(
-    "FUTURE_AGI_ENTERPRISE_HEARTBEAT_SECRET", ""
-)
-
 # Activation signing key (cloud control plane uses this to mint service tokens)
 ACTIVATION_PRIVATE_KEY = os.environ.get("ACTIVATION_PRIVATE_KEY", "").replace("\\n", "\n")
 ACTIVATION_KEY_ID = os.environ.get("ACTIVATION_KEY_ID", "default")

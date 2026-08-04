@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import logging
+import structlog
 
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework.permissions import IsAuthenticated
@@ -17,7 +17,7 @@ from tfc.licensing.types import (
     derive_display_mode,
 )
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class CapabilitiesView(APIView):
@@ -51,13 +51,24 @@ class CapabilitiesView(APIView):
             "features": features,
         }
 
-        if location == DeploymentLocation.SELF_HOSTED and self._is_admin(request):
+        is_admin_view = (
+            location == DeploymentLocation.SELF_HOSTED and self._is_admin(request)
+        )
+        if is_admin_view:
             response_data["license"] = self._get_license_details()
             response_data["instance_id"] = self._get_instance_id()
 
         serializer = CapabilitiesResponseSerializer(data=response_data)
         serializer.is_valid(raise_exception=True)
-        return Response(serializer.data)
+        data = dict(serializer.data)
+        if not is_admin_view:
+            # Non-admins never see license/instance metadata, even as
+            # null placeholders — the DRF serializer would otherwise
+            # render both fields as null because they are declared
+            # optional.
+            data.pop("license", None)
+            data.pop("instance_id", None)
+        return Response(data)
 
     def _get_license_state(self) -> LicenseState:
         snapshot = service.get_license_snapshot()
@@ -101,8 +112,16 @@ class CapabilitiesView(APIView):
         if org is None:
             return user.is_staff
         try:
-            membership = user.memberships.filter(organization=org).first()
-            if membership and membership.role in ("owner", "admin"):
+            from tfc.constants.roles import OrganizationRoles
+
+            admin_roles = (
+                OrganizationRoles.OWNER,
+                OrganizationRoles.ADMIN,
+            )
+            membership = user.organization_memberships.filter(
+                organization=org
+            ).first()
+            if membership and membership.role in admin_roles:
                 return True
         except Exception:
             logger.debug("capabilities_view_membership_check_failed", exc_info=True)

@@ -230,7 +230,7 @@ def check_ee_feature(
                     else dict(raw_cta)
                 )
         except Exception:  # pragma: no cover — best-effort CTA fetch
-            pass
+            logger.debug("ee_gating_upgrade_cta_lookup_failed", exc_info=True)
         _raise_denied(
             feature_str,
             activity=activity,

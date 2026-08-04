@@ -465,14 +465,11 @@ class LLM:
     def _try_managed_ai_completion(
         self, payload: dict, tools: Optional[list] = None
     ) -> Optional[Any]:
-        try:
-            from ee.licensing.managed_ai import chat_completion, is_managed_model
-        except ImportError:
+        model = payload.get("model", self.model_name)
+        if not self._requires_managed_transport(model):
             return None
 
-        model = payload.get("model", self.model_name)
-        if not is_managed_model(model):
-            return None
+        from ee.licensing.managed_ai import chat_completion
 
         managed_payload = dict(payload)
         if tools:
@@ -549,14 +546,11 @@ class LLM:
     async def _try_managed_ai_completion_async(
         self, payload: dict, tools: Optional[list] = None
     ) -> Optional[Any]:
-        try:
-            from ee.licensing.managed_ai import chat_completion, is_managed_model
-        except ImportError:
+        model = payload.get("model", self.model_name)
+        if not self._requires_managed_transport(model):
             return None
 
-        model = payload.get("model", self.model_name)
-        if not is_managed_model(model):
-            return None
+        from ee.licensing.managed_ai import chat_completion
 
         managed_payload = dict(payload)
         if tools:

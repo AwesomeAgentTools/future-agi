@@ -219,10 +219,26 @@ async def run_optimization_activity(input: Dict[str, Any]) -> Dict[str, Any]:
     Run entire optimization in one activity. Resume from latest DatasetOptimizationTrial if exists.
     Uses callback to persist each trial immediately after completion.
     """
+    from tfc.ee_gating import EEFeature, check_ee_feature
+
     _safe_close_db()
     hb = Heartbeater(("optimization",))
     async with hb:
         run_id = input["run_id"]
+
+        def _fetch_org_id() -> str | None:
+            close_old_connections()
+            try:
+                return str(
+                    OptimizeDataset.objects.only("organization_id")
+                    .get(id=run_id)
+                    .organization_id
+                )
+            except OptimizeDataset.DoesNotExist:
+                return None
+
+        org_id = await sync_to_async(_fetch_org_id, thread_sensitive=False)()
+        check_ee_feature(EEFeature.OPTIMIZATION, org_id=org_id, activity=True)
 
         def _sync():
             close_old_connections()

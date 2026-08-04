@@ -11892,7 +11892,7 @@ export interface KnowledgeBaseCreateApi {
      * @maximum 2147483647
      */
   chunk_size: number;
-  organization?: string;
+  readonly organization?: string;
   readonly created_at?: string;
   readonly updated_at?: string;
 }
@@ -11987,6 +11987,10 @@ export interface LegacyKnowledgeBaseMutationResponseApi {
   result: LegacyKnowledgeBaseMutationResultApi;
 }
 
+export interface LegacyKnowledgeBaseBulkDeleteRequestApi {
+  kb_ids?: string[];
+}
+
 export type LegacyKnowledgeBaseFilesRequestApiSortItem = { [key: string]: unknown };
 
 export interface LegacyKnowledgeBaseFilesRequestApi {
@@ -12021,6 +12025,14 @@ export interface LegacyKnowledgeBaseFilesResultApi {
 export interface LegacyKnowledgeBaseFilesResponseApi {
   status: boolean;
   result: LegacyKnowledgeBaseFilesResultApi;
+}
+
+export interface LegacyKnowledgeBaseFileDeleteRequestApi {
+  kb_id?: string;
+  delete_all?: boolean;
+  file_ids?: string[];
+  excluded_file_ids?: string[];
+  file_names?: string[];
 }
 
 export interface LegacyKnowledgeBaseTableColumnApi {
