@@ -36,17 +36,20 @@ logger = structlog.get_logger(__name__)
 
 # Cosine distance: 0 = identical, 2 = opposite.
 #
-# Tightened from 0.45 alongside PARTITION_BY_CATEGORY below. Those two numbers
-# are coupled: with the category partition ON, 0.45 was an *intra-category*
-# bound and every candidate had already cleared a categorical filter. Dropping
-# the partition removes that filter, so the identical 0.45 admits a strictly
-# larger candidate set — the effective constraint loosened without the constant
-# changing. A per-issue audit of the un-partitioned run put ~15% of merges
-# wrong (34 issues moved, 5-6 badly), all of them marginal pairings like
-# "responded as client rather than analyst" landing in "agent repeated itself",
-# while the merges the fix exists for had near-identical briefs well inside
-# 0.40. Tightening restores roughly the constraint that was there before.
-COSINE_THRESHOLD = 0.40
+# Left at 0.45. This was briefly tightened to 0.40 on the argument that the
+# threshold and PARTITION_BY_CATEGORY below are coupled — that with the
+# partition ON, 0.45 is an *intra-category* bound whose candidates have already
+# cleared a categorical filter, so restoring the partition loosens nothing only
+# if the threshold tightens with it. A full 2x2 over 3 arrival orders falsified
+# the coupling: the two effects are roughly additive, and the threshold's own
+# contribution is +6.5pp coherence, 95% CI [-5.2, +18.0] — not distinguishable
+# from zero. Tightening also splits more, and the fragmentation it costs is
+# likewise unmeasurable at this sample size.
+#
+# So there is no evidence for moving the incumbent, and a constant that changes
+# every user's feed needs evidence. Revisit only with a purity AND fragmentation
+# reading, since coherence alone is maximised by all-singletons.
+COSINE_THRESHOLD = 0.45
 
 # Whether centroid matching is confined to the issue's own category.
 #
@@ -67,21 +70,26 @@ COSINE_THRESHOLD = 0.40
 # That argument is now mostly spent, because distilling the brief before
 # embedding fixes the same problem at its source: the phrase is stable, so what
 # is left wavering is only the scanner's category choice, and it wavers on 1.2%
-# of distinct phrases / 4.5% of issues. Turned back ON after replaying one
-# project's 1,277 real issues both ways and reading the four groups that exist
-# only WITHOUT it:
+# of distinct phrases / 4.5% of issues.
 #
-#   316 members, 302 Language-only + 14 strays  — one bug, mis-categorised. good
-#   183 members, 158 + 24, all "greeting -> unrelated response"            good
-#   130 members, 116 Incorrect Memory Usage + strays                       good
-#   312 members over 8 categories, none above 45% — "gives investment advice
-#       despite policy prohibiting it" filed with "responds with irrelevant
-#       disclaimer" and "queried unrelated financial data"                  BAD
+# Turned back ON after measuring it on 792 issues from 62 tenants, re-scanned
+# with the current scanner (the earlier corpus this was argued from had briefs
+# that largely did not describe their own trace, so its numbers said nothing).
+# Replayed per project, as assign_to_cluster runs, over 3 arrival orders, with
+# within-entry pairs judged "would ONE fix resolve both?":
 #
-# So the partition costs a handful of small stray fragments and prevents one
-# 312-member entry that mixes a guardrail violation with two unrelated bugs.
-# Kept as a switch: if the strays turn out to hurt more than the mixing, this
-# reverts without a code change.
+#   partition ON - OFF   +11.4pp coherence, 95% CI [+0.2, +22.4]
+#
+# The mechanism is visible without a judge: without the partition a single head
+# entry absorbs several categories at once, filing a formatting complaint with a
+# fabricated-data bug. The partition also makes assignment far more reproducible
+# — largest entry varies by ~2 members across arrival orders with it, by ~60
+# without, i.e. two tenants with identical data ingested in a different order
+# would otherwise see materially different feeds.
+#
+# Cost is a handful of small stray fragments where the scanner picked different
+# categories for one bug. Kept as a switch: if the strays ever outweigh the
+# mixing, this reverts without a code change.
 PARTITION_BY_CATEGORY = True
 
 
