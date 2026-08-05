@@ -165,7 +165,10 @@ class FalconAIConsumer(AsyncJsonWebsocketConsumer):
                     rest = parts[1].strip() if len(parts) > 1 else ""
                     message_content = rest or f"Help me with: {slash_skill.name}"
                 else:
-                    logger.debug("unknown_slash_command", slug=slug)
+                    # An unresolved slug silently downgrades the turn to a plain
+                    # chat, so a skill that failed to seed looks like a feature
+                    # that quietly does nothing. Debug hides that in prod.
+                    logger.warning("unknown_slash_command", slug=slug)
 
         if not message_content and not file_ids:
             await self.send_json(
