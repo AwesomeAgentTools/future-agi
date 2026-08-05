@@ -316,13 +316,23 @@ OUTPUT — strict JSON, no prose outside it:
     {"dim": "goal|grounding|tools|instruction|completion",
      "cat": "<most specific subcategory from the list below>",
      "brief": "<one line, <=15 words, what the agent did wrong>",
-     "conf": "H|M"}
+     "conf": "H|M|L"}
   ],
   "key_moments": ["<quote 1>","<quote 2>","<quote 3>"]
 }
 
 Emit an entry in "issues" for every dimension whose verdict is FAIL, and nothing else.
 If all five PASS, "issues" is an empty list.
+
+"conf" is how sure you are that this is a real defect a developer should act on:
+  H — the evidence you quoted proves it on its own.
+  M — the evidence supports it, but a reasonable reviewer could disagree.
+  L — something looks off and you cannot establish it from what you were given.
+Use L freely. It is a useful, expected answer, not a failure to do the job — the
+product treats L as "worth keeping, not worth showing", so nothing is lost by
+saying you are unsure. Do NOT promote a finding to M or H because it feels
+unsatisfying to be uncertain: a confident wrong answer is far more expensive here
+than an honest unsure one.
 
 "cat" MUST be copied EXACTLY from this list — it is what groups the issue in the product, so an
 invented value is worse than a generic one. Pick the most specific that fits; if none fits well

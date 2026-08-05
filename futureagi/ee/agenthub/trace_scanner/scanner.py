@@ -395,6 +395,7 @@ class TraceScanner:
             i.get("dim"): i for i in (parsed.get("issues") or []) if isinstance(i, dict)
         }
         issues = []
+        low_confidence = []
         for dim in failed:
             item = briefs.get(dim) or {}
             # Prefer the model's own subcategory: DIMENSION_TO_SUBCATEGORY alone can only ever
@@ -410,14 +411,31 @@ class TraceScanner:
             # mid-sentence at the cap) — which is why cluster titles do not match their
             # members and why near-identical defects fail to cluster at all. A short generic
             # label groups correctly and reads honestly; a stray quote does neither.
+            conf = str(item.get("conf") or "M").upper()[:1]
+            if conf == "L":
+                # The model was given L back as a real option so it has somewhere
+                # to put uncertainty other than an assertion. Keeping those out of
+                # the feed is the whole point: a row the model itself could not
+                # establish is exactly the row that costs a user their trust.
+                # Recorded, not discarded — recall work needs them.
+                low_confidence.append(subcat)
+                continue
             brief = " ".join(str(item.get("brief") or "").split())
             if not brief or len(brief) > _MAX_BRIEF_CHARS:
                 brief = subcat
             issues.append({
                 "cat": subcat,
-                "conf": item.get("conf", "M"),
+                "conf": conf if conf in ("H", "M") else "M",
                 "brief": brief[:_MAX_BRIEF_CHARS],
             })
+        if low_confidence:
+            # Suppression has to be visible. Going quiet and being precise look
+            # identical from the outside, and only these counters tell them apart.
+            logger.info(
+                "scanner_low_confidence_withheld",
+                categories=sorted(low_confidence),
+                withheld=len(low_confidence),
+            )
         return {"issues": issues, "key_moments": parsed.get("key_moments") or []}
 
     def _parse_issues(self, raw_issues: List[Dict]) -> List[ScanIssue]:

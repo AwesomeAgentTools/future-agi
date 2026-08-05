@@ -133,3 +133,40 @@ class TestBreadcrumbsDoNotInventQuotes:
         got = recover_verbatim("user asked billing", raw)
         assert got, "a recoverable quote was dropped"
         assert got in raw, f"returned text is not from the trace: {got!r}"
+
+
+class TestLowConfidenceIsWithheldNotForced:
+    """The prompt used to forbid L ("drop anything you'd rate L"), so a model
+    that was unsure had nowhere to put that except an H or M assertion. On the
+    audited corpus every single one of 405 issues came back H. Giving L back and
+    withholding it from the feed converts forced false certainty into a signal we
+    keep for recall work.
+    """
+
+    @staticmethod
+    def _parsed(conf):
+        return {
+            "dimensions": {"goal": {"evidence": "the agent never answered", "verdict": "FAIL"}},
+            "issues": [{"dim": "goal", "cat": "Goal Deviation",
+                        "brief": "did not answer the question", "conf": conf}],
+        }
+
+    SEEN = "user asked a question. the agent never answered it."
+
+    def test_low_confidence_is_not_surfaced(self):
+        out = TraceScanner._v8_to_trace_output(self._parsed("L"), self.SEEN)
+        assert out["issues"] == [], "an issue the model itself could not establish was shown"
+
+    @pytest.mark.parametrize("conf", ["H", "M"])
+    def test_established_findings_still_surface(self, conf):
+        out = TraceScanner._v8_to_trace_output(self._parsed(conf), self.SEEN)
+        assert len(out["issues"]) == 1
+        assert out["issues"][0]["conf"] == conf
+
+    def test_unknown_confidence_defaults_to_medium_not_dropped(self):
+        out = TraceScanner._v8_to_trace_output(self._parsed("banana"), self.SEEN)
+        assert len(out["issues"]) == 1
+        assert out["issues"][0]["conf"] == "M"
+
+    def test_lowercase_l_is_still_withheld(self):
+        assert TraceScanner._v8_to_trace_output(self._parsed("l"), self.SEEN)["issues"] == []
