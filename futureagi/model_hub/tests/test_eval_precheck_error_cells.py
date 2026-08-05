@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
+
 @pytest.mark.django_db
 class TestMarkCellsUsageLimitErrorCreatesMissingCells:
     """Pre-check failures must leave ERROR cells, not empty columns."""

@@ -156,6 +156,7 @@ def _mark_cells_usage_limit_error(user_eval_metric, usage_check):
                 dataset_id,
                 new_values,
                 user_eval_metric_id=str(user_eval_metric.id),
+                skip_completed=True,
             )
             updated += u
             created += c
