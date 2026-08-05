@@ -5,6 +5,7 @@ Ported from experiments/trace_scanner/{scanner_v3.py, compress_trace.py}.
 """
 
 import json
+import os
 import re
 import statistics
 
@@ -962,9 +963,16 @@ def attribute_key_moments(quotes, trace_data):
 # sealed split.
 
 
-TOTAL_IO_BUDGET = 20000
-TASK_BUDGET = 3000
-RESULT_BUDGET = 3000
+
+# Budgets are the last of the compression, and every character they remove is a
+# character the model is then asked to judge without. The agent's response and
+# the user's request are what most verdicts are actually about, so they get the
+# most room: a response cut at 3000 chars was routinely cut before the part the
+# verdict concerned. Env-tunable so the precision/cost trade can be measured
+# rather than argued about.
+TOTAL_IO_BUDGET = int(os.environ.get("SCANNER_TOTAL_IO_BUDGET", "120000"))
+TASK_BUDGET = int(os.environ.get("SCANNER_TASK_BUDGET", "24000"))
+RESULT_BUDGET = int(os.environ.get("SCANNER_RESULT_BUDGET", "24000"))
 
 _ENVELOPE_HINTS = ("choices", "candidates", "generations", "usage", "object", "created")
 
@@ -993,13 +1001,20 @@ def _v3_plain(text, max_len):
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
     if len(text) <= max_len:
         return text
-    cut = text[: max_len - 1]
+    # The whole budget is usable: the reserved character existed for a one-char
+    # ellipsis that no longer exists.
+    cut = text[:max_len]
     # Cut on a line boundary when one is near the limit, so the tail of a
     # truncated block doesn't itself read as a run-together line.
     nl = cut.rfind("\n")
     if nl > max_len * 0.6:
         cut = cut[:nl]
-    return cut + "…"
+    # Say who did the truncating. An ellipsis is ambiguous: at the end of an
+    # agent response it reads as the agent stopping mid-sentence, which is a
+    # reportable failure, and the model has no way to tell that apart from our
+    # own budget running out. Name it explicitly so a cut of ours can never be
+    # mistaken for an incomplete answer of theirs.
+    return f"{cut}⟨trace truncated by the scanner, {len(text) - len(cut)} chars omitted⟩"
 
 
 def _v3_loads(v):

@@ -48,9 +48,19 @@ class TestLineStructureSurvives:
         """A truncated tail must not itself read as a run-together line."""
         text = "\n".join(f"field {i}: value" for i in range(20))
         out = _v3_plain(text, 120)
-        assert out.endswith("…")
-        assert not out.rstrip("…").endswith("field"), "cut mid-line near a boundary"
-        assert len(out) <= 120
+        content, marker = out.split("⟨", 1)
+        assert "truncated by the scanner" in marker
+        assert not content.endswith("field"), "cut mid-line near a boundary"
+        assert len(content) <= 120, "content exceeded its budget"
+
+    def test_truncation_says_who_truncated(self):
+        """An ellipsis reads as the agent stopping mid-sentence — which is a
+        reportable failure. Our own budget running out must never look like that.
+        """
+        out = _v3_plain("x" * 500, 100)
+        assert "truncated by the scanner" in out
+        assert not out.endswith("…"), "ambiguous marker: reads as an incomplete answer"
+        assert "400 chars omitted" in out
 
     def test_empty_and_non_string_inputs(self):
         assert _v3_plain("", 100) == ""
