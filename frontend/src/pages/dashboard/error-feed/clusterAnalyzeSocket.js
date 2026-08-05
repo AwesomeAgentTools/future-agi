@@ -400,7 +400,23 @@ export async function startRun({ clusterId, projectId, token, workspaceId }) {
       { hidden: true },
     );
   } catch {
-    patchThread(clusterId, (t) => ({ ...t, runState: RUN_STATE.IDLE }));
+    // Reverting to IDLE with no message renders the pre-run empty state, so a
+    // failed kick-off is indistinguishable from never having clicked Analyze.
+    patchThread(clusterId, (t) => ({
+      ...t,
+      runState: RUN_STATE.DONE,
+      messages: [
+        ...t.messages,
+        {
+          id: `err-${Date.now()}`,
+          type: MESSAGE_TYPE.SYNTHESIS,
+          headline: "Couldn't start the analysis. Please try again.",
+          fix: "",
+          confidence: CONFIDENCE.LOW,
+          category: "error",
+        },
+      ],
+    }));
     return;
   }
   // Create endpoint wraps the row: { status, result: { id, ... } }.
@@ -556,7 +572,28 @@ export async function startRun({ clusterId, projectId, token, workspaceId }) {
     }
 
     if (type === RCA_FRAME.DONE) {
-      patchThread(clusterId, (t) => ({ ...t, runState: RUN_STATE.DONE }));
+      // A run can finish having emitted nothing — the agent completes but its
+      // synthesis step never lands. Leaving the thread empty renders the
+      // pre-run empty state ("No analysis yet"), which is indistinguishable
+      // from never having analysed the cluster: the user sees a start time and
+      // a Re-run button above an invitation to start. Say the run ended.
+      patchThread(clusterId, (t) => ({
+        ...t,
+        runState: RUN_STATE.DONE,
+        messages: t.messages.length
+          ? t.messages
+          : [
+              {
+                id: `empty-${Date.now()}`,
+                type: MESSAGE_TYPE.SYNTHESIS,
+                headline:
+                  "The analysis finished without producing a result. Hit Re-run to try again.",
+                fix: "",
+                confidence: CONFIDENCE.LOW,
+                category: "error",
+              },
+            ],
+      }));
       handlers.delete(conversationId);
       return;
     }
@@ -671,8 +708,9 @@ export async function startRun({ clusterId, projectId, token, workspaceId }) {
     await sendChat();
     armWatchdog();
   } catch {
-    handlers.delete(conversationId);
-    patchThread(clusterId, (t) => ({ ...t, runState: RUN_STATE.DONE }));
+    // failVisibly already says this correctly — a bare DONE here left the
+    // thread empty and the run looked like it had never happened.
+    failVisibly();
   }
 }
 
