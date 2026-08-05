@@ -3355,12 +3355,6 @@ def _get_accessible_ground_truth(ground_truth_id, request):
     )
 
 
-def _get_accessible_composite_template(template_id, organization):
-    return _get_accessible_eval_template(
-        template_id, organization, template_type="composite"
-    )
-
-
 def _resolve_child_pinned_versions(child_ids, child_pinned_versions):
     """Resolve child_id -> EvalTemplateVersion for composite child pins."""
     if child_pinned_versions is None:

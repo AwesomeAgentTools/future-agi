@@ -360,6 +360,25 @@ class TestEvalTemplateCreateV2API:
         template = EvalTemplate.objects.get(id=result["id"])
         assert template.name.startswith("draft-")
 
+    def test_create_draft_rejects_camel_case_alias(self, auth_client):
+        """isDraft must be rejected — camelCase aliases were removed in
+        f930da68a; the frontend strips response-added camel twins before
+        sending request bodies, so the wire contract is snake_case-only
+        (TH-4076)."""
+        response = auth_client.post(
+            self.url,
+            {
+                "isDraft": True,
+                "eval_type": "agent",
+                "output_type": "pass_fail",
+                "model": "turing_large",
+                "pass_threshold": 0.5,
+            },
+            format="json",
+        )
+        assert response.status_code == 400, response.data
+        assert response.data["details"] == {"isDraft": ["Unknown field."]}
+
     # --- Code eval creation ---
 
     def test_create_code_eval(self, auth_client):
