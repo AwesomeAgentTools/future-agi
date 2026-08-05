@@ -211,7 +211,14 @@ def recover_verbatim(kevinified_excerpt, raw_text, min_overlap=0.3):
     if best_score >= min_overlap:
         return best_sentence.strip()
 
-    return kevinified_excerpt
+    # No match: return nothing rather than the excerpt we were asked to find.
+    # Handing back the model's own paraphrase means the caller stores it in a
+    # field named `verbatim` and the UI renders it as a quote from the trace —
+    # so a breadcrumb points an engineer at words nobody ever said. Measured on
+    # a 2,107-trace corpus, 161 of 278 breadcrumbs (58%) were this fallback, and
+    # 31% quoted text that appears nowhere in their own trace. An absent quote is
+    # honest; an invented one costs more than it gives.
+    return ""
 
 
 def recover_key_moments(key_moments, raw_spans_text):

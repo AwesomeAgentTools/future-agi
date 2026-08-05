@@ -48,6 +48,55 @@ except ImportError:
 logger = structlog.get_logger(__name__)
 
 BATCH_SIZE = 1
+# Evidence shorter than this matches by accident ("error", "the user asked") and
+# proves nothing about whether the model actually read the trace.
+_MIN_EVIDENCE_CHARS = 16
+# Fraction of an evidence quote's word-trigrams that must be present before we
+# accept it as a real quote rather than an invention. Models trim clauses and
+# normalise punctuation when quoting; they do not reproduce 80% of the trigrams
+# of a sentence that was never shown to them.
+_EVIDENCE_TRIGRAM_FLOOR = 0.8
+
+
+def _norm_for_match(s) -> str:
+    """Whitespace- and case-insensitive form for substring comparison."""
+    return re.sub(r"\s+", " ", str(s or "")).casefold().strip()
+
+
+def _evidence_is_quotable(evidence, haystack_norm: str) -> bool:
+    """Was this quote actually present in what the model was shown?
+
+    Three passes, loosening in the ways a model legitimately drifts and tightening
+    against the ways it invents:
+      1. the whole quote, normalised — the common case
+      2. a long leading run — the model trimmed a trailing clause, or joined two
+         fragments with an ellipsis
+      3. word-trigram coverage — punctuation and casing were rewritten but the
+         words are demonstrably from the source
+    """
+    ev = _norm_for_match(evidence)
+    if len(ev) < _MIN_EVIDENCE_CHARS:
+        return False
+    if ev in haystack_norm:
+        return True
+    head = ev[:120]
+    if len(head) >= _MIN_EVIDENCE_CHARS and head in haystack_norm:
+        return True
+    # A quote followed by the model's own commentary is still a quote. Requiring
+    # the whole string to match would reject a model that read the trace and then
+    # explained itself, which costs recall for a stylistic habit rather than for
+    # inventing anything.
+    for sentence in re.split(r"(?<=[.!?])\s+", ev):
+        if len(sentence) >= _MIN_EVIDENCE_CHARS and sentence in haystack_norm:
+            return True
+    words = ev.split()
+    if len(words) < 3:
+        return False
+    grams = [" ".join(words[i : i + 3]) for i in range(len(words) - 2)]
+    hits = sum(1 for g in grams if g in haystack_norm)
+    return hits / len(grams) >= _EVIDENCE_TRIGRAM_FLOOR
+
+
 # Briefs become cluster titles and clustering keys; anything longer is an evidence quote
 # that has leaked into the wrong field.
 _MAX_BRIEF_CHARS = 110
@@ -190,7 +239,13 @@ class TraceScanner:
             # V8 returns ONE flat object per trace; the mapping below expects the
             # batched {label: {...}} shape the old multi-trace prompt produced.
             if "dimensions" in parsed or "key_moments" in parsed:
-                parsed = {next(iter(trace_map)): self._v8_to_trace_output(parsed)}
+                # The gate compares evidence against exactly what was sent, so it
+                # cannot punish the model for text compression removed before it
+                # ever saw it.
+                seen = json.dumps(compressed_traces, ensure_ascii=False)
+                parsed = {
+                    next(iter(trace_map)): self._v8_to_trace_output(parsed, seen)
+                }
         except Exception as e:
             logger.exception("scanner_llm_call_failed", error=str(e))
             return [
@@ -296,18 +351,46 @@ class TraceScanner:
             return {}
 
     @staticmethod
-    def _v8_to_trace_output(parsed: Dict[str, Any]) -> Dict[str, Any]:
+    def _v8_to_trace_output(
+        parsed: Dict[str, Any], seen_text: str = ""
+    ) -> Dict[str, Any]:
         """Translate V8's per-dimension verdicts into the shipped issue shape.
 
         A dimension is only turned into an issue when it FAILED, so a hallucinated
         entry in "issues" without a matching FAIL verdict is dropped rather than
         surfaced — the evidence gate is the whole point of the prompt.
+
+        The prompt states the rule the model is meant to follow: "If you cannot
+        quote the required evidence, the verdict for that dimension is PASS. An
+        unquotable failure is a hallucinated failure." Until now that rule was
+        enforced by the model on itself — nothing checked that the quote it
+        returned was ever in front of it, and the quote was then discarded.
+
+        ``seen_text`` is what the model was actually shown. A FAIL whose evidence
+        cannot be found there is dropped: the model asserting a quote it did not
+        receive is the definition of the failure this gate exists to stop. This
+        is deliberately fail-closed — a dropped real issue costs recall, a kept
+        invented one costs the user's trust in every other row.
         """
         dims = parsed.get("dimensions") or {}
-        failed = {
-            k for k, v in dims.items()
-            if isinstance(v, dict) and str(v.get("verdict", "")).upper() == "FAIL"
-        }
+        hay = _norm_for_match(seen_text)
+        failed = set()
+        unverified = []
+        for k, v in dims.items():
+            if not isinstance(v, dict) or str(v.get("verdict", "")).upper() != "FAIL":
+                continue
+            if hay and not _evidence_is_quotable(v.get("evidence"), hay):
+                unverified.append(k)
+                continue
+            failed.add(k)
+        if unverified:
+            # Suppression is a measurement, not a silent behaviour: without this
+            # count there is no way to tell a precise scanner from a mute one.
+            logger.info(
+                "scanner_evidence_gate_dropped",
+                dimensions=sorted(unverified),
+                dropped=len(unverified),
+            )
         briefs = {
             i.get("dim"): i for i in (parsed.get("issues") or []) if isinstance(i, dict)
         }
