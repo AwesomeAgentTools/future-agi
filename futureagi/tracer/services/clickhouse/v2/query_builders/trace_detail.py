@@ -380,19 +380,19 @@ def retrieve_trace_detail_ch(
             eval_score_label = None if drop_derived else score_label
             # Choices: per-option list the drawer renders as separate chips.
             eval_score_items = None if drop_derived else (str_list or None)
-            result_value = (
-                None
-                if drop_derived
-                else (
-                    str_list
-                    or output_str
-                    or (
-                        output_bool
-                        if is_pass_fail and output_bool is not None
-                        else None
-                    )
-                )
-            )
+
+            # ``result`` = the raw verdict, by type: choices → the option list,
+            # Pass/Fail → the bool, free-text → output_str, numeric → None.
+            if drop_derived:
+                result_value = None
+            elif str_list:
+                result_value = str_list
+            elif output_str:
+                result_value = output_str
+            elif is_pass_fail and output_bool is not None:
+                result_value = output_bool
+            else:
+                result_value = None
 
             eval_map[sid].append(
                 {
