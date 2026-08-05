@@ -1044,7 +1044,6 @@ import type {
   StartEvalsProcessRequestApi,
   StopUserEvalRequestApi,
   StreamStatusResponseApi,
-  StripeWebhookLegacyResponseApi,
   StripeWebhookRequestApi,
   StripeWebhookResponseApi,
   SubmitAnnotationsApi,
@@ -2217,6 +2216,48 @@ export const accountsAcceptInvitationCreate = async (uidb64: string,
     headers: { 'Content-Type': 'application/json', ...options?.headers },
     body: JSON.stringify(
       acceptInvitationRequestApi,)
+  }
+);}
+
+
+
+export type accountsActivateReadResponse200 = {
+  data: void
+  status: 200
+}
+
+export type accountsActivateReadResponseDefault = {
+  data: ManagementAPIErrorResponseApi
+  status: Exclude<HTTPStatusCodes, 200>
+}
+
+export type accountsActivateReadResponseSuccess = (accountsActivateReadResponse200) & {
+  headers: Headers;
+};
+export type accountsActivateReadResponseError = (accountsActivateReadResponseDefault) & {
+  headers: Headers;
+};
+
+export type accountsActivateReadResponse = (accountsActivateReadResponseSuccess | accountsActivateReadResponseError)
+
+export const getAccountsActivateReadUrl = (uidb64: string,
+    token: string,) => {
+
+
+
+
+  return `/accounts/activate/${uidb64}/${token}/`
+}
+
+export const accountsActivateRead = async (uidb64: string,
+    token: string, options?: RequestInit): Promise<accountsActivateReadResponse> => {
+
+  return apiMutator<accountsActivateReadResponse>(getAccountsActivateReadUrl(uidb64,token),
+  {
+    ...options,
+    method: 'GET'
+
+
   }
 );}
 
@@ -75806,7 +75847,7 @@ export const usageV2UsageWorkspaceBreakdownList = async (params: UsageV2UsageWor
 
 
 export type usageWebhookCreateResponse200 = {
-  data: StripeWebhookLegacyResponseApi
+  data: StripeWebhookResponseApi
   status: 200
 }
 
@@ -75862,6 +75903,11 @@ export const getUsageWebhookCreateUrl = () => {
   return `/usage/webhook/`
 }
 
+/**
+ * No auth — Stripe authenticates via signature header.
+APIView.as_view() auto-applies csrf_exempt.
+ * @summary Handle Stripe webhook events.
+ */
 export const usageWebhookCreate = async (stripeWebhookRequestApi: StripeWebhookRequestApi, options?: RequestInit): Promise<usageWebhookCreateResponse> => {
 
   return apiMutator<usageWebhookCreateResponse>(getUsageWebhookCreateUrl(),
