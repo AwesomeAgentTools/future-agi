@@ -608,6 +608,26 @@ def _apply_conversation_metrics(call_execution: CallExecution) -> None:
     )
 
     detailed_data = dict(metrics.detailed_data or {})
+
+    # Preserve csat_score across recomputes — CSAT is written by a later task
+    # into conversation_metrics_data; a second (idempotent) ingest must not
+    # wipe it when it rebuilds the metrics blob.
+    existing_csat = (call_execution.conversation_metrics_data or {}).get("csat_score")
+    if existing_csat is not None:
+        detailed_data["csat_score"] = existing_csat
+
+    # Fold in the target agent's LLM token usage (provider-reported, stored on
+    # provider_call_data by ingestion) the same way voice_large.py does, so the
+    # frontend's token cells and the KPI aggregate light up.
+    token_usage = _extract_llm_token_usage(call_execution.provider_call_data)
+    if token_usage is not None:
+        if token_usage.get("input_tokens") is not None:
+            detailed_data["input_tokens"] = token_usage["input_tokens"]
+        if token_usage.get("output_tokens") is not None:
+            detailed_data["output_tokens"] = token_usage["output_tokens"]
+        if token_usage.get("total_tokens") is not None:
+            detailed_data["total_tokens"] = token_usage["total_tokens"]
+
     if call_execution.message_count is None:
         call_execution.message_count = len(messages)
     call_execution.conversation_metrics_data = detailed_data
@@ -622,6 +642,62 @@ def _apply_conversation_metrics(call_execution: CallExecution) -> None:
         )
         if last_end_ms > 0:
             call_execution.duration_seconds = int(round(last_end_ms / 1000.0))
+
+
+def _extract_llm_token_usage(
+    provider_call_data: dict | None,
+) -> dict[str, int] | None:
+    """Return normalized {input_tokens, output_tokens, total_tokens} usage.
+
+    Mirrors ee/voice get_normalized_transcript_data: reads the normalized
+    ``usage.llm`` bucket the SDK writes under each provider key. Providers that
+    only report a total (e.g. Retell) yield total_tokens without a split.
+    Returns None when no LLM usage was reported.
+    """
+    if not isinstance(provider_call_data, dict):
+        return None
+    for provider_data in provider_call_data.values():
+        if not isinstance(provider_data, dict):
+            continue
+        usage = provider_data.get("usage")
+        if not isinstance(usage, dict):
+            continue
+        llm_usage = usage.get("llm")
+        if not isinstance(llm_usage, dict):
+            continue
+
+        prompt = _coerce_token(
+            llm_usage.get("prompt_tokens", llm_usage.get("promptTokens"))
+        )
+        completion = _coerce_token(
+            llm_usage.get("completion_tokens", llm_usage.get("completionTokens"))
+        )
+        total = _coerce_token(
+            llm_usage.get("total_tokens", llm_usage.get("totalTokens"))
+        )
+
+        result: dict[str, int] = {}
+        if prompt is not None:
+            result["input_tokens"] = prompt
+        if completion is not None:
+            result["output_tokens"] = completion
+        if total is not None:
+            result["total_tokens"] = total
+        elif prompt is not None or completion is not None:
+            result["total_tokens"] = (prompt or 0) + (completion or 0)
+
+        if any(v for v in result.values()):
+            return result
+    return None
+
+
+def _coerce_token(value) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _dispatch_csat_once(call_execution: CallExecution) -> None:
