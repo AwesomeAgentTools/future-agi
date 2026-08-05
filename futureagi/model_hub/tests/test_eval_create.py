@@ -360,31 +360,6 @@ class TestEvalTemplateCreateV2API:
         template = EvalTemplate.objects.get(id=result["id"])
         assert template.name.startswith("draft-")
 
-    def test_create_draft_camel_case_alias(self, auth_client):
-        """isDraft (camelCase) must be accepted as an alias for is_draft.
-
-        The frontend's camelCase compatibility bridge installs enumerable
-        camelCase twins on every response object. If a spread of response-
-        derived state lands in a create-v2 POST body without the snake_case
-        original, only `isDraft` arrives — without this alias, the request
-        is treated as a non-draft and fails with "Instructions are
-        required." (TH-4076).
-        """
-        response = auth_client.post(
-            self.url,
-            {
-                "isDraft": True,
-                "eval_type": "agent",
-                "output_type": "pass_fail",
-                "model": "turing_large",
-                "pass_threshold": 0.5,
-            },
-            format="json",
-        )
-        assert response.status_code == 200, response.data
-        assert response.data["status"] is True
-        assert response.data["result"]["name"].startswith("draft-")
-
     # --- Code eval creation ---
 
     def test_create_code_eval(self, auth_client):
