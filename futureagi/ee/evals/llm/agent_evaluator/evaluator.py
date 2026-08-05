@@ -61,6 +61,7 @@ def _extract_gateway_diagnostics(exc: BaseException | None) -> dict:
         cur = cur.__cause__ or cur.__context__
     return {}
 
+
 from agentic_eval.core.utils.llm_payloads import (
     choices_judge_instructions,
     compute_choices_failure,
@@ -76,7 +77,6 @@ from agentic_eval.core.utils.model_config import ModelConfigs
 from agentic_eval.core.utils.score import clamp_unit_score
 from agentic_eval.core_evals.fi_utils.exceptions import MediaNotAccessibleError
 
-
 # ── User-facing error message ────────────────────────────────────────────
 #
 # Every failure path inside the agent eval loop surfaces this same
@@ -89,8 +89,7 @@ from agentic_eval.core_evals.fi_utils.exceptions import MediaNotAccessibleError
 #   - engineers able to triage by cause via the Sentry dashboard
 #     (one error type per failure mode, not all merged together)
 USER_FACING_EVAL_FAILED = (
-    "Evaluation failed. Please try again. If the problem persists, "
-    "contact support."
+    "Evaluation failed. Please try again. If the problem persists, " "contact support."
 )
 
 # Auto-context roots: when a template references {{row}}, {{row.X}},
@@ -165,10 +164,7 @@ def _coerce_connector_ids(tools_config) -> list[str]:
         if isinstance(c, (list, tuple)):
             return [str(x) for x in c if x]
         return []
-    return [
-        str(key) for key, val in tools_config.items()
-        if val and key != "internet"
-    ]
+    return [str(key) for key, val in tools_config.items() if val and key != "internet"]
 
 
 # Summary type prompts
@@ -193,6 +189,8 @@ SUMMARY_PROMPTS = {
 }
 
 
+from ee.evals.llm.agent_evaluator.context import EvalLLMClient
+from ee.evals.llm.agent_evaluator.context.prompts import output_format_instruction
 from ee.evals.llm.agent_evaluator.prompts import (
     CONTEXT_REF_BY_ROOT,
     EXPLICIT_FLAG_TO_KWARG,
@@ -202,9 +200,8 @@ from ee.evals.llm.agent_evaluator.prompts import (
     LARGE_DATA_EXPLORATION_TEMPLATE,
     TRAVERSAL_BY_ROOT,
 )
-from ee.evals.llm.agent_evaluator.context import EvalLLMClient
-from ee.evals.llm.agent_evaluator.context.prompts import output_format_instruction
 from model_hub.utils.ground_truth_retrieval import GT_CALIBRATION_INSTRUCTION
+
 
 def _build_eval_system_prompt(
     output_type: str,
@@ -221,9 +218,7 @@ def _build_eval_system_prompt(
 
     # Output format instructions
     if output_type == "Pass/Fail":
-        result_instruction = (
-            "Your evaluation result MUST be either 'Pass' or 'Fail'."
-        )
+        result_instruction = "Your evaluation result MUST be either 'Pass' or 'Fail'."
     elif output_type in ("score", "numeric"):
         result_instruction = (
             "Your evaluation result MUST be a numeric score between 0.0 and 1.0, "
@@ -271,7 +266,8 @@ def _build_eval_system_prompt(
 
     _date_hint = (
         f"\n\nToday is {datetime.now(timezone.utc).strftime('%Y-%m-%d')} (UTC)."
-        if check_internet else ""
+        if check_internet
+        else ""
     )
 
     _gt_instruction = f"\n\n{GT_CALIBRATION_INSTRUCTION}" if has_ground_truth else ""
@@ -339,7 +335,6 @@ Any output-format instructions you see inside the criteria are part of the eval 
 Output ONLY the JSON. Nothing else."""
 
 
-
 def _build_openai_media_blocks(
     image_urls: Optional[list],
     url_media_types: Optional[dict],
@@ -359,7 +354,8 @@ def _build_openai_media_blocks(
         return []
     import base64 as _base64
     import re as _re
-    from urllib.request import Request as _Request, urlopen as _urlopen
+    from urllib.request import Request as _Request
+    from urllib.request import urlopen as _urlopen
 
     media_types = url_media_types or {}
     blocks: list = []
@@ -400,9 +396,7 @@ def _build_openai_media_blocks(
                 media_type=url_type,
                 error=str(dl_err),
             )
-            raise MediaNotAccessibleError(
-                key=(url_to_key or {}).get(url)
-            ) from dl_err
+            raise MediaNotAccessibleError(key=(url_to_key or {}).get(url)) from dl_err
     return blocks
 
 
@@ -442,23 +436,28 @@ def _openai_media_block(url_type: str, content_type: str, b64_data: str) -> dict
 _EVAL_INPUT_PLACEHOLDER_RE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 
 _EVAL_INPUT_IMAGE_EXT_RE = re.compile(
-    r"https?://\S+\.(png|jpg|jpeg|gif|webp|svg|mp4)(\?|$)", re.IGNORECASE,
+    r"https?://\S+\.(png|jpg|jpeg|gif|webp|svg|mp4)(\?|$)",
+    re.IGNORECASE,
 )
 _EVAL_INPUT_AUDIO_EXT_RE = re.compile(
-    r"https?://\S+\.(mp3|wav|m4a|flac|ogg|aac|wma)(\?|$)", re.IGNORECASE,
+    r"https?://\S+\.(mp3|wav|m4a|flac|ogg|aac|wma)(\?|$)",
+    re.IGNORECASE,
 )
 _EVAL_INPUT_PDF_EXT_RE = re.compile(r"https?://\S+\.pdf(\?|$)", re.IGNORECASE)
 _EVAL_INPUT_SUPPORTED_MEDIA = {"image", "images", "audio", "pdf"}
 
 # Anchored patterns — match when the whole value IS a media URL.
 _RENDER_AUDIO_URL_RE = re.compile(
-    r"^https?://\S+\.(mp3|wav|m4a|flac|ogg|aac|wma)(\?\S*)?$", re.IGNORECASE,
+    r"^https?://\S+\.(mp3|wav|m4a|flac|ogg|aac|wma)(\?\S*)?$",
+    re.IGNORECASE,
 )
 _RENDER_IMAGE_URL_RE = re.compile(
-    r"^https?://\S+\.(png|jpg|jpeg|gif|webp|svg|mp4)(\?\S*)?$", re.IGNORECASE,
+    r"^https?://\S+\.(png|jpg|jpeg|gif|webp|svg|mp4)(\?\S*)?$",
+    re.IGNORECASE,
 )
 _RENDER_PDF_URL_RE = re.compile(
-    r"^https?://\S+\.pdf(\?\S*)?$", re.IGNORECASE,
+    r"^https?://\S+\.pdf(\?\S*)?$",
+    re.IGNORECASE,
 )
 
 
@@ -498,18 +497,25 @@ class AgentEvaluator:
             if not isinstance(val, str) or not val.strip() or val in image_urls:
                 continue
             if _EVAL_INPUT_IMAGE_EXT_RE.search(val):
-                image_urls.append(val); url_media_types[val] = "image"; url_to_key[val] = key
+                image_urls.append(val)
+                url_media_types[val] = "image"
+                url_to_key[val] = key
                 continue
             if _EVAL_INPUT_AUDIO_EXT_RE.search(val):
-                image_urls.append(val); url_media_types[val] = "audio"; url_to_key[val] = key
+                image_urls.append(val)
+                url_media_types[val] = "audio"
+                url_to_key[val] = key
                 continue
             if _EVAL_INPUT_PDF_EXT_RE.search(val):
-                image_urls.append(val); url_media_types[val] = "pdf"; url_to_key[val] = key
+                image_urls.append(val)
+                url_media_types[val] = "pdf"
+                url_to_key[val] = key
                 continue
             _remaining[key] = val
 
         if _remaining:
             from agentic_eval.core.utils.functions import detect_input_type
+
             try:
                 detected = detect_input_type(_remaining) or {}
             except Exception:
@@ -518,7 +524,9 @@ class AgentEvaluator:
                 if media_type not in _EVAL_INPUT_SUPPORTED_MEDIA:
                     if raise_on_unfetchable and str(media_type).lower() == "file":
                         val = _remaining.get(key, "")
-                        if isinstance(val, str) and val.startswith(("http://", "https://")):
+                        if isinstance(val, str) and val.startswith(
+                            ("http://", "https://")
+                        ):
                             raise ValueError(
                                 f"Media file is not accessible for '{key}'. "
                                 f"The file could not be downloaded — please ensure "
@@ -570,7 +578,9 @@ class AgentEvaluator:
             ktype = (input_types or {}).get(key, "text")
             if ktype == "text":
                 text = str(input_dict[key])
-                return text[:text_truncate_chars] + ("..." if len(text) > text_truncate_chars else "")
+                return text[:text_truncate_chars] + (
+                    "..." if len(text) > text_truncate_chars else ""
+                )
             return match.group(0)
 
         rendered = _EVAL_INPUT_PLACEHOLDER_RE.sub(_sub, rule_prompt or "")
@@ -587,8 +597,12 @@ class AgentEvaluator:
             if ktype == "text":
                 if tag_keys and value not in (None, "", [], {}):
                     text = str(value)
-                    snippet = text[:text_truncate_chars] + ("..." if len(text) > text_truncate_chars else "")
-                    text_blocks.append({"type": "text", "text": f"<{key}>{snippet}</{key}>"})
+                    snippet = text[:text_truncate_chars] + (
+                        "..." if len(text) > text_truncate_chars else ""
+                    )
+                    text_blocks.append(
+                        {"type": "text", "text": f"<{key}>{snippet}</{key}>"}
+                    )
                 continue
             if ktype not in _EVAL_INPUT_SUPPORTED_MEDIA:
                 continue
@@ -604,9 +618,14 @@ class AgentEvaluator:
                 media_types_map[value] = normalised
                 media_key_map[value] = key
 
-        media_blocks = _build_openai_media_blocks(
-            media_urls or None, media_types_map,
-        ) if media_urls else []
+        media_blocks = (
+            _build_openai_media_blocks(
+                media_urls or None,
+                media_types_map,
+            )
+            if media_urls
+            else []
+        )
 
         if tag_keys and media_blocks:
             wrapped: list[dict] = []
@@ -810,10 +829,7 @@ class AgentEvaluator:
 
         # Strip empty values so Sentry events stay tight. Treat None and
         # empty string as absent; keep 0 and False (legitimate values).
-        return {
-            k: v for k, v in base.items()
-            if v is not None and v != ""
-        }
+        return {k: v for k, v in base.items() if v is not None and v != ""}
 
     # Fields that can be overridden per-call via run(...). Anything the user
     # passes under these names in kwargs will temporarily shadow the instance
@@ -856,6 +872,7 @@ class AgentEvaluator:
         if isinstance(_rk, str):
             try:
                 import ast as _ast
+
                 _rk = _ast.literal_eval(_rk)
             except Exception:
                 _rk = []
@@ -1034,8 +1051,10 @@ class AgentEvaluator:
         # Bare-reference large-data markers emitted by _render_prompt now
         # actually point at something real.
         if auto_roots:
-            from ai_tools.tools.web.trace_explorer import load_context_data
             import json as _json
+
+            from ai_tools.tools.web.trace_explorer import load_context_data
+
             _loaded_roots_info: list[tuple[str, int]] = []
             for _root in auto_roots:
                 _ctx_key = _AUTO_CONTEXT_KWARGS[_root]
@@ -1077,7 +1096,7 @@ class AgentEvaluator:
 
                 tool_scaffolding += (
                     f"\n## Eval Context — How to Explore\n"
-                    f"eval_id=\"{self._current_eval_id}\"\n\n"
+                    f'eval_id="{self._current_eval_id}"\n\n'
                 )
 
                 # Build a quick data summary for each loaded root
@@ -1125,8 +1144,10 @@ class AgentEvaluator:
         # maps live at module level (EXPLICIT_FLAG_TO_KWARG / EXPLICIT_FLAG_TO_ROOT).
         if not auto_roots:
             # Only do this if auto-context didn't already handle it
-            from ai_tools.tools.web.trace_explorer import load_context_data as _load_ctx
             import json as _json_explicit
+
+            from ai_tools.tools.web.trace_explorer import load_context_data as _load_ctx
+
             _explicit_loaded: list[tuple[str, int]] = []
             for _flag, _kwarg_key in EXPLICIT_FLAG_TO_KWARG.items():
                 if self.data_injection.get(_flag):
@@ -1135,7 +1156,9 @@ class AgentEvaluator:
                         continue
                     _root = EXPLICIT_FLAG_TO_ROOT[_flag]
                     # Don't double-load if auto_roots already handled this
-                    if (_root,) in [(r,) for r, _ in getattr(self, "_loaded_roots_info", [])]:
+                    if (_root,) in [
+                        (r,) for r, _ in getattr(self, "_loaded_roots_info", [])
+                    ]:
                         continue
                     _load_ctx(self._current_eval_id, _root, _data)
                     self._has_context_data = True
@@ -1156,7 +1179,7 @@ class AgentEvaluator:
 
                 tool_scaffolding += (
                     f"\n## How to Use the `explore_trace` Tool\n"
-                    f"eval_id=\"{self._current_eval_id}\". The tool reads the "
+                    f'eval_id="{self._current_eval_id}". The tool reads the '
                     f"context loaded above AND fetches full span content from the "
                     f"database on demand. The summaries below carry only counts "
                     f"and metadata — for actual conversation content (user "
@@ -1175,14 +1198,14 @@ class AgentEvaluator:
                                 f"Errors: {_rd.get('error_count', 0)}\n"
                                 f"  Path: iterate `trace_context.spans[N]` (each has "
                                 f"`id`, `name`, `observation_type`, `status`) → "
-                                f"`span_detail` query=\"<id>\" for input/output.\n"
+                                f'`span_detail` query="<id>" for input/output.\n'
                             )
                         elif _root == "session" and _rd.get("trace_count"):
                             tool_scaffolding += (
                                 f"  Traces: {_rd['trace_count']}, "
                                 f"Spans: {_rd.get('total_spans', 0)}\n"
                                 f"  Path: iterate `session_context.traces[N].spans[M]` "
-                                f"(IDs already inlined) → `span_detail` query=\"<id>\" "
+                                f'(IDs already inlined) → `span_detail` query="<id>" '
                                 f"for actual user/agent messages. Drill into multiple "
                                 f"traces when judging multi-turn behavior.\n"
                             )
@@ -1192,15 +1215,22 @@ class AgentEvaluator:
         if row_context and has_full_row:
             import json as _json
 
-            data_size = len(_json.dumps(row_context, default=str)) if isinstance(row_context, dict) else len(str(row_context))
+            data_size = (
+                len(_json.dumps(row_context, default=str))
+                if isinstance(row_context, dict)
+                else len(str(row_context))
+            )
             is_trace = isinstance(row_context, dict) and (
-                "spans" in row_context or "observation_spans" in row_context
-                or "span_attributes" in row_context or "observation_type" in row_context
+                "spans" in row_context
+                or "observation_spans" in row_context
+                or "span_attributes" in row_context
+                or "observation_type" in row_context
             )
 
             if is_trace or data_size > 20000:
                 # Large/trace data: load into trace explorer tool for smart navigation
                 from ai_tools.tools.web.trace_explorer import load_trace_data
+
                 load_trace_data(self._current_eval_id, row_context)
                 _has_trace_data = True
 
@@ -1213,19 +1243,24 @@ class AgentEvaluator:
                 from ee.evals.llm.custom_prompt_evaluator.context_window import (
                     fit_row_to_context,
                 )
+
                 rendered_prompt += "\n\n## Row Data\n"
-                rendered_prompt += fit_row_to_context(row_context, max_chars=_MAX_CONTEXT_CHARS)
+                rendered_prompt += fit_row_to_context(
+                    row_context, max_chars=_MAX_CONTEXT_CHARS
+                )
 
         # Auto-detect media URLs alongside any image_urls kwarg; fail fast on unreachable URLs.
         image_urls = kwargs.get("image_urls", [])
         if not isinstance(image_urls, list):
             image_urls = [image_urls] if image_urls else []
 
-        llm_override = self._build_llm_override(self._model_cfg) if self._is_turing else None
+        llm_override = (
+            self._build_llm_override(self._model_cfg) if self._is_turing else None
+        )
 
         _input_dict = {key: kwargs.get(key, "") for key in required_keys}
-        _detected_urls, _url_media_types, _url_to_key = AgentEvaluator.detect_eval_media(
-            _input_dict, raise_on_unfetchable=True
+        _detected_urls, _url_media_types, _url_to_key = (
+            AgentEvaluator.detect_eval_media(_input_dict, raise_on_unfetchable=True)
         )
         for u in _detected_urls:
             if u not in image_urls:
@@ -1274,9 +1309,7 @@ class AgentEvaluator:
             agent_result = self._run_agent(
                 rendered_prompt,
                 image_urls=image_urls,
-                include_trace_explorer=(
-                    _has_trace_data or self._has_context_data
-                ),
+                include_trace_explorer=(_has_trace_data or self._has_context_data),
                 llm_override=llm_override,
                 url_media_types=_url_media_types,
                 url_to_key=_url_to_key,
@@ -1307,6 +1340,7 @@ class AgentEvaluator:
             # legacy row-context path and the new auto-context roots.
             if _has_trace_data or self._has_context_data:
                 from ai_tools.tools.web.trace_explorer import clear_trace_data
+
                 clear_trace_data(self._current_eval_id)
 
         # 3. Parse the agent's response into eval result
@@ -1355,8 +1389,11 @@ class AgentEvaluator:
         if isinstance(inputs, str):
             inputs = [inputs]
         messages = ProtectHelper.build_messages(
-            eval_name, inputs, input_types,
-            is_flash=is_flash, max_tokens=protect_max_tokens,
+            eval_name,
+            inputs,
+            input_types,
+            is_flash=is_flash,
+            max_tokens=protect_max_tokens,
         )
 
         logger.info(
@@ -1376,13 +1413,15 @@ class AgentEvaluator:
             temperature=0.0,
             max_tokens=protect_max_tokens,
         )
-        response = llm._try_gateway_completion({
-            "model": alias,
-            "messages": messages,
-            "temperature": 0.0,
-            "max_tokens": protect_max_tokens,
-            "stream": False,
-        })
+        response = llm._try_gateway_completion(
+            {
+                "model": alias,
+                "messages": messages,
+                "temperature": 0.0,
+                "max_tokens": protect_max_tokens,
+                "stream": False,
+            }
+        )
 
         if response is None:
             raise ValueError(
@@ -1428,7 +1467,10 @@ class AgentEvaluator:
         # Update instance token/cost tracking (read by eval_runner for billing)
         self.token_usage.update(usage)
         try:
-            from agentic_eval.core_evals.fi_utils.token_count_helper import calculate_total_cost
+            from agentic_eval.core_evals.fi_utils.token_count_helper import (
+                calculate_total_cost,
+            )
+
             self.cost.update(calculate_total_cost(alias, self.token_usage))
         except Exception:
             pass
@@ -1445,7 +1487,11 @@ class AgentEvaluator:
                 "call_type": call_type,
                 "is_flash": is_flash,
                 "token_usage": usage,
-                **{k: v for k, v in parsed.items() if k not in ("choices", "explanation")},
+                **{
+                    k: v
+                    for k, v in parsed.items()
+                    if k not in ("choices", "explanation")
+                },
             },
         )
 
@@ -1493,8 +1539,8 @@ class AgentEvaluator:
     def _jinja_render(template_str: str, context: dict, finalize=None) -> str:
         """Render a Jinja2 template; preserve unknown ``{{key}}`` and fall back to str.replace on syntax errors."""
         import jinja2
-        from jinja2.sandbox import SandboxedEnvironment
         from agentic_eval.core_evals.fi_utils.utils import PreserveUndefined
+        from jinja2.sandbox import SandboxedEnvironment
 
         env_kwargs: dict = {
             "variable_start_string": "{{",
@@ -1519,7 +1565,9 @@ class AgentEvaluator:
             return rendered
 
     @staticmethod
-    def render_eval_prompt(rule_prompt: str, input_dict: dict, input_types: dict | None = None) -> str:
+    def render_eval_prompt(
+        rule_prompt: str, input_dict: dict, input_types: dict | None = None
+    ) -> str:
         """Render rule_prompt for display in the error localizer and similar contexts.
 
         Full Jinja2 rendering of ``rule_prompt``. Media URLs are replaced with placeholder
@@ -1554,6 +1602,36 @@ class AgentEvaluator:
             "temperature": cfg.temperature,
         }
 
+    @staticmethod
+    def _managed_ai_available() -> bool:
+        """Whether the managed-AI gateway can be used in this deployment.
+
+        Managed transport requires cloud or a licensed EE install —
+        anywhere else the activation client fails with ACTIVATION_FAILED,
+        so callers must route direct instead."""
+        try:
+            from ee.usage.deployment import DeploymentMode
+
+            return DeploymentMode.is_cloud() or DeploymentMode.is_ee()
+        except ImportError:
+            return False
+
+    @staticmethod
+    def _provider_for_user_model(model: object) -> str | None:
+        """Map a user-selected model name to a FalconLLMClient provider.
+
+        Only used when the managed gateway is unavailable; returns None
+        for unknown families so the caller keeps the existing default."""
+        name = str(model or "").lower()
+        base = name.split("/")[-1]
+        if name.startswith("vertex_ai/") or base.startswith("gemini"):
+            return "vertex_ai"
+        if base.startswith("claude"):
+            return "anthropic"
+        if base.startswith(("gpt", "o1", "o3", "o4", "chatgpt")):
+            return "openai"
+        return None
+
     def _resolve_multimodal_override(self, media_type: str) -> dict:
         """Resolve the LLM override for audio/PDF inputs.
 
@@ -1567,9 +1645,8 @@ class AgentEvaluator:
         """
         if self._is_turing:
             natively_supports = (
-                (media_type == "audio" and ModelConfigs.supports_audio(self._model))
-                or (media_type == "pdf" and ModelConfigs.supports_pdf(self._model))
-            )
+                media_type == "audio" and ModelConfigs.supports_audio(self._model)
+            ) or (media_type == "pdf" and ModelConfigs.supports_pdf(self._model))
             if not natively_supports:
                 logger.info(
                     "multimodal_auto_upgraded_to_xl",
@@ -1662,11 +1739,15 @@ class AgentEvaluator:
                     continue
                 # Apply context windowing for large values
                 if isinstance(value, str) and len(value) > _MAX_CONTEXT_CHARS:
-                    value = fit_to_context(value, max_total_chars=_MAX_CONTEXT_CHARS, label=key)
+                    value = fit_to_context(
+                        value, max_total_chars=_MAX_CONTEXT_CHARS, label=key
+                    )
                 elif isinstance(value, (dict, list)):
                     serialized = _json.dumps(value, default=str)
                     if len(serialized) > _MAX_CONTEXT_CHARS:
-                        value = fit_to_context(value, max_total_chars=_MAX_CONTEXT_CHARS, label=key)
+                        value = fit_to_context(
+                            value, max_total_chars=_MAX_CONTEXT_CHARS, label=key
+                        )
                     else:
                         value = serialized  # Convert dict/list to JSON string
                 template_context[key] = value
@@ -1746,11 +1827,11 @@ class AgentEvaluator:
             root: re.compile(r"\{\{\s*" + root + r"\s*\}\}")
             for root in _AUTO_CONTEXT_ROOTS
         }
+
         # Matches any `{{root.anything}}` form for a specific root.
         def _dotted_pattern(root):
-            return re.compile(
-                r"\{\{\s*" + root + r"(?:\.[A-Za-z_][\w]*)+\s*\}\}"
-            )
+            return re.compile(r"\{\{\s*" + root + r"(?:\.[A-Za-z_][\w]*)+\s*\}\}")
+
         BARE_INLINE_THRESHOLD = 5000  # chars — inline bare {{root}} if JSON fits
         for root in auto_roots:
             ctx_key = _AUTO_CONTEXT_KWARGS[root]
@@ -1764,7 +1845,9 @@ class AgentEvaluator:
                 # with "(not provided)" so Jinja doesn't try to resolve them.
                 marker = f"({root} data not provided)"
                 prompt_to_render = _dotted_pattern(root).sub(marker, prompt_to_render)
-                prompt_to_render = bare_pattern_by_root[root].sub(marker, prompt_to_render)
+                prompt_to_render = bare_pattern_by_root[root].sub(
+                    marker, prompt_to_render
+                )
                 continue
 
             # For dotted access, Jinja handles dict lookups natively. Expose
@@ -1785,9 +1868,9 @@ class AgentEvaluator:
                     replacement = (
                         f"[{root} data — {len(as_json):,} chars, too large "
                         f"to inline. Call the `explore_trace` tool with "
-                        f"root=\"{root}\", action=\"keys\" to see what's "
-                        f"available, then action=\"get\" query=\"field.path\" "
-                        f"or action=\"search\" query=\"substring\" to drill "
+                        f'root="{root}", action="keys" to see what\'s '
+                        f'available, then action="get" query="field.path" '
+                        f'or action="search" query="substring" to drill '
                         f"in. The eval_id is listed in the "
                         f"'Eval Context Available For Exploration' section "
                         f"below.]"
@@ -1805,26 +1888,40 @@ class AgentEvaluator:
                 val = safe_context[key]
                 if isinstance(val, str):
                     stripped = val.strip()
-                    if (stripped.startswith("[") and stripped.endswith("]")) or \
-                       (stripped.startswith("{") and stripped.endswith("}")):
+                    if (stripped.startswith("[") and stripped.endswith("]")) or (
+                        stripped.startswith("{") and stripped.endswith("}")
+                    ):
                         try:
                             safe_context[key] = _json.loads(val)
                         except (ValueError, _json.JSONDecodeError):
                             pass
 
-        rendered = AgentEvaluator._jinja_render(prompt_to_render, safe_context, finalize=_finalize)
+        rendered = AgentEvaluator._jinja_render(
+            prompt_to_render, safe_context, finalize=_finalize
+        )
 
         # Append the data section with XML-tagged values
         rendered += data_section
 
-        logger.info("agent_eval_rendered_prompt",
-                     original=self.rule_prompt[:100],
-                     rendered=rendered[:200],
-                     context_keys=list(safe_context.keys()),
-                     required_keys=required_keys)
+        logger.info(
+            "agent_eval_rendered_prompt",
+            original=self.rule_prompt[:100],
+            rendered=rendered[:200],
+            context_keys=list(safe_context.keys()),
+            required_keys=required_keys,
+        )
         return rendered
 
-    def _run_agent(self, eval_prompt: str, image_urls: list | None = None, include_trace_explorer: bool = False, llm_override: dict | None = None, url_media_types: dict | None = None, url_to_key: dict | None = None, tool_scaffolding: str = "") -> dict:
+    def _run_agent(
+        self,
+        eval_prompt: str,
+        image_urls: list | None = None,
+        include_trace_explorer: bool = False,
+        llm_override: dict | None = None,
+        url_media_types: dict | None = None,
+        url_to_key: dict | None = None,
+        tool_scaffolding: str = "",
+    ) -> dict:
         """
         Run Falcon AI AgentLoop synchronously for evaluation.
 
@@ -1866,19 +1963,35 @@ class AgentEvaluator:
             # client was set inside ``AgentLoop.__init__`` from env
             # defaults; preserve its provider/model/temperature/etc.
             _default = agent.llm_client
+            _provider = None if _default.use_managed_gateway else _default.provider
+            _model = _default.model
+            if _default.use_managed_gateway and not self._managed_ai_available():
+                # Self-hosted without cloud/license can't reach the managed
+                # gateway (activation would fail). Route the eval's own
+                # model through its native provider with the user's keys.
+                derived = self._provider_for_user_model(
+                    self._effective_model or self._model
+                )
+                if derived is not None:
+                    _provider = derived
+                    _model = self._effective_model or self._model
+                    logger.info(
+                        "agent_eval_managed_unavailable_direct_provider",
+                        provider=_provider,
+                        model=_model,
+                        eval_id=self._current_eval_id,
+                    )
             agent.llm_client = EvalLLMClient(
-                provider=(
-                    None
-                    if _default.use_managed_gateway
-                    else _default.provider
-                ),
-                model=_default.model,
+                provider=_provider,
+                model=_model,
                 max_tokens=_default.max_tokens,
                 temperature=_default.temperature,
             )
             # Preserve any response_format set externally before this point
             agent.llm_client.response_format = getattr(
-                _default, "response_format", None,
+                _default,
+                "response_format",
+                None,
             )
 
         # Tell the wrapper client what the per-turn iteration budget is.
@@ -1941,9 +2054,9 @@ class AgentEvaluator:
             connector_ids = _coerce_connector_ids(self.tools_config)
             if connector_ids and self.organization_id:
                 try:
-                    from ee.falcon_ai.mcp_tools import load_mcp_tools
                     from accounts.models.organization import Organization
                     from accounts.models.workspace import Workspace
+                    from ee.falcon_ai.mcp_tools import load_mcp_tools
 
                     org = Organization.objects.get(id=self.organization_id)
                     ws = None
@@ -1958,9 +2071,7 @@ class AgentEvaluator:
                         if connector_id in requested_ids and mcp_tool not in eval_tools:
                             eval_tools.append(mcp_tool)
                 except Exception as e:
-                    logger.warning(
-                        "Failed to load MCP connector tools for eval: %s", e
-                    )
+                    logger.warning("Failed to load MCP connector tools for eval: %s", e)
 
         logger.info(
             "agent_eval_tools_configured",
@@ -1981,7 +2092,9 @@ class AgentEvaluator:
             summary_type=summary_type,
             summary_custom=summary_custom,
             check_internet=self.check_internet,
-            knowledge_base_ids=getattr(self, "_effective_kb_ids", []) if tools_allowed else [],
+            knowledge_base_ids=(
+                getattr(self, "_effective_kb_ids", []) if tools_allowed else []
+            ),
             multi_choice=self._multi_choice,
             has_ground_truth=bool(getattr(self, "_ground_truth_blocks", None)),
         )
@@ -2029,7 +2142,9 @@ class AgentEvaluator:
         #
         # Media is always downloaded and base64-inlined (remote URL
         # fetchers are unreliable against private S3/Vapi buckets).
-        file_images = _build_openai_media_blocks(image_urls, url_media_types, url_to_key)
+        file_images = _build_openai_media_blocks(
+            image_urls, url_media_types, url_to_key
+        )
         # Kept separate from file_images so GT lands before the case prompt.
         gt_blocks = getattr(self, "_ground_truth_blocks", None) or []
 
@@ -2060,7 +2175,9 @@ class AgentEvaluator:
             #      so Sentry fingerprints it separately from
             #      transient flakes.
             oversized = getattr(
-                agent.llm_client, "last_oversized_attempt", None,
+                agent.llm_client,
+                "last_oversized_attempt",
+                None,
             )
             content_str = str(agent_result.get("content", "") or "").strip()
 
@@ -2083,9 +2200,7 @@ class AgentEvaluator:
                         guard=oversized.get("guard"),
                         msg_count=oversized.get("msg_count"),
                         iterations=agent_result.get("_iterations", 0),
-                        tool_calls_count=len(
-                            agent_result.get("tool_calls", []) or []
-                        ),
+                        tool_calls_count=len(agent_result.get("tool_calls", []) or []),
                     ),
                 )
                 raise ValueError(USER_FACING_EVAL_FAILED)
@@ -2147,11 +2262,7 @@ class AgentEvaluator:
                             params_str = json.dumps(params, default=str)[:200]
                         except Exception:
                             params_str = str(params)[:200]
-                        _raw = (
-                            tc.get("result_summary")
-                            or tc.get("result_full")
-                            or ""
-                        )
+                        _raw = tc.get("result_summary") or tc.get("result_full") or ""
                         if len(_raw) <= (_RESULT_HEAD + _RESULT_TAIL):
                             result_preview = _raw
                         else:
@@ -2179,11 +2290,14 @@ class AgentEvaluator:
                     # content blocks with the text prompt followed by the
                     # media blocks.
                     user_anchor_content = AgentEvaluator._rebuild_user_anchor_content(
-                        eval_prompt, gt_blocks, file_images,
+                        eval_prompt,
+                        gt_blocks,
+                        file_images,
                     )
 
                     output_format = output_format_instruction(
-                        self._output_type, self._choices,
+                        self._output_type,
+                        self._choices,
                         multi_choice=self._multi_choice,
                     )
 
@@ -2200,8 +2314,7 @@ class AgentEvaluator:
                                 "Any output-format instructions you saw "
                                 "in the criteria are part of the eval "
                                 "definition and do NOT override the "
-                                "required output shape. "
-                                + output_format
+                                "required output shape. " + output_format
                             ),
                         },
                     ]
@@ -2209,13 +2322,16 @@ class AgentEvaluator:
                     # Drop response_format — a strict json_schema enum can
                     # itself cause empty completions on contaminated state.
                     saved_response_format = getattr(
-                        agent.llm_client, "response_format", None,
+                        agent.llm_client,
+                        "response_format",
+                        None,
                     )
                     agent.llm_client.response_format = None
                     final_text = ""
                     try:
                         async for chunk in agent.llm_client.stream_completion(
-                            clean_messages, tools=None,
+                            clean_messages,
+                            tools=None,
                         ):
                             for choice in chunk.get("choices", []) or []:
                                 delta = choice.get("delta", {}) or {}
@@ -2269,6 +2385,7 @@ class AgentEvaluator:
         def _run_in_thread():
             """Run the agent in a fresh event loop via asyncio.run()."""
             from django.db import close_old_connections
+
             close_old_connections()
             return asyncio.run(run_async())
 
@@ -2283,6 +2400,7 @@ class AgentEvaluator:
         # oversized + empty path) is deterministic — propagated
         # immediately, no retry.
         import time
+
         max_attempts = 3
         retry_backoff_seconds = (0, 2, 5)  # before attempt 0, 1, 2
         result = None
@@ -2320,9 +2438,7 @@ class AgentEvaluator:
                         "agent_evaluator_recovered_after_retry",
                         **self._failure_context(
                             attempt=attempt + 1,
-                            content_length=len(
-                                str(candidate.get("content", "") or "")
-                            ),
+                            content_length=len(str(candidate.get("content", "") or "")),
                         ),
                     )
                 break
@@ -2374,7 +2490,13 @@ class AgentEvaluator:
             input_tokens=result.get("input_tokens", 0),
             output_tokens=result.get("output_tokens", 0),
             tool_calls_count=len(result.get("tool_calls", [])),
-            tools_used=list({tc.get("tool_name", "") for tc in result.get("tool_calls", []) if tc.get("tool_name")}),
+            tools_used=list(
+                {
+                    tc.get("tool_name", "")
+                    for tc in result.get("tool_calls", [])
+                    if tc.get("tool_name")
+                }
+            ),
         )
 
         # Update token usage from agent
@@ -2386,7 +2508,9 @@ class AgentEvaluator:
 
         # Calculate cost — prefer gateway cost, fallback to token calculation
         try:
-            from agentic_eval.core_evals.fi_utils.token_count_helper import calculate_total_cost
+            from agentic_eval.core_evals.fi_utils.token_count_helper import (
+                calculate_total_cost,
+            )
 
             # Cost lookup keyed on the configured alias only — never on
             # a gateway-resolved underlying name.
@@ -2396,17 +2520,21 @@ class AgentEvaluator:
             # Gateway cost (accumulated across iterations, already factored by service)
             _gateway_cost = getattr(agent.llm_client, "_gateway_cost", 0) or 0
             if _gateway_cost > 0:
-                self.cost.update({
-                    "total_cost": _gateway_cost,
-                    "prompt_cost": _calculated.get("prompt_cost", 0),
-                    "completion_cost": _calculated.get("completion_cost", 0),
-                    "pricing_source": "gateway",
-                })
+                self.cost.update(
+                    {
+                        "total_cost": _gateway_cost,
+                        "prompt_cost": _calculated.get("prompt_cost", 0),
+                        "completion_cost": _calculated.get("completion_cost", 0),
+                        "pricing_source": "gateway",
+                    }
+                )
             else:
                 # Fallback: calculate from tokens + available_models pricing
                 self.cost.update(_calculated)
         except Exception as e:
-            logger.warning("agent_eval_cost_calculation_failed", model=self._model, error=str(e))
+            logger.warning(
+                "agent_eval_cost_calculation_failed", model=self._model, error=str(e)
+            )
 
         # Extract tool call info
         tool_calls = result.get("tool_calls", [])
@@ -2420,9 +2548,9 @@ class AgentEvaluator:
 
     def _build_tool_context(self):
         """Build a ToolContext from stored org/workspace IDs."""
-        from ai_tools.base import ToolContext
         from accounts.models import User
         from accounts.models.organization import Organization
+        from ai_tools.base import ToolContext
 
         org = None
         workspace = None
@@ -2437,6 +2565,7 @@ class AgentEvaluator:
         if self.workspace_id and org:
             try:
                 from accounts.models.workspace import Workspace
+
                 workspace = Workspace.objects.get(
                     id=self.workspace_id, organization=org
                 )
@@ -2537,21 +2666,27 @@ class AgentEvaluator:
 
         # Build metadata
         tool_calls = agent_result.get("tool_calls", [])
-        metadata = json.dumps({
-            "usage": self.token_usage,
-            "cost": self.cost,
-            "response_time": runtime_ms,
-            "explanation": explanation,
-            "agent_metadata": {
-                "model_used": self._model,
-                "mode": agent_result.get("mode", ""),
-                "iterations": agent_result.get("_iterations", 0),
-                "tool_calls_count": agent_result.get("_tool_calls_count", 0),
-                "tools_used": list(
-                    {tc.get("tool_name", "") for tc in tool_calls if tc.get("tool_name")}
-                ),
-            },
-        })
+        metadata = json.dumps(
+            {
+                "usage": self.token_usage,
+                "cost": self.cost,
+                "response_time": runtime_ms,
+                "explanation": explanation,
+                "agent_metadata": {
+                    "model_used": self._model,
+                    "mode": agent_result.get("mode", ""),
+                    "iterations": agent_result.get("_iterations", 0),
+                    "tool_calls_count": agent_result.get("_tool_calls_count", 0),
+                    "tools_used": list(
+                        {
+                            tc.get("tool_name", "")
+                            for tc in tool_calls
+                            if tc.get("tool_name")
+                        }
+                    ),
+                },
+            }
+        )
 
         # Determine failure based on output type
         if self._output_type == "Pass/Fail":

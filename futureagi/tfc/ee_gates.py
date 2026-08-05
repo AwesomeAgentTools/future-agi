@@ -7,7 +7,6 @@ through EE code paths)."""
 from __future__ import annotations
 
 from rest_framework.response import Response
-
 from tfc.utils.api_errors import build_error_envelope
 
 _TURING_MODELS = frozenset(
@@ -29,20 +28,37 @@ def is_turing_model(model_name: object) -> bool:
 
 
 def voice_sim_oss_gate_response() -> Response | None:
-    """Return a 402 response if the deployment is OSS (ee/ stripped or
-    `CLOUD_DEPLOYMENT`/`EE_LICENSE_KEY` unset), else None.
+    """Return a 402 response when the voice-sim code isn't available in this
+    build (OSS image with ee/ stripped), else None.
 
-    Voice simulation requires livekit/vapi integration and the `ee.voice`
-    module. Use at the top of any view that starts or re-runs a voice
-    call."""
+    Voice simulation requires the `ee.voice` module. This gate decides CODE
+    availability only — license/plan entitlement is the caller's second
+    layer (capability service / cloud plan resolver), and voice_sim is open
+    on self-hosted deployments regardless of license state, so deployment
+    mode alone must never deny here."""
     try:
-        from ee.usage.deployment import DeploymentMode
+        from tfc.capabilities import service as capability_service
+        from tfc.licensing.types import DenialReason
 
-        if not DeploymentMode.is_oss():
-            return None
-    except ImportError:
-        pass  # ee.usage absent → treat as OSS
+        if capability_service.is_configured():
+            decision = capability_service.check("voice_sim")
+            if decision.reason_code != DenialReason.EE_CODE_UNAVAILABLE.value:
+                # Allowed, or a license/plan concern → the caller's
+                # entitlement layer decides. Only missing code denies here.
+                return None
+            return _voice_sim_code_unavailable_response()
+    except Exception:
+        pass  # capability service unusable → fall through to code probe
 
+    # Early-startup fallback: probe the module directly.
+    from tfc.ee_loader import has_ee
+
+    if has_ee("ee.voice"):
+        return None
+    return _voice_sim_code_unavailable_response()
+
+
+def _voice_sim_code_unavailable_response() -> Response:
     message = (
         "Voice simulation is not available on OSS. "
         "Upgrade to cloud or enterprise to run voice calls."
@@ -112,9 +128,7 @@ def turing_oss_gate_for_template(
             from model_hub.models.evals_metric import EvalTemplate
 
             tpl = (
-                EvalTemplate.no_workspace_objects.filter(
-                    id=template_id, deleted=False
-                )
+                EvalTemplate.no_workspace_objects.filter(id=template_id, deleted=False)
                 .only("eval_type")
                 .first()
             )
