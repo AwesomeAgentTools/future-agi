@@ -404,7 +404,14 @@ def structural_prefilter(trace_data):
             spans_flat[i]["name"] == spans_flat[i - 1]["name"]
             and spans_flat[i]["depth"] == spans_flat[i - 1]["depth"]
         ):
-            signals["retry_spans"].append(s["id"])
+            # `s` here was the leftover loop variable from the error-span loop above,
+            # so every detected retry recorded the LAST span's id. The appends still
+            # happened, which is why the signal looked alive: on one real trace it
+            # fired 249 times. But `anomalous_ids` is a set, so 249 copies of one id
+            # collapse to a single entry and the other 248 retry spans are never
+            # flagged. Measured over 2,107 traces: 566 of the 844 traces carrying a
+            # retry (67%) had the signal collapse this way.
+            signals["retry_spans"].append(spans_flat[i]["id"])
 
     by_depth = {}
     for s in spans_flat:
@@ -1220,7 +1227,15 @@ def _v3_build(trace_data, prefilter_result, flatten_spans, build_flow_outline,
 
     # ---- span evidence -----------------------------------------------------
     weights, meta = [], []
-    flagged = set(prefilter_result.get("anomalous_span_ids") or []) | set(retry_ids)
+    # `retry_ids` is an explicit parameter, but the only production caller
+    # (scanner.py) passes just (trace, prefilter), so it defaulted to () and the
+    # correctly-computed set that `structural_prefilter_with_ids` stores under
+    # `_retry_ids` never reached the flagged tier. Falling back to the dict matches
+    # how `_retry_ids` is already read at the flow-outline site and fixes every
+    # caller rather than one call site.
+    flagged = set(prefilter_result.get("anomalous_span_ids") or []) | set(
+        retry_ids or prefilter_result.get("_retry_ids") or ()
+    )
     for span, depth in all_flat:
         sid = span.get("span_id")
         w = 3 if sid in flagged else 1
