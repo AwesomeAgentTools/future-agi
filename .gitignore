@@ -246,3 +246,7 @@ frontend/scripts/.artifacts/
 install-*.log
 uninstall-*.log
 *.core
+
+# ee/ private-repo meta files — not part of the public monorepo
+futureagi/ee/.gitignore
+futureagi/ee/LICENSE
