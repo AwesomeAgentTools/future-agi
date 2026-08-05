@@ -963,11 +963,36 @@ _ENVELOPE_HINTS = ("choices", "candidates", "generations", "usage", "object", "c
 
 
 def _v3_plain(text, max_len):
-    """Whitespace-normalised truncation. Grammar and negations preserved."""
+    """Truncation that preserves line structure. Grammar and negations preserved.
+
+    Collapsing every run of whitespace also collapses newlines, and line breaks
+    are the only evidence of output structure the model ever receives. That made
+    two things impossible: the taxonomy asks it to judge formatting, and V8 asks
+    it to quote verbatim — neither survives text whose line breaks were deleted
+    on the way in.
+
+    Measured on a 2,107-trace corpus: claims that fields had been "merged onto
+    one line", against outputs that were correctly formatted, were the single
+    largest class of false positive. The model was right about what it was
+    shown; it was shown the wrong thing.
+
+    Horizontal runs still collapse. The goal is faithful structure, not faithful
+    indentation.
+    """
     if not text:
         return ""
-    text = re.sub(r"\s+", " ", str(text)).strip()
-    return text if len(text) <= max_len else text[: max_len - 1] + "…"
+    text = re.sub(r"[^\S\n]+", " ", str(text))  # spaces/tabs, never newlines
+    text = re.sub(r" *\n *", "\n", text)  # no trailing space around breaks
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    if len(text) <= max_len:
+        return text
+    cut = text[: max_len - 1]
+    # Cut on a line boundary when one is near the limit, so the tail of a
+    # truncated block doesn't itself read as a run-together line.
+    nl = cut.rfind("\n")
+    if nl > max_len * 0.6:
+        cut = cut[:nl]
+    return cut + "…"
 
 
 def _v3_loads(v):
