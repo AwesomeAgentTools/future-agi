@@ -46525,6 +46525,8 @@ export const UsageWorkspaceUsageSummaryListResponse = zod.object({
 })
 
 
+
+
 export const v1EnterpriseHeartbeatsCreateBodyLicenseIdRegExp = new RegExp('^lic_[A-Za-z0-9_-]{1,60}$');
 export const v1EnterpriseHeartbeatsCreateBodyVersionDefault = ``;
 export const v1EnterpriseHeartbeatsCreateBodyVersionMax = 100;
@@ -46541,7 +46543,7 @@ export const v1EnterpriseHeartbeatsCreateBodyUsageDataDefault = {  };
 
 export const V1EnterpriseHeartbeatsCreateBody = zod.object({
   "instance_id": zod.string().uuid(),
-  "license_id": zod.string().regex(v1EnterpriseHeartbeatsCreateBodyLicenseIdRegExp).optional(),
+  "license_id": zod.string().min(1).regex(v1EnterpriseHeartbeatsCreateBodyLicenseIdRegExp),
   "version": zod.string().min(1).max(v1EnterpriseHeartbeatsCreateBodyVersionMax).default(v1EnterpriseHeartbeatsCreateBodyVersionDefault),
   "deployment_type": zod.string().min(1).max(v1EnterpriseHeartbeatsCreateBodyDeploymentTypeMax).default(v1EnterpriseHeartbeatsCreateBodyDeploymentTypeDefault),
   "timestamp": zod.string().datetime({"offset":true}),
