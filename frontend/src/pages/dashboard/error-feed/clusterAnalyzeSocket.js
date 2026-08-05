@@ -41,9 +41,28 @@ const handlers = new Map();
 // caller decides whether to re-open. Used when a send lands on a
 // dead-but-readyState-OPEN socket (half-open after a server drop) or when the
 // delivery watchdog fires.
+// Fail every run still waiting on the socket. A run is only registered while
+// it is in flight, so a completed run is never touched.
+function failAllRuns() {
+  for (const entry of [...handlers.values()]) {
+    try {
+      entry.fail();
+    } catch {
+      /* a failing failer must not block the others */
+    }
+  }
+}
+
 function closeConnection() {
   try {
-    if (socket) socket.close();
+    // Flag the instance, not a module variable: onclose fires asynchronously,
+    // so a synchronous flag would already have been reset by the time it runs.
+    // Without this, the watchdog's deliberate close-and-resend would trip the
+    // unexpected-close handler and kill the very run it is retrying.
+    if (socket) {
+      socket._deliberateClose = true;
+      socket.close();
+    }
   } catch {
     /* already closed */
   }
@@ -106,6 +125,12 @@ function ensureSocket(token, workspaceId) {
         socket = null;
         socketReady = null;
       }
+      // Nothing else links socket death to in-flight runs, and the delivery
+      // watchdog retires once the first frame has arrived — so a socket that
+      // dies mid-run left the thread STREAMING forever with Re-run disabled,
+      // the only escape being a reload. The backend survives the disconnect
+      // and finishes the run, but its frames go to a closed connection.
+      if (!ws._deliberateClose) failAllRuns();
     };
     ws.onmessage = (event) => {
       let parsed;
@@ -116,8 +141,14 @@ function ensureSocket(token, workspaceId) {
       }
       const convId = parsed?.data?.conversation_id;
       if (convId && handlers.has(convId)) {
-        handlers.get(convId)(parsed);
+        handlers.get(convId).handle(parsed);
+        return;
       }
+      // An error we cannot route is exactly the one we must not drop: the
+      // server sends some terminal errors (usage limit, conversation missing)
+      // without a conversation_id, and silently discarding them leaves the run
+      // spinning forever with no explanation. Fail the runs instead.
+      if (!convId && parsed?.type === "error") failAllRuns();
     };
   });
   return socketReady;
@@ -618,7 +649,7 @@ export async function startRun({ clusterId, projectId, token, workspaceId }) {
     }
   };
 
-  handlers.set(conversationId, handler);
+  // Registered below once failVisibly exists, so a dead socket can end this run.
 
   const sendChat = () =>
     send(
@@ -667,6 +698,8 @@ export async function startRun({ clusterId, projectId, token, workspaceId }) {
       ],
     }));
   };
+
+  handlers.set(conversationId, { handle: handler, fail: failVisibly });
 
   // Delivery watchdog. Only retry when the socket itself dies (readyState flips
   // to CLOSED/CLOSING) before the first frame — NOT on mere silence, because a
@@ -854,7 +887,28 @@ export async function runFollowUp({
     }
   };
 
-  handlers.set(conversationId, handler);
+  // Same contract as a run: if the socket dies, close the answer out instead of
+  // leaving the sub-agent card streaming forever.
+  const failFollowUp = () => {
+    handlers.delete(conversationId);
+    patchThread(clusterId, (t) => ({
+      ...t,
+      followUpRunState: RUN_STATE.DONE,
+      messages: t.messages.map((m) =>
+        m.id === subagentMsgId
+          ? {
+              ...m,
+              status: STREAM_STATUS.DONE,
+              answer:
+                answer ||
+                "The connection dropped before the answer arrived. Ask again.",
+            }
+          : m,
+      ),
+    }));
+  };
+
+  handlers.set(conversationId, { handle: handler, fail: failFollowUp });
 
   try {
     await send(
