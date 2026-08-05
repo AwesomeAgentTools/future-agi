@@ -25,8 +25,8 @@ def _seed_after_migrate(sender, **kwargs):
                 created=result["created"],
                 updated=result["updated"],
             )
-    except Exception as exc:
-        logger.warning("node_template_seed_failed", error=str(exc))
+    except Exception:
+        logger.exception("node_template_seed_failed")
 
 
 class AgentPlaygroundConfig(AppConfig):
@@ -34,4 +34,8 @@ class AgentPlaygroundConfig(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
 
     def ready(self):
-        post_migrate.connect(_seed_after_migrate, sender=self)
+        post_migrate.connect(
+            _seed_after_migrate,
+            sender=self,
+            dispatch_uid="agent_playground_seed_node_templates",
+        )

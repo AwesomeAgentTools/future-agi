@@ -14,6 +14,8 @@ from model_hub.management.commands.backfill_eval_usage_version import (
     backfill_usage_logs,
 )
 
+pytestmark = pytest.mark.requires_ee
+
 
 @pytest.mark.django_db
 class TestBackfillUsageLogsCommand:
