@@ -79,7 +79,10 @@ test-results/
 **/.codex-tmp/
 .playwright-mcp/
 **/.playwright-mcp/
-ee
+# ee/ ships in the image since the ee->futureagi code move (TH-7256): the
+# license (EE_LICENSE_KEY), not code stripping, gates paid features now.
+# Private cloud bits (ee/cloud, billing.yaml, Dockerfile.cloud) stay out of
+# the repo via .gitignore and never reach any build context.
 ee.local-leftover/
 
 # Documentation (not needed in image)

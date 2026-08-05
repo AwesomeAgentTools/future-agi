@@ -49,7 +49,7 @@ services:
       - ".:/app/backend"
       # Optional local EE source mount. Keep the distributable compose portable;
       # use EE_SOURCE_PATH only for local development.
-      - "${EE_SOURCE_PATH:-./ee.local-leftover}:/app/backend/ee"
+      - "${EE_SOURCE_PATH:-./ee}:/app/backend/ee"
     env_file:
       - .env
     environment:
@@ -516,6 +516,10 @@ services:
     working_dir: /app/backend
     volumes:
       - ".:/app/backend"
+      # Same EE mask as the backend service: workers must not see in-repo ee/
+      # in OSS mode, or per-call-site ee imports succeed against a DB that has
+      # no ee tables (e.g. check_usage → usage_organizationsubscription).
+      - "${EE_SOURCE_PATH:-./ee}:/app/backend/ee"
     env_file:
       - .env
     environment:
@@ -542,6 +546,10 @@ services:
     working_dir: /app/backend
     volumes:
       - ".:/app/backend"
+      # Same EE mask as the backend service: workers must not see in-repo ee/
+      # in OSS mode, or per-call-site ee imports succeed against a DB that has
+      # no ee tables (e.g. check_usage → usage_organizationsubscription).
+      - "${EE_SOURCE_PATH:-./ee}:/app/backend/ee"
     env_file:
       - .env
     environment:
@@ -568,6 +576,10 @@ services:
     working_dir: /app/backend
     volumes:
       - ".:/app/backend"
+      # Same EE mask as the backend service: workers must not see in-repo ee/
+      # in OSS mode, or per-call-site ee imports succeed against a DB that has
+      # no ee tables (e.g. check_usage → usage_organizationsubscription).
+      - "${EE_SOURCE_PATH:-./ee}:/app/backend/ee"
     env_file:
       - .env
     environment:
@@ -594,6 +606,10 @@ services:
     working_dir: /app/backend
     volumes:
       - ".:/app/backend"
+      # Same EE mask as the backend service: workers must not see in-repo ee/
+      # in OSS mode, or per-call-site ee imports succeed against a DB that has
+      # no ee tables (e.g. check_usage → usage_organizationsubscription).
+      - "${EE_SOURCE_PATH:-./ee}:/app/backend/ee"
     env_file:
       - .env
     environment:
@@ -620,6 +636,10 @@ services:
     working_dir: /app/backend
     volumes:
       - ".:/app/backend"
+      # Same EE mask as the backend service: workers must not see in-repo ee/
+      # in OSS mode, or per-call-site ee imports succeed against a DB that has
+      # no ee tables (e.g. check_usage → usage_organizationsubscription).
+      - "${EE_SOURCE_PATH:-./ee}:/app/backend/ee"
     env_file:
       - .env
     environment:
@@ -646,6 +666,10 @@ services:
     working_dir: /app/backend
     volumes:
       - ".:/app/backend"
+      # Same EE mask as the backend service: workers must not see in-repo ee/
+      # in OSS mode, or per-call-site ee imports succeed against a DB that has
+      # no ee tables (e.g. check_usage → usage_organizationsubscription).
+      - "${EE_SOURCE_PATH:-./ee}:/app/backend/ee"
     env_file:
       - .env
     environment:
