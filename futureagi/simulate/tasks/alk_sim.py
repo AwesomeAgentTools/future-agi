@@ -4,12 +4,11 @@ Computes CSAT for a completed voice call and writes ``overall_score`` +
 ``conversation_metrics_data['csat_score']`` so the frontend detail drawer
 and KPI aggregate both light up.
 
-Uses the same DeterministicEvaluator path that
-``simulate.utils.chat_simulation._calculate_csat_score`` uses for chat, so the
-implementation and scoring criteria stay identical across text and voice.
-Audio-native scoring (turing_large on the recording URL) is used when the SDK
-already supplied a public recording URL, matching the native voice path in
-``ee.voice.temporal.activities.voice_xl.calculate_voice_csat_score``.
+Uses ``AgentEvaluator`` (turing_large, agent mode) for both scoring paths —
+the same evaluator ``ee.voice.temporal.activities.voice_xl.calculate_voice_csat_score``
+uses for native voice. The recording URL is scored audio-natively when the SDK
+supplied one; otherwise the stored transcript text is scored. Both feed the
+identical CSAT rule prompt, so scores are consistent across paths.
 """
 
 from __future__ import annotations
@@ -22,6 +21,11 @@ from simulate.models import CallExecution
 from tfc.temporal.drop_in import temporal_activity
 
 logger = structlog.get_logger(__name__)
+
+_CSAT_RULE_PROMPT = (
+    CSAT_SCORE_PROMPT["criteria"] + "\n\n## Inputs\n\n<output>{{output}}</output>"
+)
+_CSAT_CHOICES = list(CSAT_SCORE_PROMPT["choices"])
 
 
 @temporal_activity(
@@ -69,62 +73,50 @@ def _score_from_recording(call: CallExecution) -> float | None:
     """
     if not call.recording_url:
         return None
-    try:
-        from ee.evals.llm.agent_evaluator.evaluator import AgentEvaluator
-
-        evaluator = AgentEvaluator(
-            rule_prompt=(
-                CSAT_SCORE_PROMPT["criteria"]
-                + "\n\n## Inputs\n\n<output>{{output}}</output>"
-            ),
-            model="turing_large",
-            output_type="choices",
-            choices=list(CSAT_SCORE_PROMPT["choices"]),
-            agent_mode="agent",
-        )
-        batch_result = evaluator.run(
-            output=call.recording_url,
-            required_keys=["output"],
-        )
-        return float(batch_result.eval_results[0]["data"]["result"])
-    except Exception:
-        logger.exception("alk_csat_recording_failed", call_execution_id=str(call.id))
-        return None
+    score = _run_agent_csat(call.recording_url)
+    if score is None:
+        logger.warning("alk_csat_recording_failed", call_execution_id=str(call.id))
+    return score
 
 
 def _score_from_transcript(call: CallExecution) -> float | None:
-    """Priority-2 CSAT — DeterministicEvaluator on the stored transcript.
+    """Priority-2 CSAT — AgentEvaluator on the stored transcript text.
 
-    Same code path chat CSAT uses (``chat_simulation._calculate_csat_score``);
-    keeps the scoring criteria unified across chat and voice.
+    Same evaluator + rule prompt as the recording path (and native voice), so
+    scores stay consistent whether or not a recording was available.
     """
     transcript_text = _build_transcript_text(call)
     if not transcript_text:
         return None
-    try:
-        from ee.evals.futureagi.eval_deterministic.evaluator import (
-            DeterministicEvaluator,
-        )
+    score = _run_agent_csat(transcript_text)
+    if score is None:
+        logger.warning("alk_csat_transcript_failed", call_execution_id=str(call.id))
+    return score
 
-        evaluator = DeterministicEvaluator(
-            multi_choice=CSAT_SCORE_PROMPT["multi_choice"],
-            choices=list(CSAT_SCORE_PROMPT["choices"]),
-            rule_prompt=CSAT_SCORE_PROMPT["criteria"],
-            input=[transcript_text],
-            input_type=["text"],
+
+def _run_agent_csat(output: str) -> float | None:
+    """Run the CSAT AgentEvaluator against a recording URL or transcript text.
+
+    Mirrors ee.voice.temporal.activities.voice_xl.calculate_voice_csat_score:
+    turing_large in agent mode, choices 1–10. A URL is auto-detected as audio;
+    plain text is scored as text.
+    """
+    try:
+        from ee.evals.llm.agent_evaluator.evaluator import AgentEvaluator
+
+        evaluator = AgentEvaluator(
+            rule_prompt=_CSAT_RULE_PROMPT,
+            model="turing_large",
+            output_type="choices",
+            choices=_CSAT_CHOICES,
+            agent_mode="agent",
         )
-        result = evaluator._evaluate()
-        data = result.get("data") or []
-        if not data:
-            return None
-        return float(data[0])
-    except (ValueError, TypeError, IndexError):
-        logger.warning(
-            "alk_csat_transcript_parse_failed", call_execution_id=str(call.id)
-        )
+        batch_result = evaluator.run(output=output, required_keys=["output"])
+        return float(batch_result.eval_results[0]["data"]["result"])
+    except (ValueError, TypeError, IndexError, KeyError):
         return None
     except Exception:
-        logger.exception("alk_csat_transcript_failed", call_execution_id=str(call.id))
+        logger.exception("alk_csat_agent_evaluator_failed")
         return None
 
 
