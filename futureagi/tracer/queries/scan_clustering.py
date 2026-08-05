@@ -593,29 +593,38 @@ def assign_to_cluster(
     """Assign an issue to an existing cluster and update centroid incrementally."""
     cluster = TraceErrorGroup.objects.get(cluster_id=cluster_id, project_id=project_id)
 
-    # Update cluster counts + bump last_seen so the Feed sorts/timelines
-    # stay fresh as new traces roll in.
-    cluster.error_count = (cluster.error_count or 0) + 1
-    cluster.total_events = (cluster.total_events or 0) + 1
-    cluster.last_seen = timezone.now()
-    cluster.save(
-        update_fields=["error_count", "total_events", "last_seen", "updated_at"]
-    )
-
-    # Link issue → cluster
+    # Link issue → cluster. Both membership writes are idempotent: re-running the
+    # scan over a trace updates the issue row it already owns, and matches the
+    # junction row it already has.
     TraceScanIssue.objects.filter(id=issue.issue_id).update(cluster=cluster)
-
-    # Create junction entry (ignore if trace already linked)
     ErrorClusterTraces.objects.get_or_create(
         cluster=cluster,
         trace_id=issue.trace_id,
         defaults={"scan_issue_id": issue.issue_id},
     )
 
-    # Refresh unique traces count
+    # Both membership counts are DERIVED from the rows above, never incremented.
+    # An increment is not idempotent while the writes it counts are, so a re-scan
+    # inflated the "occurrences" the Feed renders without adding any member —
+    # measured at up to 11x on a fifth of live entries, beside a trace count that
+    # stayed correct precisely because it was already recomputed here.
+    cluster.error_count = TraceScanIssue.objects.filter(
+        cluster=cluster, deleted=False
+    ).count()
     unique = cluster.clusters.values("trace").distinct().count()
     cluster.unique_traces = unique
-    cluster.save(update_fields=["unique_traces", "updated_at"])
+    # total_events is a lifetime counter and is not rendered in the feed row.
+    cluster.total_events = (cluster.total_events or 0) + 1
+    cluster.last_seen = timezone.now()
+    cluster.save(
+        update_fields=[
+            "error_count",
+            "total_events",
+            "unique_traces",
+            "last_seen",
+            "updated_at",
+        ]
+    )
 
     # Incrementally update centroid in ClickHouse
     db = ClickHouseVectorDB()
@@ -1000,6 +1009,11 @@ def _merge_pg(keep_id: str, absorb_id: str, project_id: str):
             row.cluster = keep
             row.save(update_fields=["cluster"])
 
+    # Summing is correct here BECAUSE assign_to_cluster now derives the counts it
+    # sums: every issue above is re-pointed to keep, so the combined membership is
+    # exactly the sum. Recomputing instead would also be right, but it would erase
+    # the count of any cluster whose issue rows have since been purged by
+    # retention, and the junction dedup below removes rows the count should keep.
     keep.error_count = (keep.error_count or 0) + (absorb.error_count or 0)
     keep.total_events = (keep.total_events or 0) + (absorb.total_events or 0)
     if absorb.first_seen and (not keep.first_seen or absorb.first_seen < keep.first_seen):
