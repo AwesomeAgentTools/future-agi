@@ -32,6 +32,7 @@ from model_hub.serializers.dataset_optimization import (
     DatasetOptimizationSerializer,
     DatasetOptimizationTrialSerializer,
 )
+from model_hub.utils.llm_providers import is_model_in_catalog
 from model_hub.utils.dataset_optimization import (
     OPTIMIZATION_RUN_TABLE_CONFIG,
     TRIAL_TABLE_BASE_COLUMNS,
@@ -197,6 +198,13 @@ class DatasetOptimizationViewSet(BaseModelViewSetMixin, ModelViewSet):
     @transaction.atomic
     def create(self, request, *args, **kwargs):
         try:
+            model_name = (request.data.get("optimizer_config") or {}).get("model_name")
+            if model_name and not is_model_in_catalog(model_name):
+                return self._gm.bad_request(
+                    f"Model '{model_name}' is no longer available. "
+                    "Please select a supported model to run optimization."
+                )
+
             serializer = self.get_serializer(data=request.data)
             if not serializer.is_valid():
                 return self._gm.bad_request(format_validation_error(serializer.errors))

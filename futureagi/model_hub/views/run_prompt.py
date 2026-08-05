@@ -33,6 +33,7 @@ from agentic_eval.core_evals.run_prompt.other_services.manager import (
     get_model_parameters,
 )
 from model_hub.models.api_key import ApiKey
+from model_hub.utils.llm_providers import is_model_in_catalog
 from model_hub.models.choices import (
     CellStatus,
     LiteLlmModelProvider,
@@ -1049,8 +1050,14 @@ class LitellmAPIView(CreateAPIView):
         from django.db import transaction
 
         validated_data = request.validated_data
-        # `validated_request` owns request-shape validation; from here the view
-        # handles only domain execution errors.
+
+        model_name = validated_data.get("model")
+        if model_name and not is_model_in_catalog(model_name):
+            return self._gm.bad_request(
+                f"Model '{model_name}' is no longer available. "
+                "Please update the column to use a supported model before running."
+            )
+
         organization = _request_organization(request)
         dataset = (
             _request_dataset_queryset(request)

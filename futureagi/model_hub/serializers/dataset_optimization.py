@@ -22,7 +22,7 @@ from model_hub.utils.dataset_optimization import (
     build_parameters_array,
     build_trial_table_data,
 )
-from model_hub.utils.llm_providers import get_provider_logo_url
+from model_hub.utils.llm_providers import get_provider_logo_url, is_model_in_catalog
 
 COMMON_OPTIONAL_CONFIG_KEYS = {"task_description"}
 
@@ -312,9 +312,9 @@ class DatasetOptimizationListSerializer(serializers.ModelSerializer):
     optimization_name = serializers.CharField(source="name")
     started_at = serializers.DateTimeField(source="created_at")
     trial_count = serializers.SerializerMethodField()
-    # Include model name and column_id for rerun functionality
     optimizer_model_id = serializers.SerializerMethodField()
     column_id = serializers.UUIDField(source="column.id", read_only=True)
+    model_deprecated = serializers.SerializerMethodField()
 
     class Meta:
         model = OptimizeDataset
@@ -325,6 +325,7 @@ class DatasetOptimizationListSerializer(serializers.ModelSerializer):
             "trial_count",
             "optimizer_algorithm",
             "optimizer_model_id",
+            "model_deprecated",
             "column_id",
             "status",
             "error_message",
@@ -339,15 +340,21 @@ class DatasetOptimizationListSerializer(serializers.ModelSerializer):
             return obj.trial_count
         return obj.trials.count()
 
-    def get_optimizer_model_id(self, obj):
-        # Return the model name which is what the frontend expects.
-        # Mirror DatasetOptimizationDetailSerializer._model_name so unmatched
-        # names stored in optimizer_config["model_name"] surface on the list.
+    def _model_name(self, obj):
         if obj.optimizer_model:
             return obj.optimizer_model.user_model_id
         if obj.optimizer_config and obj.optimizer_config.get("model_name"):
             return obj.optimizer_config.get("model_name")
         return None
+
+    def get_optimizer_model_id(self, obj):
+        return self._model_name(obj)
+
+    def get_model_deprecated(self, obj):
+        model_name = self._model_name(obj)
+        if not model_name:
+            return False
+        return not is_model_in_catalog(model_name)
 
 
 class DatasetOptimizationStepSerializer(serializers.ModelSerializer):
@@ -464,6 +471,7 @@ class DatasetOptimizationDetailSerializer(serializers.ModelSerializer):
     user_eval_templates = serializers.SerializerMethodField()
     table = serializers.SerializerMethodField()
     column_config = serializers.SerializerMethodField()
+    model_deprecated = serializers.SerializerMethodField()
 
     class Meta:
         model = OptimizeDataset
@@ -471,6 +479,7 @@ class DatasetOptimizationDetailSerializer(serializers.ModelSerializer):
             "optimiser_name",
             "optimiser_type",
             "model",
+            "model_deprecated",
             "provider_logo",
             "configuration",
             "status",
@@ -522,6 +531,12 @@ class DatasetOptimizationDetailSerializer(serializers.ModelSerializer):
         workspace = dataset.workspace if dataset else None
         workspace_id = workspace.id if workspace else None
         return get_provider_logo_url(model_name, organization_id, workspace_id)
+
+    def get_model_deprecated(self, obj):
+        model_name = self._model_name(obj)
+        if not model_name:
+            return False
+        return not is_model_in_catalog(model_name)
 
     @swagger_serializer_method(
         serializer_or_field=DatasetOptimizationParameterItemSerializer(many=True)
