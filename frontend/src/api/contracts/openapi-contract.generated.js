@@ -5,7 +5,7 @@
 export const OPENAPI_CONTRACT = Object.freeze({
   "generatedFrom": "api_contracts/openapi/swagger.json",
   "swaggerVersion": "2.0",
-  "endpointCount": 976,
+  "endpointCount": 977,
   "endpoints": {
     "/accounts/2fa/recovery-codes/": {
       "get": {
@@ -401,6 +401,20 @@ export const OPENAPI_CONTRACT = Object.freeze({
           "500": {
             "$ref": "#/definitions/AccountsErrorResponse"
           },
+          "default": {
+            "$ref": "#/definitions/ManagementAPIErrorResponse"
+          }
+        }
+      }
+    },
+    "/accounts/activate/{uidb64}/{token}/": {
+      "get": {
+        "operationId": "accounts_activate_read",
+        "runtimeRequestValidation": false,
+        "runtimeResponseValidation": false,
+        "requestBody": null,
+        "queryParameters": {},
+        "responses": {
           "default": {
             "$ref": "#/definitions/ManagementAPIErrorResponse"
           }
@@ -41079,7 +41093,7 @@ export const OPENAPI_CONTRACT = Object.freeze({
         "queryParameters": {},
         "responses": {
           "200": {
-            "$ref": "#/definitions/StripeWebhookLegacyResponse"
+            "$ref": "#/definitions/StripeWebhookResponse"
           },
           "400": {
             "$ref": "#/definitions/UsageErrorResponse"
@@ -57726,6 +57740,7 @@ export const OPENAPI_CONTRACT = Object.freeze({
     "Heartbeat": {
       "required": [
         "instance_id",
+        "license_id",
         "timestamp",
         "nonce",
         "sequence"
@@ -57740,7 +57755,8 @@ export const OPENAPI_CONTRACT = Object.freeze({
         "license_id": {
           "title": "License id",
           "type": "string",
-          "pattern": "^lic_[A-Za-z0-9_-]{1,60}$"
+          "pattern": "^lic_[A-Za-z0-9_-]{1,60}$",
+          "minLength": 1
         },
         "version": {
           "title": "Version",
@@ -70142,21 +70158,6 @@ export const OPENAPI_CONTRACT = Object.freeze({
         }
       }
     },
-    "StripeWebhookLegacyResponse": {
-      "required": [
-        "status"
-      ],
-      "type": "object",
-      "properties": {
-        "status": {
-          "title": "Status",
-          "type": "boolean"
-        },
-        "result": {
-          "$ref": "#/definitions/StripeWebhookResult"
-        }
-      }
-    },
     "StripeWebhookRequest": {
       "type": "object",
       "properties": {
@@ -72996,6 +72997,7 @@ export const OPENAPI_CONTRACT = Object.freeze({
           "enum": [
             "active",
             "past_due",
+            "unpaid",
             "canceled",
             "inactive"
           ]
@@ -85891,6 +85893,7 @@ export const OPENAPI_CONTRACT = Object.freeze({
           "enum": [
             "active",
             "past_due",
+            "unpaid",
             "canceled",
             "inactive"
           ]

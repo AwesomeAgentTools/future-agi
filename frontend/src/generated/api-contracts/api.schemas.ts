@@ -22327,6 +22327,7 @@ export type UsageOrganizationSubscriptionApiStatus = typeof UsageOrganizationSub
 export const UsageOrganizationSubscriptionApiStatus = {
   active: 'active',
   past_due: 'past_due',
+  unpaid: 'unpaid',
   canceled: 'canceled',
   inactive: 'inactive',
 } as const;
@@ -22403,6 +22404,7 @@ export type UsageOrganizationSubscriptionCreateApiStatus = typeof UsageOrganizat
 export const UsageOrganizationSubscriptionCreateApiStatus = {
   active: 'active',
   past_due: 'past_due',
+  unpaid: 'unpaid',
   canceled: 'canceled',
   inactive: 'inactive',
 } as const;
@@ -23221,17 +23223,15 @@ export interface UsageWorkspaceBreakdownResponseApi {
   result: UsageWorkspaceBreakdownResultApi;
 }
 
-export interface StripeWebhookLegacyResponseApi {
-  status: boolean;
-  result?: StripeWebhookResultApi;
-}
-
 export type HeartbeatApiUsageData = {[key: string]: string};
 
 export interface HeartbeatApi {
   instance_id: string;
-  /** @pattern ^lic_[A-Za-z0-9_-]{1,60}$ */
-  license_id?: string;
+  /**
+     * @minLength 1
+     * @pattern ^lic_[A-Za-z0-9_-]{1,60}$
+     */
+  license_id: string;
   /**
      * @minLength 1
      * @maxLength 100
