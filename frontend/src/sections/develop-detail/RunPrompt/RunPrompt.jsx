@@ -638,10 +638,12 @@ export const RunPromptForm = React.forwardRef(
           onClose();
           reset();
         },
+        meta: { errorHandled: true },
         onError: (error) => {
           const message =
             error?.response?.data?.detail ||
             error?.response?.data?.message ||
+            error?.result ||
             "Failed to update Run Prompt";
           enqueueSnackbar(message, {
             variant: "error",
