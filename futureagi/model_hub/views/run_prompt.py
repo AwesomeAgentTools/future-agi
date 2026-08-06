@@ -1733,6 +1733,13 @@ class AddRunPromptColumnView(APIView):
             ).exists():
                 return self._gm.bad_request(get_error_message("COLUMN_NAME_EXISTS"))
 
+            model_name = config.get("model")
+            if model_name and not is_model_in_catalog(model_name):
+                return self._gm.bad_request(
+                    f"Model '{model_name}' is no longer available. "
+                    "Please select a supported model."
+                )
+
             output_format = config.get("output_format")
             messages = config.get("messages", [])
             if output_format != "audio":
@@ -2002,6 +2009,13 @@ class EditRunPromptColumnView(APIView):
             )
             if not column:
                 return self._gm.not_found("Column or dataset not found")
+
+            model_name = config.get("model")
+            if model_name and not is_model_in_catalog(model_name):
+                return self._gm.bad_request(
+                    f"Model '{model_name}' is no longer available. "
+                    "Please select a supported model."
+                )
 
             # Verify column is a run prompt column
             if column.source != SourceChoices.RUN_PROMPT.value:
@@ -2763,7 +2777,13 @@ class RunPromptForRowsView(APIView):
                 if set(map(str, scoped_rows)) != requested_row_ids:
                     return self._gm.not_found("Row not found")
 
-            # Run all evaluations in a single async task
+            for rp in run_prompters:
+                if rp.model and not is_model_in_catalog(rp.model):
+                    return self._gm.bad_request(
+                        f"Model '{rp.model}' is no longer available. "
+                        "Please update the column to use a supported model before running."
+                    )
+
             run_prompt = None
             if selected_all_rows:
                 run_prompt = RunPrompter.objects.get(id=run_prompt_ids[0])
