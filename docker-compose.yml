@@ -135,7 +135,7 @@ x-backend-env: &backend-env
   # Future AGI Cloud API (optional)
   FUTURE_AGI_CLOUD_API_KEY: ${FUTURE_AGI_CLOUD_API_KEY:-}
   FUTURE_AGI_CLOUD_API_URL: ${FUTURE_AGI_CLOUD_API_URL:-https://api.futureagi.com}
-
+  TEMPORAL_TEST_EXECUTION_ENABLED: ${TEMPORAL_TEST_EXECUTION_ENABLED:-true}
 services:
   # ==========================================================================
   # Application
