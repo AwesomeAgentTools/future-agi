@@ -62,6 +62,13 @@ def _generate_monthly_invoices_sync(
     except ImportError:
         InvoiceGenerationService = None
 
+    if InvoiceGenerationService is None:
+        # billing lives in the private cloud overlay (ee/cloud/); it is
+        # absent from OSS and self-hosted EE images. Skip cleanly instead
+        # of calling None.run_for_period(...) and crash-looping Temporal.
+        activity.logger.info("invoice_generation_skipped_billing_is_cloud_only")
+        return 0, 0, 0
+
     close_old_connections()
     try:
         # Default to previous month if not specified

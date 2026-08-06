@@ -726,6 +726,22 @@ export const dashboardRoutes = (
     );
   }
 
+  // License management is available on self-hosted (EE) deployments too. The
+  // nav shows Settings → License for org admins off-cloud, so the route must
+  // register there or it 404s. (billing/pricing above stay cloud-only.)
+  const hasLicenseAccess =
+    !isCloud && (isOwner || billingAllowedRoles.includes(effectiveWsRole));
+  if (hasLicenseAccess) {
+    settingsRoute.push({
+      path: "ee-licenses",
+      element: (
+        <RoleProtection allowedRoles={billingAllowedRoles}>
+          <LicensePage />
+        </RoleProtection>
+      ),
+    });
+  }
+
   if (user === null || user?.ws_enabled) {
     settingsRoute.push({
       path: "workspace",

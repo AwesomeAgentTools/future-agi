@@ -50,6 +50,13 @@ def evaluate_budgets_catchup_activity():
         evaluate_budgets_catchup = None
         evaluate_total_spend_budget = None
 
+    if evaluate_budgets_catchup is None or evaluate_total_spend_budget is None:
+        # Budget enforcement lives in the private cloud overlay (ee/cloud/),
+        # absent from OSS/self-hosted images. Skip instead of calling None per
+        # org every 15 min and spamming the failure log.
+        logger.info("budget_catchup_skipped_billing_is_cloud_only")
+        return
+
     period = datetime.now(tz=timezone.utc).strftime("%Y-%m")
 
     active_budgets = (

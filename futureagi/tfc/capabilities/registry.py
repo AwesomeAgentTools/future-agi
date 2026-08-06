@@ -27,12 +27,12 @@ class FeatureDefinition:
     display_name: str
     oss_baseline: bool
     requires_license: bool
+    execution_location: ExecutionLocation
     # Two-tier gating: requires_license=True features are cloud-plan products
     # by default and run FREE on self-hosted deployments (OSS or EE, any
     # license state). Setting oss_locked=True additionally requires a valid
     # license off-cloud — reserved for managed compute and the error feed.
     oss_locked: bool = False
-    execution_location: ExecutionLocation = ExecutionLocation.LOCAL
     required_service: str | None = None
     metering_dimension: str | None = None
     air_gap_behavior: AirGapBehavior = AirGapBehavior.AVAILABLE

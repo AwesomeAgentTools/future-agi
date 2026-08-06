@@ -209,9 +209,10 @@ def process_single_evaluation(user_eval_metric):
 
                 _agent_denied = not has_ee("ee.evals")
         except Exception:
-            from tfc.ee_loader import has_ee
-
-            _agent_denied = not has_ee("ee.evals")
+            # Permission checks fail closed. Do not fall back to has_ee()
+            # (True on every build shipping ee/) — deny and log the trace.
+            logger.exception("agentic_eval_capability_check_failed")
+            _agent_denied = True
 
         if _agent_denied:
             user_eval_metric.status = StatusType.FAILED.value

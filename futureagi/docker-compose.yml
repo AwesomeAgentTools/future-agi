@@ -517,9 +517,9 @@ services:
     working_dir: /app/backend
     volumes:
       - ".:/app/backend"
-      # Same EE mask as the backend service: workers must not see in-repo ee/
-      # in OSS mode, or per-call-site ee imports succeed against a DB that has
-      # no ee tables (e.g. check_usage → usage_organizationsubscription).
+      # EE source mount: defaults to the in-repo ee/ for local dev. Point
+      # EE_SOURCE_PATH at a stub/empty dir to simulate an OSS image (no ee/),
+      # exercising the ee-absent code paths against a DB with no ee tables.
       - "${EE_SOURCE_PATH:-./ee}:/app/backend/ee"
     env_file:
       - .env
@@ -547,9 +547,9 @@ services:
     working_dir: /app/backend
     volumes:
       - ".:/app/backend"
-      # Same EE mask as the backend service: workers must not see in-repo ee/
-      # in OSS mode, or per-call-site ee imports succeed against a DB that has
-      # no ee tables (e.g. check_usage → usage_organizationsubscription).
+      # EE source mount: defaults to the in-repo ee/ for local dev. Point
+      # EE_SOURCE_PATH at a stub/empty dir to simulate an OSS image (no ee/),
+      # exercising the ee-absent code paths against a DB with no ee tables.
       - "${EE_SOURCE_PATH:-./ee}:/app/backend/ee"
     env_file:
       - .env
@@ -577,9 +577,9 @@ services:
     working_dir: /app/backend
     volumes:
       - ".:/app/backend"
-      # Same EE mask as the backend service: workers must not see in-repo ee/
-      # in OSS mode, or per-call-site ee imports succeed against a DB that has
-      # no ee tables (e.g. check_usage → usage_organizationsubscription).
+      # EE source mount: defaults to the in-repo ee/ for local dev. Point
+      # EE_SOURCE_PATH at a stub/empty dir to simulate an OSS image (no ee/),
+      # exercising the ee-absent code paths against a DB with no ee tables.
       - "${EE_SOURCE_PATH:-./ee}:/app/backend/ee"
     env_file:
       - .env
@@ -607,9 +607,9 @@ services:
     working_dir: /app/backend
     volumes:
       - ".:/app/backend"
-      # Same EE mask as the backend service: workers must not see in-repo ee/
-      # in OSS mode, or per-call-site ee imports succeed against a DB that has
-      # no ee tables (e.g. check_usage → usage_organizationsubscription).
+      # EE source mount: defaults to the in-repo ee/ for local dev. Point
+      # EE_SOURCE_PATH at a stub/empty dir to simulate an OSS image (no ee/),
+      # exercising the ee-absent code paths against a DB with no ee tables.
       - "${EE_SOURCE_PATH:-./ee}:/app/backend/ee"
     env_file:
       - .env
@@ -637,9 +637,9 @@ services:
     working_dir: /app/backend
     volumes:
       - ".:/app/backend"
-      # Same EE mask as the backend service: workers must not see in-repo ee/
-      # in OSS mode, or per-call-site ee imports succeed against a DB that has
-      # no ee tables (e.g. check_usage → usage_organizationsubscription).
+      # EE source mount: defaults to the in-repo ee/ for local dev. Point
+      # EE_SOURCE_PATH at a stub/empty dir to simulate an OSS image (no ee/),
+      # exercising the ee-absent code paths against a DB with no ee tables.
       - "${EE_SOURCE_PATH:-./ee}:/app/backend/ee"
     env_file:
       - .env
@@ -667,9 +667,9 @@ services:
     working_dir: /app/backend
     volumes:
       - ".:/app/backend"
-      # Same EE mask as the backend service: workers must not see in-repo ee/
-      # in OSS mode, or per-call-site ee imports succeed against a DB that has
-      # no ee tables (e.g. check_usage → usage_organizationsubscription).
+      # EE source mount: defaults to the in-repo ee/ for local dev. Point
+      # EE_SOURCE_PATH at a stub/empty dir to simulate an OSS image (no ee/),
+      # exercising the ee-absent code paths against a DB with no ee tables.
       - "${EE_SOURCE_PATH:-./ee}:/app/backend/ee"
     env_file:
       - .env

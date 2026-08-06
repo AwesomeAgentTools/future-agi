@@ -40,7 +40,7 @@ def _make_active_snapshot(features: frozenset[str] | None = None) -> LicenseSnap
         issued_to="Test Corp",
         band="business",
         features=features
-        or frozenset({"falcon_ai", "agentic_eval", "falcon_ai", "turing_models"}),
+        or frozenset({"falcon_ai", "agentic_eval", "turing_models"}),
         limits={"traces_monthly": 1_000_000, "gateway_requests_monthly": 500_000},
         max_instances=3,
         issued_at=now - timedelta(days=180),
@@ -169,7 +169,7 @@ class TestTrialActive:
             license_type=LicenseType.TRIAL,
             license_id="lic_trial_001",
             band="business",
-            features=frozenset({"falcon_ai", "agentic_eval", "falcon_ai"}),
+            features=frozenset({"falcon_ai", "agentic_eval"}),
             expires_at=now + timedelta(days=14),
             validated_at=now,
         )

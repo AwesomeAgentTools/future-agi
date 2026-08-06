@@ -83,9 +83,11 @@ def run_eval_func(
 
                     denied = not has_ee("ee.evals")
             except Exception:
-                from tfc.ee_loader import has_ee
-
-                denied = not has_ee("ee.evals")
+                # A permission check must fail closed. Do not fall back to
+                # has_ee() (True on every build shipping ee/) — that would
+                # silently allow. Deny and log with the stack trace.
+                logger.exception("agentic_eval_capability_check_failed")
+                denied = True
             if denied:
                 raise ValueError(
                     "Agent evaluations are not available on OSS. "

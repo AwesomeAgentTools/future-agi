@@ -236,15 +236,9 @@ def _voice_sim_gate_response(user_organization, gm):
     from ee.usage.deployment import DeploymentMode
 
     if not DeploymentMode.is_cloud():
-        # Self-hosted EE: the license decides via the capability service —
-        # plan entitlements (billing.yaml) don't ship off-cloud and would
-        # wrongly deny licensed installs.
-        from tfc.ee_gating import EEFeature, FeatureUnavailable, check_ee_feature
-
-        try:
-            check_ee_feature(EEFeature.VOICE_SIM, org_id=str(user_organization.id))
-        except FeatureUnavailable as exc:
-            return gm.forbidden_response(str(exc.detail))
+        # Voice sim is open on self-hosted (voice_sim is not in the
+        # oss_locked set), and plan entitlements are a cloud-only concept.
+        # Nothing to gate off-cloud.
         return None
 
     feat_check = Entitlements.check_feature(str(user_organization.id), "has_voice_sim")

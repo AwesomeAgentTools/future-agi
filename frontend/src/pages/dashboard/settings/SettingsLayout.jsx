@@ -96,16 +96,23 @@ const SettingsLayout = React.memo(() => {
             //   title: "AI providers",
             //   icon: ICONS.Providers,
             // },
-            {
-              path: "/dashboard/settings/pricing",
-              title: "Plans & Pricing",
-              icon: ICONS.Pricing,
-            },
-            {
-              path: "/dashboard/settings/billing",
-              title: "Billing",
-              icon: ICONS.Billing,
-            },
+            // Plans & Pricing and Billing routes are cloud-only
+            // (registered under hasBillingAccess in dashboard.jsx). Gate the
+            // tabs the same way so off-cloud Owners don't 404.
+            ...(isCloud
+              ? [
+                  {
+                    path: "/dashboard/settings/pricing",
+                    title: "Plans & Pricing",
+                    icon: ICONS.Pricing,
+                  },
+                  {
+                    path: "/dashboard/settings/billing",
+                    title: "Billing",
+                    icon: ICONS.Billing,
+                  },
+                ]
+              : []),
             // {
             //   path: "/dashboard/settings/ee-licenses",
             //   title: "EE Licenses",
