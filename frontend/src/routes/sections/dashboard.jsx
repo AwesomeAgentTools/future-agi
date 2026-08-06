@@ -14,6 +14,7 @@ import { GatewayProvider } from "src/sections/gateway/context/GatewayContext";
 import GatewayGuard from "src/sections/gateway/components/GatewayGuard";
 import lazyWithRetry from "src/utils/lazyWithRetry";
 import CapabilityGate from "src/components/capability-gate";
+import { CAPABILITY } from "src/hooks/useCapabilities";
 // Lazy load all route components (with retry for chunk errors after deploys)
 const DevKeysPage = lazyWithRetry(
   () => import("src/pages/dashboard/keys/dev-keys"),
@@ -1135,7 +1136,7 @@ export const dashboardRoutes = (
         {
           path: "create-synthetic-dataset",
           element: (
-            <CapabilityGate feature="synthetic_data">
+            <CapabilityGate feature={CAPABILITY.SYNTHETIC_DATA}>
               <CreateSyntheticData />
             </CapabilityGate>
           ),
@@ -1143,7 +1144,7 @@ export const dashboardRoutes = (
         {
           path: "edit-synthetic-dataset/:dataset",
           element: (
-            <CapabilityGate feature="synthetic_data">
+            <CapabilityGate feature={CAPABILITY.SYNTHETIC_DATA}>
               <EditSyntheticDataDrawer />
             </CapabilityGate>
           ),
@@ -1299,7 +1300,7 @@ export const dashboardRoutes = (
         {
           index: true,
           element: (
-            <CapabilityGate feature="error_feed">
+            <CapabilityGate feature={CAPABILITY.ERROR_FEED}>
               <ErrorFeed />
             </CapabilityGate>
           ),
@@ -1307,7 +1308,7 @@ export const dashboardRoutes = (
         {
           path: ":id",
           element: (
-            <CapabilityGate feature="error_feed">
+            <CapabilityGate feature={CAPABILITY.ERROR_FEED}>
               <ErrorFeedDetail />
             </CapabilityGate>
           ),

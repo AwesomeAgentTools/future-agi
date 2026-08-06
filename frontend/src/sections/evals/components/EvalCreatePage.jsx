@@ -153,6 +153,11 @@ const EvalCreatePage = () => {
   const { locked: fagiLocked } = useFeatureLocked(CAPABILITY.TURING_MODELS);
   const { locked: agentEvalLocked, isLoading: capabilitiesLoading } =
     useFeatureLocked(CAPABILITY.AGENTIC_EVAL);
+  // Confirmed denial (loaded AND not allowed). Seed defaults raw and only
+  // strip them on confirmed denial — seeding off `locked` (which is true
+  // while loading) would blank the default model / flip the eval type for
+  // entitled cloud/EE users too, and never restore it.
+  const fagiModelsDenied = fagiLocked && !capabilitiesLoading;
   const createEval = useCreateEval();
   const createComposite = useCreateCompositeEval();
   const testPlaygroundRef = useRef(null);
@@ -162,11 +167,11 @@ const EvalCreatePage = () => {
 
   // --- Single eval state ---
   const [name, setName] = useState("");
-  const [evalType, setEvalType] = useState(agentEvalLocked ? "llm" : "agent");
+  const [evalType, setEvalType] = useState("agent");
   const [instructions, setInstructions] = useState("");
   const [code, setCode] = useState(PYTHON_CODE_TEMPLATE);
   const [codeLanguage, setCodeLanguage] = useState("python");
-  const [model, setModel] = useState(fagiLocked ? "" : "turing_large");
+  const [model, setModel] = useState("turing_large");
   const [openModelMenuSignal, setOpenModelMenuSignal] = useState(0);
   const [outputType, setOutputType] = useState("pass_fail");
   const [passThreshold, setPassThreshold] = useState(0.5);
@@ -261,6 +266,12 @@ const EvalCreatePage = () => {
     evalTypeDefaulted.current = true;
     setEvalType(agentEvalLocked ? "llm" : "agent");
   }, [capabilitiesLoading, agentEvalLocked]);
+
+  // Drop the seeded Turing default only once denial is confirmed, so entitled
+  // users keep "turing_large" through the capabilities fetch.
+  useEffect(() => {
+    if (fagiModelsDenied && FAGI_MODEL_VALUES.has(model)) setModel("");
+  }, [fagiModelsDenied, model]);
 
   // Load existing draft from URL, or create a new one
   const draftLoaded = useRef(false);
@@ -441,7 +452,7 @@ const EvalCreatePage = () => {
   const handleSaveSingle = useCallback(async () => {
     if (agentEvalLocked && evalType === "agent") {
       enqueueSnackbar(
-        "Agent evaluations are not available on OSS. Use LLM-as-a-Judge or Code evaluations instead.",
+        "Agent evaluations aren't enabled for this workspace. Use LLM-as-a-Judge or Code evaluations instead.",
         { variant: "error" },
       );
       return;

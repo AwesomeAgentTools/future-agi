@@ -9,7 +9,7 @@ import { useCapabilities } from "src/hooks/useCapabilities";
 const CONTACT_URL = "https://futureagi.com/talk-to-human";
 
 export default function CapabilityGate({ feature, children }) {
-  const { data, isLoading } = useCapabilities();
+  const { data, isLoading, isError, refetch } = useCapabilities();
 
   if (isLoading) {
     return (
@@ -19,6 +19,34 @@ export default function CapabilityGate({ feature, children }) {
         sx={{ height: 1, minHeight: 240 }}
       >
         <CircularProgress size={32} />
+      </Stack>
+    );
+  }
+
+  // A transient /api/capabilities/ failure is not a denial — showing the
+  // upsell here would misread a network blip as "your plan lacks this".
+  // Offer a neutral retry instead.
+  if (isError) {
+    return (
+      <Stack
+        alignItems="center"
+        justifyContent="center"
+        spacing={2}
+        sx={{ height: 1, minHeight: 240, px: 3, textAlign: "center" }}
+      >
+        <Iconify
+          icon="mdi:cloud-alert-outline"
+          sx={{ width: 48, height: 48, color: "text.secondary" }}
+        />
+        <Typography variant="body1">
+          Couldn&apos;t verify feature access.
+        </Typography>
+        <Typography variant="body2" color="text.secondary">
+          Check your connection and try again.
+        </Typography>
+        <Button variant="outlined" color="inherit" onClick={() => refetch()}>
+          Retry
+        </Button>
       </Stack>
     );
   }

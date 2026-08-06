@@ -412,6 +412,10 @@ class TestBooleanFeatureEnforcement:
         with pytest.raises(FeatureUnavailable, match="Agentic eval"):
             view.post(request)
 
+        feature_arg = mock_check.call_args.args[0]
+        assert getattr(feature_arg, "value", feature_arg) == "synthetic_data"
+        assert mock_check.call_args.kwargs["org_id"] == "org-1"
+
     @patch("tfc.ee_gating.check_ee_feature")
     def test_add_scenario_rows_blocked_when_not_allowed(self, mock_check):
         mock_check.side_effect = FeatureUnavailable(
@@ -428,6 +432,10 @@ class TestBooleanFeatureEnforcement:
 
         with pytest.raises(FeatureUnavailable, match="Agentic eval"):
             view.post(request, scenario_id="scn-1")
+
+        feature_arg = mock_check.call_args.args[0]
+        assert getattr(feature_arg, "value", feature_arg) == "agentic_eval"
+        assert mock_check.call_args.kwargs["org_id"] == "org-1"
 
     @patch("ee.usage.services.entitlements.Entitlements.check_feature")
     def test_add_scenario_columns_blocked_when_not_allowed(self, mock_check):
