@@ -35,7 +35,9 @@ import { canonicalKeys, formatMs } from "src/utils/utils";
 import SpanTreeTimeline from "src/components/traceDetail/SpanTreeTimeline";
 import SpanDetailPane from "src/components/traceDetail/SpanDetailPane";
 import LeftPanelSplit from "src/components/traceDetail/TraceLeftPanel";
-import DrawerToolbar from "src/components/traceDetail/DrawerToolbar";
+import DrawerToolbar, {
+  ToolbarPill,
+} from "src/components/traceDetail/DrawerToolbar";
 import TraceDisplayPanel, {
   DEFAULT_VIEW_CONFIG,
 } from "src/components/traceDetail/TraceDisplayPanel";
@@ -429,29 +431,11 @@ function InlineTraceView({ traceId, spanId }) {
         hideFilter
         rightSlot={
           sessionId ? (
-            <Button
-              size="small"
-              variant="outlined"
-              color="inherit"
-              startIcon={<Iconify icon="mdi:forum-outline" width={14} />}
+            <ToolbarPill
+              icon="mdi:forum-outline"
+              label="View session"
               onClick={() => setShowSession(true)}
-              sx={{
-                height: 24,
-                px: 1,
-                fontSize: 11,
-                fontWeight: 400,
-                textTransform: "none",
-                borderColor: "divider",
-                borderRadius: "4px",
-                color: "text.primary",
-                "&:hover": {
-                  bgcolor: "action.hover",
-                  borderColor: "text.disabled",
-                },
-              }}
-            >
-              View session
-            </Button>
+            />
           ) : null
         }
       />

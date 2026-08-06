@@ -18,7 +18,7 @@ import Iconify from "src/components/iconify";
 import CustomTooltip from "src/components/tooltip/CustomTooltip";
 
 // Shared 24px bordered pill button
-const ToolbarPill = React.forwardRef(({ icon, label, onClick, sx }, ref) => (
+export const ToolbarPill = React.forwardRef(({ icon, label, onClick, sx }, ref) => (
   <ButtonBase
     ref={ref}
     onClick={onClick}
