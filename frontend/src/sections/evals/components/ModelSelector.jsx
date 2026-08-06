@@ -20,7 +20,13 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import PropTypes from "prop-types";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import Iconify from "src/components/iconify";
 import KeysDrawer from "src/components/custom-model-dropdown/KeysDrawer";
 import { useDebounce } from "src/hooks/use-debounce";
@@ -600,6 +606,11 @@ const ModelSelector = ({
   activeContextOptions: activeContextOptionsProp,
   onActiveContextOptionsChange,
   hideDatasetContextToggle = false,
+  // Bump this counter to pop the model menu open from the parent — used when
+  // an action is blocked because no model is picked, so the snackbar and the
+  // menu arrive together. A counter rather than a boolean so repeat attempts
+  // re-open it without the parent having to reset the flag.
+  openModelMenuSignal = 0,
 }) => {
   // For each field, pick "controlled" (parent-driven) or "uncontrolled" (local state).
   const [modeLocal, setModeLocal] = useState("agent");
@@ -611,6 +622,12 @@ const ModelSelector = ({
 
   const [modeAnchor, setModeAnchor] = useState(null);
   const [modelAnchor, setModelAnchor] = useState(null);
+  const modelPillRef = useRef(null);
+
+  useEffect(() => {
+    if (!openModelMenuSignal || disabled) return;
+    setModelAnchor(modelPillRef.current);
+  }, [openModelMenuSignal, disabled]);
   const [modelSearch, setModelSearch] = useState("");
   const debouncedModelSearch = useDebounce(modelSearch.trim(), 400);
   const [plusAnchor, setPlusAnchor] = useState(null);
@@ -859,6 +876,7 @@ const ModelSelector = ({
 
       {/* ── Model selector (right) ── */}
       <Box
+        ref={modelPillRef}
         onClick={(e) => !disabled && setModelAnchor(e.currentTarget)}
         sx={{
           display: "inline-flex",
@@ -1942,6 +1960,7 @@ ModelSelector.propTypes = {
   showMode: PropTypes.bool,
   showPlus: PropTypes.bool,
   hideDatasetContextToggle: PropTypes.bool,
+  openModelMenuSignal: PropTypes.number,
 };
 
 export default ModelSelector;

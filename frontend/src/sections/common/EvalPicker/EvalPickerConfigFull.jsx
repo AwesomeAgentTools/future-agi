@@ -161,7 +161,8 @@ const EvalPickerConfigFull = ({ evalData, onBack, onSave, isSaving }) => {
   const [instructions, setInstructions] = useState("");
   const [code, setCode] = useState("");
   const [codeLanguage, setCodeLanguage] = useState("python");
-  const [model, setModel] = useState("turing_large");
+  const [model, setModel] = useState(isOSS ? "" : "turing_large");
+  const [openModelMenuSignal, setOpenModelMenuSignal] = useState(0);
   const [outputType, setOutputType] = useState("pass_fail");
   const [passThreshold, setPassThreshold] = useState(0.5);
   const [choiceScores, setChoiceScores] = useState({});
@@ -839,10 +840,12 @@ const EvalPickerConfigFull = ({ evalData, onBack, onSave, isSaving }) => {
         "Turing models aren't enabled for this workspace. Please select your own model.",
         { variant: "error" },
       );
+      setOpenModelMenuSignal((n) => n + 1);
       return;
     }
     if (fagiLocked && evalType !== "code" && !model) {
       enqueueSnackbar("Please select a model.", { variant: "error" });
+      setOpenModelMenuSignal((n) => n + 1);
       return;
     }
     try {
@@ -948,15 +951,25 @@ const EvalPickerConfigFull = ({ evalData, onBack, onSave, isSaving }) => {
   }, []);
 
   const handleTestEvaluation = useCallback(() => {
+    if (isOSS && evalType !== "code" && !model) {
+      enqueueSnackbar("Please select a model.", { variant: "error" });
+      setOpenModelMenuSignal((n) => n + 1);
+      return;
+    }
     setIsTesting(true);
     setTestError(null);
     setTestPassed(false);
     sourceRef.current?.runTest?.(templateId);
     // Safety timeout
     setTimeout(() => setIsTesting((v) => (v ? false : v)), 60000);
-  }, [templateId]);
+  }, [templateId, isOSS, evalType, model]);
 
   const handleAdd = useCallback(() => {
+    if (isOSS && evalType !== "code" && !model) {
+      enqueueSnackbar("Please select a model.", { variant: "error" });
+      setOpenModelMenuSignal((n) => n + 1);
+      return;
+    }
     // When opened from an optimization context, enforce that the optimized
     // column is mapped to at least one eval input field. Without this the
     // backend's get_metrics_by_column filter would exclude the eval from the
@@ -1094,6 +1107,7 @@ const EvalPickerConfigFull = ({ evalData, onBack, onSave, isSaving }) => {
     evalData,
     evalName,
     isEditMode,
+    isOSS,
     model,
     sourceMapping,
     evalType,
@@ -1501,6 +1515,7 @@ const EvalPickerConfigFull = ({ evalData, onBack, onSave, isSaving }) => {
                   initializes with the actual instructions content */}
               {!isComposite && evalType === "agent" && dataReady && (
                 <InstructionEditor
+                  openModelMenuSignal={openModelMenuSignal}
                   key={`agent-${templateId}`}
                   value={instructions}
                   onChange={(v) => {
@@ -1560,6 +1575,7 @@ const EvalPickerConfigFull = ({ evalData, onBack, onSave, isSaving }) => {
               {!isComposite && evalType === "llm" && dataReady && (
                 <>
                   <LLMPromptEditor
+                    openModelMenuSignal={openModelMenuSignal}
                     key={`llm-${templateId}`}
                     messages={messages}
                     onMessagesChange={(msgs) => {
