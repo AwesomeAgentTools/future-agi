@@ -11,7 +11,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from django.conf import settings as _settings
-
 from ee.usage.schemas.events import CheckResult
 from ee.usage.services.config import BillingConfig
 
@@ -37,6 +36,14 @@ pytestmark = pytest.mark.skipif(
 @pytest.mark.unit
 class TestCheckUsageUnit:
     """Unit tests for check_usage logic. Redis is mocked."""
+
+    @pytest.fixture(autouse=True)
+    def _active_billing_status(self):
+        with patch(
+            "ee.usage.services.metering._get_cached_billing_status",
+            return_value="active",
+        ):
+            yield
 
     def test_returns_check_result(self):
         """check_usage always returns a CheckResult."""
@@ -223,4 +230,43 @@ class TestCheckUsageUnit:
             from ee.usage.services.metering import check_usage
 
             result = check_usage("org-1", "nonexistent_type_xyz")
+            assert result.allowed is True
+
+
+@pytest.mark.unit
+class TestBillingStatusGate:
+    """Unpaid (Stripe retries exhausted) blocks billable usage; past_due stays soft."""
+
+    def test_unpaid_status_blocks_usage(self):
+        with (
+            patch("ee.usage.services.metering.get_redis") as mock_redis,
+            patch(
+                "ee.usage.services.metering._get_cached_billing_status",
+                return_value="unpaid",
+            ),
+        ):
+            mock_redis.return_value = MagicMock()
+
+            from ee.usage.services.metering import check_usage
+
+            result = check_usage("org-1", "turing_large_evaluator")
+            assert result.allowed is False
+            assert result.error_code == "PAYMENT_REQUIRED"
+
+    def test_past_due_status_does_not_block(self):
+        with (
+            patch("ee.usage.services.metering.get_redis") as mock_redis,
+            patch(
+                "ee.usage.services.metering._get_cached_billing_status",
+                return_value="past_due",
+            ),
+            patch("ee.usage.services.metering._get_cached_plan", return_value="payg"),
+        ):
+            mock_r = MagicMock()
+            mock_redis.return_value = mock_r
+            mock_r.get.return_value = None
+
+            from ee.usage.services.metering import check_usage
+
+            result = check_usage("org-1", "turing_large_evaluator")
             assert result.allowed is True

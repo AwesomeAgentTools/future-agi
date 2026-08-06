@@ -55,11 +55,13 @@ def test_dataset_runner_passes_user_eval_metric_kb_id_to_eval_instance():
     from types import SimpleNamespace
 
     import pytest
-
     from model_hub.views.eval_runner import EvaluationRunner
 
     runner = EvaluationRunner.__new__(EvaluationRunner)
-    runner.user_eval_metric = SimpleNamespace(model="turing_flash", kb_id="dataset-kb-id")
+    runner.user_eval_metric = SimpleNamespace(
+        model="turing_flash", kb_id="dataset-kb-id"
+    )
+    runner.eval_template = None
     runner._prepare_mapping_data = lambda row, mappings: ([], [])
 
     def capture_create_eval_instance(**kwargs):
@@ -69,7 +71,9 @@ def test_dataset_runner_passes_user_eval_metric_kb_id_to_eval_instance():
     runner._create_eval_instance = capture_create_eval_instance
 
     with pytest.raises(RuntimeError, match="stop after evaluator creation"):
-        runner._run_evaluation(row=SimpleNamespace(dataset_id="dataset-id"), mappings={}, config={})
+        runner._run_evaluation(
+            row=SimpleNamespace(dataset_id="dataset-id"), mappings={}, config={}
+        )
 
 
 def test_sdk_run_eval_passes_kb_id_to_unified_engine(monkeypatch):
@@ -98,7 +102,9 @@ def test_sdk_run_eval_passes_kb_id_to_unified_engine(monkeypatch):
             cost={},
         )
 
-    monkeypatch.setattr(evaluations, "_log_and_deduct_cost_for_standalone_eval", fake_log)
+    monkeypatch.setattr(
+        evaluations, "_log_and_deduct_cost_for_standalone_eval", fake_log
+    )
     monkeypatch.setattr("evaluations.engine.run_eval", fake_run_eval)
 
     template = SimpleNamespace(

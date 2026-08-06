@@ -10,8 +10,7 @@ To run:
 import unittest
 from unittest import mock
 
-from falcon_ai.llm_client import FalconLLMClient
-
+from ee.falcon_ai.llm_client import FalconLLMClient
 
 FALCON_ENV_KEYS = [
     "FALCON_AI_MAX_TOKENS",
@@ -55,9 +54,7 @@ class ResponseFormatTests(unittest.TestCase):
             client = FalconLLMClient(provider="anthropic")
         client.response_format = EVAL_RESPONSE_FORMAT
         self.assertEqual(client.response_format["type"], "json_schema")
-        self.assertEqual(
-            client.response_format["json_schema"]["name"], "eval_result"
-        )
+        self.assertEqual(client.response_format["json_schema"]["name"], "eval_result")
 
     def test_none_after_reset(self):
         with mock.patch.dict("os.environ", _clear_env(), clear=True):

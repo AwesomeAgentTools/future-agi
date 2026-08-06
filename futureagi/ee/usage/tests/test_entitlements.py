@@ -302,7 +302,7 @@ class TestEntitlementsUnit:
 
             invalidate_plan_caches("org-1")
 
-            mock_r.delete.assert_any_call("plan:org-1")
+            mock_r.delete.assert_any_call("plan:org-1", "billing_status:org-1")
             mock_r.delete.assert_any_call(b"ent:org-1:has_synthetic_data")
             assert mock_r.delete.call_count == 2
 

@@ -17,10 +17,9 @@ Requires:
 import asyncio
 
 import pytest
-
 from ai_tools.tests.fixtures import make_full_error_cluster
 
-pytestmark = [pytest.mark.django_db(transaction=True)]
+pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.live_llm]
 
 
 # ---------------------------------------------------------------------------
@@ -165,8 +164,8 @@ class TestFalconListsClusters:
             context_page="tracing",
         )
 
-        assert (
-            {"list_error_clusters", "analyze_errors"} & set(collector.tool_names_called)
+        assert {"list_error_clusters", "analyze_errors"} & set(
+            collector.tool_names_called
         ), f"Expected an error analysis tool, got: {collector.tool_names_called}"
         assert (
             len(collector.failed_tools) == 0

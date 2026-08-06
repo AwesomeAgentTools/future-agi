@@ -6,4 +6,4 @@ This module remains for self-hosted EE endpoints (license status, capabilities).
 
 from django.urls import path
 
-urlpatterns = []
+urlpatterns: list[path] = []

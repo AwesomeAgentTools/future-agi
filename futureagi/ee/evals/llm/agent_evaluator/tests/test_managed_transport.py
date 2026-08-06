@@ -16,7 +16,10 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
-from ee.evals.llm.agent_evaluator.evaluator import AgentEvaluator
+from ee.evals.llm.agent_evaluator.evaluator import (
+    AgentEvaluator,
+    ManagedGatewayRequiredError,
+)
 from tfc.licensing.types import DeploymentLocation
 
 
@@ -33,15 +36,25 @@ from tfc.licensing.types import DeploymentLocation
         ("o4", "openai"),
         ("chatgpt-4o-latest", "openai"),
         ("openai/gpt-4o", "openai"),  # provider-prefixed
-        # Anthropic family
+        # Anthropic (direct) family
         ("claude-3-5-sonnet", "anthropic"),
         ("anthropic/claude-3-opus", "anthropic"),
+        # Bedrock: full inference-profile ARN, bare cross-region profile ids
+        # (us./eu./global.), and the explicit bedrock/ prefix. SigV4 auth →
+        # works with zero user setup, so these must never fall through to None.
+        (
+            "bedrock/arn:aws:bedrock:us-east-1:000000000000:inference-profile/"
+            "us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            "bedrock",
+        ),
+        ("us.anthropic.claude-sonnet-4-6", "bedrock"),
+        ("eu.anthropic.claude-sonnet-4-6", "bedrock"),
+        ("global.anthropic.claude-sonnet-4-5-20250929", "bedrock"),
+        ("bedrock/some-managed-profile", "bedrock"),
         # Vertex / Gemini family
         ("vertex_ai/gemini-1.5-pro", "vertex_ai"),  # explicit vertex prefix
         ("gemini-1.5-flash", "vertex_ai"),  # bare gemini family
-        # Turing / unknown → None (caller keeps its existing default)
-        ("turing_large", None),
-        ("turing_flash", None),
+        # Genuinely unknown → None (caller keeps its existing default)
         ("mistral-large", None),
         ("", None),
         (None, None),
@@ -49,6 +62,25 @@ from tfc.licensing.types import DeploymentLocation
 )
 def test_provider_for_user_model(model, expected):
     assert AgentEvaluator._provider_for_user_model(model) == expected
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "turing_large",
+        "turing_large_xl",
+        "turing_small",
+        "turing_flash",
+        "protect",
+        "protect_flash",
+        "protect_toxicity",
+    ],
+)
+def test_provider_for_user_model_raises_for_managed_only_models(model):
+    # Turing/Protect have no direct provider: returning None would strand the
+    # eval on the dead managed path. It must raise a clear, actionable error.
+    with pytest.raises(ManagedGatewayRequiredError, match="managed"):
+        AgentEvaluator._provider_for_user_model(model)
 
 
 # ── _managed_ai_available() ──────────────────────────────────────────────

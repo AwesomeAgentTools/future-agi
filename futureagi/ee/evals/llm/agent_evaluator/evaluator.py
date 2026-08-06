@@ -92,6 +92,20 @@ USER_FACING_EVAL_FAILED = (
     "Evaluation failed. Please try again. If the problem persists, " "contact support."
 )
 
+
+class ManagedGatewayRequiredError(ValueError):
+    """Raised when an eval selects a managed-gateway-only model (Turing /
+    Protect) but the managed gateway isn't reachable in this deployment.
+
+    These models have no direct-provider fallback, so we fail fast with a
+    clear, actionable message instead of silently keeping the dead managed
+    path (which retries and ends in an opaque ACTIVATION_FAILED). Subclasses
+    ValueError so any generic ``except ValueError`` upstream still catches it,
+    but ``_run_agent``'s handler re-raises it so the message is preserved
+    rather than collapsed into the generic USER_FACING_EVAL_FAILED string.
+    """
+
+
 # Auto-context roots: when a template references {{row}}, {{row.X}},
 # {{span}}, {{trace}}, {{session}} etc., we inject the corresponding data
 # directly into the Jinja2 render context and auto-enable the matching
@@ -1317,6 +1331,17 @@ class AgentEvaluator:
             )
         except MediaNotAccessibleError:
             raise
+        except ManagedGatewayRequiredError:
+            # Managed-only model on a deployment without the gateway: a clean
+            # configuration/entitlement failure, not an internal error. Log it
+            # as such and re-raise so the actionable message reaches the user
+            # instead of the generic USER_FACING_EVAL_FAILED.
+            logger.warning(
+                "agent_eval_managed_model_requires_license",
+                model=self._effective_model or self._model,
+                eval_id=self._current_eval_id,
+            )
+            raise
         except Exception as e:
             err_msg = str(e).strip() or type(e).__name__
             logger.exception(
@@ -1635,12 +1660,40 @@ class AgentEvaluator:
 
     @staticmethod
     def _provider_for_user_model(model: object) -> str | None:
-        """Map a user-selected model name to a FalconLLMClient provider.
+        """Map a user-selected model to a FalconLLMClient provider for the
+        direct (non-managed) transport path.
 
-        Only used when the managed gateway is unavailable; returns None
-        for unknown families so the caller keeps the existing default."""
+        Returns the provider, or None for genuinely unknown families so the
+        caller keeps its existing default. Raises ManagedGatewayRequiredError
+        for Turing/Protect models: they run only through the managed gateway,
+        so returning None would strand the eval on the dead managed path
+        (ACTIVATION_FAILED) — the exact failure this fallback exists to avoid.
+        """
         name = str(model or "").lower()
+
+        # Turing/Protect are managed-gateway-only — there is no direct
+        # provider to fall back to. Fail loudly instead of returning None
+        # (which the caller reads as "keep the managed default").
+        if name.startswith(("turing_", "protect")):
+            raise ManagedGatewayRequiredError(
+                f"'{model}' is a FutureAGI managed model and needs a FutureAGI "
+                "license (managed gateway) to run. Select a model from your own "
+                "provider (OpenAI, Anthropic, Bedrock, Vertex), or add a "
+                "license to use managed models."
+            )
+
         base = name.split("/")[-1]
+
+        # Bedrock first: explicit `bedrock/…` ids AND bare cross-region
+        # inference-profile ids (`us.` / `eu.` / `apac.` / `global.` prefix,
+        # e.g. `us.anthropic.claude-…`). Bedrock authenticates with SigV4 and
+        # needs no API key — the one provider that works with zero user setup,
+        # so its ids must never fall through to None.
+        if name.startswith("bedrock/") or name.startswith(
+            ("us.", "eu.", "apac.", "global.")
+        ):
+            return "bedrock"
+
         if name.startswith("vertex_ai/") or base.startswith("gemini"):
             return "vertex_ai"
         if base.startswith("claude"):

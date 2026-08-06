@@ -14,9 +14,8 @@ whenever the OSS repo is checked out standalone.
 from types import SimpleNamespace
 
 import pytest
-from rest_framework import status
-
 from model_hub.models.develop_dataset import Column, Dataset, Row
+from rest_framework import status
 
 
 class _SuccessfulResourceCallLog:
@@ -56,7 +55,7 @@ def _synthetic_create_payload(name, num_rows=10, columns=None, regenerate=None):
             "name": name,
             "description": "Dataset",
             "objective": "Generate rows",
-            "patterns": [],
+            "patterns": "",
         },
     }
     if regenerate is not None:

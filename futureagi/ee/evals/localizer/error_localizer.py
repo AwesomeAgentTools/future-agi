@@ -9,9 +9,6 @@ from io import BytesIO
 from typing import Any, Literal
 
 import structlog
-from PIL import Image
-from pydub import AudioSegment
-
 from agentic_eval.core.llm.llm import LLM
 from agentic_eval.core.utils.model_config import ModelConfigs
 from ee.evals.llm.agent_evaluator.evaluator import (
@@ -25,6 +22,8 @@ from ee.evals.localizer.prompts import (
     LOCALIZER_TASK,
     SYSTEM_PROMPT,
 )
+from PIL import Image
+from pydub import AudioSegment
 from tfc.utils.storage import (
     audio_bytes_from_url_or_base64,
     image_bytes_from_url_or_base64,
@@ -41,6 +40,7 @@ class LocalizerResult:
     selected_key: str | None
     skip_reason: str | None = None
     cost: dict[str, Any] = field(default_factory=lambda: {"total_cost": 0.0})
+
 
 Modality = Literal["text", "image", "audio"]
 
@@ -535,7 +535,7 @@ class ErrorLocalizer:
         input_data: Any,
         selected_input_key: str,
         modality: Modality,
-    ) -> tuple[dict[str, Any], str | None]:
+    ) -> LocalizerResult:
         run_id = uuid.uuid4().hex[:12]
         units, unit_blocks, image_dims = _chunk(modality, input_data, run_id)
         logger.debug(
@@ -772,12 +772,16 @@ class ErrorLocalizer:
                 )
 
                 token_usage = {
-                    "prompt_tokens": (result or {}).get("input_tokens", 0)
-                    if isinstance(result, dict)
-                    else 0,
-                    "completion_tokens": (result or {}).get("output_tokens", 0)
-                    if isinstance(result, dict)
-                    else 0,
+                    "prompt_tokens": (
+                        (result or {}).get("input_tokens", 0)
+                        if isinstance(result, dict)
+                        else 0
+                    ),
+                    "completion_tokens": (
+                        (result or {}).get("output_tokens", 0)
+                        if isinstance(result, dict)
+                        else 0
+                    ),
                 }
                 token_usage["total_tokens"] = (
                     token_usage["prompt_tokens"] + token_usage["completion_tokens"]

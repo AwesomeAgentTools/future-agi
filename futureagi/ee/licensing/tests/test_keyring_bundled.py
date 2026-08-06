@@ -1,9 +1,11 @@
 """Bundled trust-root behavior of the license keyring.
 
-The bundled keys are the trust root: env/settings keys may only add
-rotation kids and can never replace a bundled kid — otherwise a
-deployment could validate a self-signed license by pointing
-EE_LICENSE_PUBLIC_KEY at its own keypair.
+The bundled keys are the sole trust root: once ANY key is bundled,
+env/settings keys are ignored entirely — they can neither add a rotation
+kid nor replace a bundled one. Otherwise a deployment could validate a
+self-signed license by pointing EE_LICENSE_PUBLIC_KEY (or adding a fresh
+kid via EE_LICENSE_PUBLIC_KEYS) at its own keypair. Env keys are honored
+only while nothing is bundled (the pre-GA / development escape hatch).
 """
 
 from __future__ import annotations
@@ -29,7 +31,10 @@ class TestBundledTrustRoot:
     def teardown_method(self):
         _reload_real_keyring()
 
-    def test_env_key_adds_alongside_bundled(self):
+    def test_env_key_ignored_when_bundled_present(self):
+        # An env public key (claims the "default" kid) must NOT be added to
+        # the ring while a bundled trust root exists — otherwise a deployment
+        # could sign its own license against that env key and validate it.
         with patch.object(keyring, "_BUNDLED_KEYS", (_BUNDLED,)):
             with override_settings(
                 EE_LICENSE_PUBLIC_KEY="-----BEGIN PUBLIC KEY-----\nrotation\n-----END PUBLIC KEY-----",
@@ -38,6 +43,37 @@ class TestBundledTrustRoot:
                 load_keyring_from_settings()
 
             assert keyring.get_key("prod-2026") == _BUNDLED
+            assert keyring.get_key("default") is None
+            # Ring is exactly the bundled set — nothing the env introduced.
+            assert keyring.has_any_keys()
+
+    def test_fresh_env_kid_not_added_when_bundled_present(self):
+        # The real attack: an operator adds a brand-new kid (no collision
+        # with any bundled kid) via EE_LICENSE_PUBLIC_KEYS. It must be
+        # ignored, so the validator can never resolve it.
+        attacker_keys = (
+            '[{"kid": "attacker-kid", "algorithm": "RS256",'
+            ' "public_key": "-----BEGIN PUBLIC KEY-----\\nattacker\\n-----END PUBLIC KEY-----"}]'
+        )
+        with patch.object(keyring, "_BUNDLED_KEYS", (_BUNDLED,)):
+            with override_settings(
+                EE_LICENSE_PUBLIC_KEY="", EE_LICENSE_PUBLIC_KEYS=attacker_keys
+            ):
+                load_keyring_from_settings()
+
+            assert keyring.get_key("attacker-kid") is None
+            assert keyring.get_key("prod-2026") == _BUNDLED
+
+    def test_env_keys_loaded_when_nothing_bundled(self):
+        # Pre-GA / dev escape hatch: with no bundled trust root, env keys are
+        # the only available trust source and ARE loaded.
+        with patch.object(keyring, "_BUNDLED_KEYS", ()):
+            with override_settings(
+                EE_LICENSE_PUBLIC_KEY="-----BEGIN PUBLIC KEY-----\ndev\n-----END PUBLIC KEY-----",
+                EE_LICENSE_PUBLIC_KEYS="",
+            ):
+                load_keyring_from_settings()
+
             assert keyring.get_key("default") is not None
 
     def test_env_key_cannot_replace_bundled_kid(self):

@@ -16,9 +16,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from ee.falcon_ai.consumers import FalconAIConsumer
-
 
 logger = logging.getLogger("tests.usage_events")
 
@@ -55,8 +53,8 @@ def _make_org(org_id=None):
     return org
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
+@pytest.mark.django_db
 class TestFalconAIConsumer:
     # --- Authentication ---
 
@@ -259,9 +257,7 @@ class TestFalconAIConsumer:
 
     @patch("ee.falcon_ai.consumers.emit")
     @patch("ee.falcon_ai.consumers.BillingConfig")
-    @patch(
-        "agentic_eval.core_evals.fi_utils.token_count_helper.calculate_total_cost"
-    )
+    @patch("agentic_eval.core_evals.fi_utils.token_count_helper.calculate_total_cost")
     async def test_emit_chat_usage_includes_tokens_and_gateway_cost(
         self, mock_cost, mock_billing_config, mock_emit
     ):
@@ -292,19 +288,21 @@ class TestFalconAIConsumer:
         assert event.properties["raw_cost_usd"] == "0.02"
         assert event.properties["pricing_source"] == "gateway"
 
-    @patch("ee.usage.services.metering.check_usage")
+    @patch("ee.falcon_ai.consumers.check_usage")
     @patch("ee.falcon_ai.url_fetcher.fetch_urls_from_message")
     @patch("ee.falcon_ai.consumers.StreamBuffer")
     @patch("ee.falcon_ai.consumers.AgentLoop")
-    @patch.object(FalconAIConsumer, "_update_conversation_tokens", new_callable=AsyncMock)
+    @patch.object(
+        FalconAIConsumer, "_update_conversation_tokens", new_callable=AsyncMock
+    )
     @patch.object(FalconAIConsumer, "_save_assistant_message", new_callable=AsyncMock)
-    @patch.object(FalconAIConsumer, "_get_conversation_and_history", new_callable=AsyncMock)
+    @patch.object(
+        FalconAIConsumer, "_get_conversation_and_history", new_callable=AsyncMock
+    )
     @patch.object(FalconAIConsumer, "_save_user_message", new_callable=AsyncMock)
     @patch("ee.falcon_ai.consumers.emit")
     @patch("ee.falcon_ai.consumers.BillingConfig")
-    @patch(
-        "agentic_eval.core_evals.fi_utils.token_count_helper.calculate_total_cost"
-    )
+    @patch("agentic_eval.core_evals.fi_utils.token_count_helper.calculate_total_cost")
     async def test_chat_message_path_emits_usage_with_accumulated_tokens(
         self,
         mock_cost,

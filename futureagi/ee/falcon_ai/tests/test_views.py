@@ -1,8 +1,7 @@
 import uuid
 
-from django.core.files.uploadedfile import SimpleUploadedFile
 import pytest
-
+from django.core.files.uploadedfile import SimpleUploadedFile
 from ee.falcon_ai.models import (
     Conversation,
     FalconFile,
@@ -271,6 +270,7 @@ class TestFileUploadView:
                     }
                 )
 
+        monkeypatch.delenv("MINIO_ENDPOINT", raising=False)
         monkeypatch.delenv("MINIO_ROOT_USER", raising=False)
         monkeypatch.delenv("MINIO_ROOT_PASSWORD", raising=False)
         monkeypatch.setenv("S3_ENDPOINT_URL", "http://minio:9000")
@@ -469,9 +469,7 @@ class TestMCPConnectorDetailView:
         assert delete_resp.status_code == 404
         other_connector.refresh_from_db()
         assert other_connector.name == "Other Workspace Docs"
-        assert MCPConnector.no_workspace_objects.filter(
-            id=other_connector.id
-        ).exists()
+        assert MCPConnector.no_workspace_objects.filter(id=other_connector.id).exists()
 
     @pytest.mark.parametrize(
         ("method", "suffix", "payload"),

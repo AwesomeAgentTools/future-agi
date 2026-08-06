@@ -25,3 +25,11 @@ class UsageLimitExceeded(Exception):
     def __init__(self, check_result: CheckResult):
         self.check_result = check_result
         super().__init__(check_result.reason or "Usage limit exceeded")
+
+
+class NoDefaultPaymentMethod(Exception):
+    """Raised when a plan change needs a card on file and none is set.
+
+    Views map this to 402 so the frontend can open the card-capture flow
+    instead of showing a generic failure.
+    """

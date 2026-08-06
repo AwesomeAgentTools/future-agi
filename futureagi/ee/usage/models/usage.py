@@ -1,12 +1,11 @@
 import uuid
 from decimal import Decimal
 
-from django.core.validators import MinValueValidator
-from django.db import models
-
 from accounts.models.organization import Organization
 from accounts.models.user import User
 from accounts.models.workspace import Workspace
+from django.core.validators import MinValueValidator
+from django.db import models
 from tfc.utils.base_model import BaseModel
 
 
@@ -98,6 +97,7 @@ class SubscriptionTier(BaseModel):
 class OrganizationStatusChoices(models.TextChoices):
     ACTIVE = "active", "Active"
     PAST_DUE = "past_due", "Past Due"
+    UNPAID = "unpaid", "Unpaid"
     CANCELED = "canceled", "Canceled"
     INACTIVE = "inactive", "Inactive"
 
@@ -229,6 +229,18 @@ class OrganizationSubscription(BaseModel):
         blank=True,
         null=True,
         help_text="Stripe subscription ID for platform fee (custom plans only).",
+    )
+    card_network_logo_url = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        help_text="Logo URL for the default payment method's card network.",
+    )
+    card_last_4_digits = models.CharField(
+        max_length=4,
+        blank=True,
+        default="",
+        help_text="Last 4 digits of the default payment method.",
     )
     tracing_billing_mode = models.CharField(
         max_length=10,

@@ -6,6 +6,31 @@ regional/dated provider variants. Merged onto the OSS base by
 ``agentic_eval.core_evals.run_prompt.available_models``.
 """
 
+import os
+
+# FutureAGI's Bedrock inference-profile ARNs are account- and region-specific.
+# The account id and region are supplied at deploy time (env) rather than baked
+# into source, so this file — imported verbatim into the public OSS cut — does
+# not publish an internal AWS account id. When the account id is unset (e.g. a
+# public OSS deployment with no FutureAGI Bedrock access), the entry falls back
+# to a bare ``bedrock/<profile>`` reference; the managed deployment injects the
+# account id via env so the full ARN is used there.
+_BEDROCK_ACCOUNT_ID = os.environ.get("FUTUREAGI_BEDROCK_ACCOUNT_ID", "").strip()
+_BEDROCK_REGION = os.environ.get("FUTUREAGI_BEDROCK_REGION", "us-east-1").strip()
+
+
+def _bedrock_arn(profile_id: str) -> str:
+    """Build a Bedrock inference-profile model id from the deploy-time account
+    id/region. Full ARN when the account id is configured, else a bare
+    ``bedrock/<profile>`` reference."""
+    if _BEDROCK_ACCOUNT_ID:
+        return (
+            f"bedrock/arn:aws:bedrock:{_BEDROCK_REGION}:{_BEDROCK_ACCOUNT_ID}"
+            f":inference-profile/{profile_id}"
+        )
+    return f"bedrock/{profile_id}"
+
+
 EE_ONLY_AVAILABLE_MODELS = [
     {
         "model_name": "gpt-4o-2024-11-20",
@@ -83,7 +108,7 @@ EE_ONLY_AVAILABLE_MODELS = [
         "pricing": {"input_per_1M_tokens": 1.1, "output_per_1M_tokens": 5.5},
     },
     {
-        "model_name": "bedrock/arn:aws:bedrock:us-east-1:375763256607:inference-profile/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+        "model_name": _bedrock_arn("us.anthropic.claude-3-5-sonnet-20240620-v1:0"),
         "providers": "bedrock",
         "api_key_name": "AWS_ACCESS_KEY_ID",
         "mode": "chat",
@@ -94,7 +119,7 @@ EE_ONLY_AVAILABLE_MODELS = [
         "pricing": {"input_per_1M_tokens": 3, "output_per_1M_tokens": 15},
     },
     {
-        "model_name": "bedrock/arn:aws:bedrock:us-east-1:375763256607:inference-profile/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "model_name": _bedrock_arn("us.anthropic.claude-3-7-sonnet-20250219-v1:0"),
         "providers": "bedrock",
         "api_key_name": "AWS_ACCESS_KEY_ID",
         "mode": "chat",
@@ -105,7 +130,7 @@ EE_ONLY_AVAILABLE_MODELS = [
         "pricing": {"input_per_1M_tokens": 3, "output_per_1M_tokens": 15},
     },
     {
-        "model_name": "bedrock/arn:aws:bedrock:us-east-1:375763256607:inference-profile/global.anthropic.claude-sonnet-4-20250514-v1:0",
+        "model_name": _bedrock_arn("global.anthropic.claude-sonnet-4-20250514-v1:0"),
         "providers": "bedrock",
         "api_key_name": "AWS_ACCESS_KEY_ID",
         "mode": "chat",
@@ -116,7 +141,7 @@ EE_ONLY_AVAILABLE_MODELS = [
         "pricing": {"input_per_1M_tokens": 3, "output_per_1M_tokens": 15},
     },
     {
-        "model_name": "bedrock/arn:aws:bedrock:us-east-1:375763256607:inference-profile/global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "model_name": _bedrock_arn("global.anthropic.claude-sonnet-4-5-20250929-v1:0"),
         "providers": "bedrock",
         "api_key_name": "AWS_ACCESS_KEY_ID",
         "mode": "chat",
@@ -127,7 +152,7 @@ EE_ONLY_AVAILABLE_MODELS = [
         "pricing": {"input_per_1M_tokens": 3, "output_per_1M_tokens": 15},
     },
     {
-        "model_name": "bedrock/arn:aws:bedrock:us-east-1:375763256607:inference-profile/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "model_name": _bedrock_arn("us.anthropic.claude-sonnet-4-5-20250929-v1:0"),
         "providers": "bedrock",
         "api_key_name": "AWS_ACCESS_KEY_ID",
         "mode": "chat",
@@ -138,7 +163,7 @@ EE_ONLY_AVAILABLE_MODELS = [
         "pricing": {"input_per_1M_tokens": 3.3, "output_per_1M_tokens": 16.5},
     },
     {
-        "model_name": "bedrock/arn:aws:bedrock:us-east-1:375763256607:inference-profile/us.anthropic.claude-opus-4-5-20251101-v1:0",
+        "model_name": _bedrock_arn("us.anthropic.claude-opus-4-5-20251101-v1:0"),
         "providers": "bedrock",
         "api_key_name": "AWS_ACCESS_KEY_ID",
         "mode": "chat",
@@ -153,7 +178,7 @@ EE_ONLY_AVAILABLE_MODELS = [
         "pricing": {"input_per_1M_tokens": 5.5, "output_per_1M_tokens": 27.5},
     },
     {
-        "model_name": "bedrock/arn:aws:bedrock:us-east-1:375763256607:inference-profile/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "model_name": _bedrock_arn("us.anthropic.claude-haiku-4-5-20251001-v1:0"),
         "providers": "bedrock",
         "api_key_name": "AWS_ACCESS_KEY_ID",
         "mode": "chat",

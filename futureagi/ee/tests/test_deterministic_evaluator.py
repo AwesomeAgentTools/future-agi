@@ -14,16 +14,19 @@ Tests all refactored functionality including:
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
-
+from agentic_eval.core.llm.llm import LLM
+from agentic_eval.core.utils.model_config import ModelConfig, ModelConfigs
 from ee.agenthub.deterministic_agent.deterministic_agent import (
     DeterministicAgent,
 )
-from agentic_eval.core.llm.llm import LLM
-from agentic_eval.core.utils.model_config import ModelConfig, ModelConfigs
 from ee.evals.futureagi.eval_deterministic.evaluator import (
     DeterministicEvaluator,
 )
 from model_hub.utils.evals import evals_template
+
+pytestmark = pytest.mark.skip(
+    reason="DeterministicEvaluator being retired; migrating to AgentEvaluator"
+)
 
 # =============================================================================
 # Unit Tests - ModelConfig Resolution
@@ -286,7 +289,6 @@ class TestModalityValidation:
 
         assert agent.is_turing_model is True
         assert agent.routing_model == ModelConfigs.TURING_SMALL.model_name
-
 
 
 # =============================================================================

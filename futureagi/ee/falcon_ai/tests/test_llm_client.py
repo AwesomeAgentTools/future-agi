@@ -9,8 +9,7 @@ truncated mid-string because the model ran out of output budget.
 import unittest
 from unittest import mock
 
-from falcon_ai.llm_client import FalconLLMClient
-
+from ee.falcon_ai.llm_client import FalconLLMClient
 
 FALCON_ENV_KEYS = [
     "FALCON_AI_MAX_TOKENS",

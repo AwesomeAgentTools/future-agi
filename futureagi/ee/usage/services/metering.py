@@ -16,11 +16,10 @@ import os
 from datetime import datetime
 
 import structlog
-from redis.exceptions import RedisError
-
 from ee.usage.schemas.events import CheckResult, UpgradeCTA
 from ee.usage.services.config import BillingConfig
 from ee.usage.services.emitter import get_redis
+from redis.exceptions import RedisError
 
 logger = structlog.get_logger(__name__)
 
@@ -73,6 +72,37 @@ def _get_cached_plan(org_id: str) -> str:
     return plan
 
 
+def _get_cached_billing_status(org_id: str) -> str:
+    """Get org's billing status from Redis cache, or fetch from DB and cache (5 min TTL)."""
+    cache_key = f"billing_status:{org_id}"
+    try:
+        r = get_redis()
+        cached = r.get(cache_key)
+        if cached:
+            return cached if isinstance(cached, str) else cached.decode()
+    except RedisError:
+        logger.warning("billing_status_cache_read_failed", org_id=org_id)
+        r = None
+
+    from ee.usage.models.usage import (
+        OrganizationStatusChoices,
+        OrganizationSubscription,
+    )
+
+    status = (
+        OrganizationSubscription.objects.filter(organization_id=org_id, deleted=False)
+        .values_list("status", flat=True)
+        .first()
+    )
+    status = status or OrganizationStatusChoices.ACTIVE
+    if r is not None:
+        try:
+            r.setex(cache_key, 300, status)
+        except RedisError:
+            logger.warning("billing_status_cache_write_failed", org_id=org_id)
+    return status
+
+
 def check_usage(org_id: str, event_type: str, amount: float = 0) -> CheckResult:
     """Pre-check: can this org perform this billable action?
 
@@ -100,6 +130,21 @@ def check_usage(org_id: str, event_type: str, amount: float = 0) -> CheckResult:
         )  # Unknown type — don't block, log for investigation
 
     dimension = call_type_config.dimension
+
+    # Stripe exhausted its retry window (grace period) without payment.
+    # past_due stays soft — the grace period itself never blocks.
+    from ee.usage.models.usage import OrganizationStatusChoices
+
+    if _get_cached_billing_status(org_id) == OrganizationStatusChoices.UNPAID:
+        return CheckResult(
+            allowed=False,
+            error_code="PAYMENT_REQUIRED",
+            reason=(
+                "Your subscription has unpaid invoices. "
+                "Update your payment method to restore access."
+            ),
+            dimension=dimension,
+        )
 
     # Resolve amount from config if not explicitly provided
     resolved_amount = amount

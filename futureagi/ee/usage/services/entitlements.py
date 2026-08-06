@@ -302,7 +302,7 @@ def invalidate_plan_caches(org_id: str) -> None:
     for up to ``CACHE_TTL`` (5 min), so features the customer just paid for
     keep returning 402.
     """
-    get_redis().delete(f"plan:{org_id}")
+    get_redis().delete(f"plan:{org_id}", f"billing_status:{org_id}")
     Entitlements.invalidate_cache(str(org_id))
 
 
