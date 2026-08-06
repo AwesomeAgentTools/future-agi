@@ -81,8 +81,13 @@ test-results/
 **/.playwright-mcp/
 # ee/ ships in the image since the ee->futureagi code move (TH-7256): the
 # license (EE_LICENSE_KEY), not code stripping, gates paid features now.
-# Private cloud bits (ee/cloud, billing.yaml, Dockerfile.cloud) stay out of
-# the repo via .gitignore and never reach any build context.
+# Private cloud bits are gitignored (absent in CI checkouts), but dev
+# machines have them in the working tree — exclude so local builds match
+# what CI/a fresh clone produces.
+ee/cloud/
+ee/billing.yaml
+ee/Dockerfile.cloud
+ee/.github/
 ee.local-leftover/
 
 # Documentation (not needed in image)

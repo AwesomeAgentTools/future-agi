@@ -258,6 +258,6 @@ install-*.log
 uninstall-*.log
 *.core
 
-# ee/ private-repo meta files — not part of the public monorepo
+# ee/ private-repo .gitignore — not part of the public monorepo
+# (ee/LICENSE stays tracked: source-available code needs a license file)
 futureagi/ee/.gitignore
-futureagi/ee/LICENSE

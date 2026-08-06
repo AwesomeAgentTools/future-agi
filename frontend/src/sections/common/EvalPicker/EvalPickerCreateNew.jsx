@@ -29,7 +29,7 @@ import TaskFilterBar from "src/sections/tasks/components/TaskFilterBar";
 import { buildApiFilterArray } from "src/sections/tasks/components/TaskLivePreview";
 import { ROW_TYPE_LABELS } from "src/utils/constants";
 import { useSnackbar } from "notistack";
-import { useFeatureAllowed } from "src/hooks/useCapabilities";
+import { useFeatureLocked, CAPABILITY } from "src/hooks/useCapabilities";
 
 // Same components as EvalCreatePage
 import { useCreateEval } from "src/sections/evals/hooks/useCreateEval";
@@ -126,11 +126,11 @@ const EvalPickerCreateNew = ({ onBack, onSave }) => {
     filterForm: localFilterForm,
   } = useEvalPickerContext();
   const { enqueueSnackbar } = useSnackbar();
-  const { allowed: turingAllowed, isLoading: capabilitiesLoading } =
-    useFeatureAllowed("turing_models");
-  const { allowed: agentEvalAllowed } = useFeatureAllowed("agentic_eval");
-  const fagiLocked = !turingAllowed;
-  const agentEvalLocked = !agentEvalAllowed;
+  // Fail closed while capabilities load (both flags true) so we never flash
+  // Turing models or agent evals as available before the fetch resolves.
+  const { locked: fagiLocked, isLoading: capabilitiesLoading } =
+    useFeatureLocked(CAPABILITY.TURING_MODELS);
+  const { locked: agentEvalLocked } = useFeatureLocked(CAPABILITY.AGENTIC_EVAL);
   const createEval = useCreateEval();
   const createComposite = useCreateCompositeEval();
   const sourceRef = useRef(null);
@@ -501,7 +501,7 @@ const EvalPickerCreateNew = ({ onBack, onSave }) => {
     }
     if (fagiLocked && FAGI_MODEL_VALUES.has(model)) {
       enqueueSnackbar(
-        "Turing models are not available in OSS. Please select your own model.",
+        "Turing models aren't enabled for this workspace. Please select your own model.",
         { variant: "error" },
       );
       return;
@@ -918,7 +918,7 @@ const EvalPickerCreateNew = ({ onBack, onSave }) => {
                   onChange={(_, val) => {
                     if (agentEvalLocked && val === "agent") {
                       enqueueSnackbar(
-                        "Agent evaluations require an Enterprise (EE) license. Upgrade to EE license key to enable.",
+                        "Agent evaluations aren't enabled for this workspace.",
                         { variant: "info" },
                       );
                       return;
@@ -964,7 +964,7 @@ const EvalPickerCreateNew = ({ onBack, onSave }) => {
                               show
                               type=""
                               arrow
-                              title="Agent evaluations require an Enterprise (EE) license. Upgrade to EE license key to enable."
+                              title="Agent evaluations aren't enabled for this workspace."
                             >
                               <Box
                                 sx={{

@@ -24,7 +24,11 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import Iconify from "src/components/iconify";
 import KeysDrawer from "src/components/custom-model-dropdown/KeysDrawer";
 import { useDebounce } from "src/hooks/use-debounce";
-import { useFeatureAllowed } from "src/hooks/useCapabilities";
+import {
+  useFeatureAllowed,
+  useFeatureLocked,
+  CAPABILITY,
+} from "src/hooks/useCapabilities";
 import { useNavigate } from "react-router";
 import axios, { endpoints } from "src/utils/axios";
 import { getProviderLogoFilterSx } from "./modelLogo";
@@ -150,8 +154,8 @@ const FAGI_MODELS = [
 
 export const FAGI_MODEL_VALUES = new Set(FAGI_MODELS.map((m) => m.value));
 
-const FAGI_MODEL_OSS_TOOLTIP =
-  "Turing models are not available on self-hosted (OSS) deployments. Select your own model, or upgrade your plan.";
+const FAGI_MODEL_LOCKED_TOOLTIP =
+  "Turing models aren't enabled for this workspace. Select your own model.";
 
 const CHIP_STYLES = {
   backgroundColor: (theme) =>
@@ -669,10 +673,14 @@ const ModelSelector = ({
   const debouncedKbSearch = useDebounce(kbSearch.trim(), 400);
   const [keysDrawerModel, setKeysDrawerModel] = useState(null);
   const navigate = useNavigate();
-  const { allowed: turingAllowed, isLoading: capabilitiesLoading } =
-    useFeatureAllowed("turing_models");
-  const { allowed: falconAllowed } = useFeatureAllowed("falcon_ai");
-  const fagiModelsLocked = !turingAllowed && !capabilitiesLoading;
+  // Fail closed while capabilities load: never flash Turing models as
+  // selectable during the fetch. `fagiModelsDenied` is the *confirmed* denial
+  // (loaded AND not allowed) used only to clear a seeded selection below — we
+  // must not wipe a legitimately-preselected Turing model mid-fetch.
+  const { locked: fagiModelsLocked, isLoading: capabilitiesLoading } =
+    useFeatureLocked(CAPABILITY.TURING_MODELS);
+  const fagiModelsDenied = fagiModelsLocked && !capabilitiesLoading;
+  const { allowed: falconAllowed } = useFeatureAllowed(CAPABILITY.FALCON_AI);
 
   const currentMode = MODES.find((m) => m.value === mode) || MODES[1];
 
@@ -794,12 +802,14 @@ const ModelSelector = ({
     );
   }, [modelSearch]);
 
-  // OSS can't run Turing models, but callers still seed `model` with
+  // When Turing models aren't enabled, callers still seed `model` with
   // "turing_large". Drop it so the pill reads "Select model" instead of
-  // preselecting something the backend would 402 on save.
+  // preselecting something the backend would 402 on save. Gate on the
+  // *confirmed* denial, not the loading-time lock, or we'd clear a legitimate
+  // selection before capabilities resolve.
   useEffect(() => {
-    if (fagiModelsLocked && FAGI_MODEL_VALUES.has(model)) onModelChange("");
-  }, [fagiModelsLocked, model, onModelChange]);
+    if (fagiModelsDenied && FAGI_MODEL_VALUES.has(model)) onModelChange("");
+  }, [fagiModelsDenied, model, onModelChange]);
 
   return (
     <Box
@@ -1168,7 +1178,7 @@ const ModelSelector = ({
               {filteredFagiModels.map((m) => (
                 <Tooltip
                   key={m.value}
-                  title={fagiModelsLocked ? FAGI_MODEL_OSS_TOOLTIP : ""}
+                  title={fagiModelsLocked ? FAGI_MODEL_LOCKED_TOOLTIP : ""}
                   placement="right"
                   arrow
                 >
@@ -1212,9 +1222,7 @@ const ModelSelector = ({
                           color="text.secondary"
                           sx={{ fontSize: "11px" }}
                         >
-                          {fagiModelsLocked
-                            ? "Not available on self-host"
-                            : m.description}
+                          {fagiModelsLocked ? "Not enabled" : m.description}
                         </Typography>
                       </Box>
                       {fagiModelsLocked ? (

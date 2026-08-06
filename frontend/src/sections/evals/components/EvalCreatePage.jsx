@@ -19,7 +19,7 @@ import Iconify from "src/components/iconify";
 import axios, { endpoints } from "src/utils/axios";
 import { useNavigate, useParams } from "react-router";
 import { useSnackbar } from "notistack";
-import { useFeatureAllowed } from "src/hooks/useCapabilities";
+import { useFeatureLocked, CAPABILITY } from "src/hooks/useCapabilities";
 import { FAGI_MODEL_VALUES } from "./ModelSelector";
 
 import { useCreateEval } from "../hooks/useCreateEval";
@@ -44,8 +44,8 @@ import { useAuthContext } from "src/auth/hooks";
 import { PERMISSIONS, RolePermission } from "src/utils/rolePermissionMapping";
 import { buildDataInjection } from "src/sections/common/EvalPicker/evalPickerConfigUtils";
 
-const ERROR_LOCALIZER_OSS_TOOLTIP =
-  "Error Localization is not available on self-hosted (OSS) deployments.";
+const ERROR_LOCALIZER_LOCKED_TOOLTIP =
+  "Error Localization isn't enabled for this workspace.";
 
 const EVAL_TYPE_TABS = [
   { value: "agent", label: "Agents" },
@@ -148,11 +148,11 @@ const EvalCreatePage = () => {
   const canEditEvals =
     RolePermission.EVALS[PERMISSIONS.EDIT_CREATE_DELETE_EVALS][role];
   const { enqueueSnackbar } = useSnackbar();
-  const { allowed: turingAllowed, isLoading: capabilitiesLoading } =
-    useFeatureAllowed("turing_models");
-  const { allowed: agentEvalAllowed } = useFeatureAllowed("agentic_eval");
-  const fagiLocked = !turingAllowed;
-  const agentEvalLocked = !agentEvalAllowed;
+  // Fail closed while capabilities load (both flags true) so we never flash
+  // Turing models or agent evals as available before the fetch resolves.
+  const { locked: fagiLocked } = useFeatureLocked(CAPABILITY.TURING_MODELS);
+  const { locked: agentEvalLocked, isLoading: capabilitiesLoading } =
+    useFeatureLocked(CAPABILITY.AGENTIC_EVAL);
   const createEval = useCreateEval();
   const createComposite = useCreateCompositeEval();
   const testPlaygroundRef = useRef(null);
@@ -180,7 +180,7 @@ const EvalCreatePage = () => {
   const [knowledgeBaseIds, setKnowledgeBaseIds] = useState([]);
   const [contextOptions, setContextOptions] = useState(["variables_only"]);
   const [errorLocalizerEnabled, setErrorLocalizerEnabled] = useState(false);
-  const errorLocalizerActive = errorLocalizerEnabled && agentEvalAllowed;
+  const errorLocalizerActive = errorLocalizerEnabled && !agentEvalLocked;
   const [tags, setTags] = useState([]);
   const [fewShotExamples, setFewShotExamples] = useState([]);
   const [messages, setMessages] = useState([{ role: "system", content: "" }]);
@@ -447,7 +447,7 @@ const EvalCreatePage = () => {
     }
     if (fagiLocked && evalType !== "code" && FAGI_MODEL_VALUES.has(model)) {
       enqueueSnackbar(
-        "Turing models are not available in OSS. Please select your own model.",
+        "Turing models aren't enabled for this workspace. Please select your own model.",
         { variant: "error" },
       );
       return;
@@ -867,7 +867,7 @@ const EvalCreatePage = () => {
                     onChange={(_, val) => {
                       if (agentEvalLocked && val === "agent") {
                         enqueueSnackbar(
-                          "Agent evaluations require an Enterprise (EE) license. Upgrade to EE license key to enable.",
+                          "Agent evaluations aren't enabled for this workspace.",
                           { variant: "info" },
                         );
                         return;
@@ -912,7 +912,7 @@ const EvalCreatePage = () => {
                                 show
                                 type=""
                                 arrow
-                                title="Agent evaluations require an Enterprise (EE) license. Upgrade to EE license key to enable."
+                                title="Agent evaluations aren't enabled for this workspace."
                               >
                                 <Box
                                   sx={{
@@ -1106,7 +1106,7 @@ const EvalCreatePage = () => {
                         show={agentEvalLocked}
                         type=""
                         arrow
-                        title={ERROR_LOCALIZER_OSS_TOOLTIP}
+                        title={ERROR_LOCALIZER_LOCKED_TOOLTIP}
                       >
                         <Box sx={{ display: "inline-flex" }}>
                           <FormControlLabel

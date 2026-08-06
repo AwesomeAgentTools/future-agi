@@ -27,7 +27,7 @@ import React, {
 import { useNavigate, useParams } from "react-router";
 import { useSearchParams } from "react-router-dom";
 import { useSnackbar } from "notistack";
-import { useFeatureAllowed } from "src/hooks/useCapabilities";
+import { useFeatureLocked, CAPABILITY } from "src/hooks/useCapabilities";
 import Iconify from "src/components/iconify";
 import CustomTooltip from "src/components/tooltip/CustomTooltip";
 import axios, { endpoints } from "src/utils/axios";
@@ -66,8 +66,8 @@ import { buildDataInjection } from "src/sections/common/EvalPicker/evalPickerCon
 import { useAuthContext } from "src/auth/hooks";
 import { PERMISSIONS, RolePermission } from "src/utils/rolePermissionMapping";
 
-const ERROR_LOCALIZER_OSS_TOOLTIP =
-  "Error Localization is not available on self-hosted (OSS) deployments.";
+const ERROR_LOCALIZER_LOCKED_TOOLTIP =
+  "Error Localization isn't enabled for this workspace.";
 
 const extract_selected_tools = (tools) => {
   if (Array.isArray(tools)) return tools;
@@ -129,10 +129,10 @@ const EvalDetailPage = () => {
     RolePermission.EVALS[PERMISSIONS.EDIT_CREATE_DELETE_EVALS][role];
   const [searchParams, setSearchParams] = useSearchParams();
   const { enqueueSnackbar } = useSnackbar();
-  const { allowed: turingAllowed } = useFeatureAllowed("turing_models");
-  const { allowed: agentEvalAllowed } = useFeatureAllowed("agentic_eval");
-  const fagiLocked = !turingAllowed;
-  const agentEvalLocked = !agentEvalAllowed;
+  // Fail closed while capabilities load (both flags true) so gated controls
+  // never flash as available before the fetch resolves.
+  const { locked: fagiLocked } = useFeatureLocked(CAPABILITY.TURING_MODELS);
+  const { locked: agentEvalLocked } = useFeatureLocked(CAPABILITY.AGENTIC_EVAL);
 
   const {
     data: evalData,
@@ -171,7 +171,7 @@ const EvalDetailPage = () => {
       "mustache",
   );
   const [errorLocalizerEnabled, setErrorLocalizerEnabled] = useState(false);
-  const errorLocalizerActive = errorLocalizerEnabled && agentEvalAllowed;
+  const errorLocalizerActive = errorLocalizerEnabled && !agentEvalLocked;
 
   // Dataset columns for autocomplete
   const [datasetColumns, setDatasetColumns] = useState([]);
@@ -772,7 +772,7 @@ const EvalDetailPage = () => {
     }
     if (fagiLocked && FAGI_MODEL_VALUES.has(model)) {
       enqueueSnackbar(
-        "Turing models are not available in OSS. Please select your own model.",
+        "Turing models aren't enabled for this workspace. Please select your own model.",
         { variant: "error" },
       );
       return;
@@ -1699,7 +1699,7 @@ const EvalDetailPage = () => {
                       show={agentEvalLocked}
                       type=""
                       arrow
-                      title={ERROR_LOCALIZER_OSS_TOOLTIP}
+                      title={ERROR_LOCALIZER_LOCKED_TOOLTIP}
                     >
                       <Box sx={{ display: "inline-flex" }}>
                         <FormControlLabel

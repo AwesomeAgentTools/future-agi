@@ -1604,17 +1604,34 @@ class AgentEvaluator:
 
     @staticmethod
     def _managed_ai_available() -> bool:
-        """Whether the managed-AI gateway can be used in this deployment.
+        """Whether the managed-AI gateway can be reached in this deployment.
 
-        Managed transport requires cloud or a licensed EE install —
-        anywhere else the activation client fails with ACTIVATION_FAILED,
-        so callers must route direct instead."""
+        Managed transport needs either cloud infra or a self-hosted EE
+        license that actually includes managed Falcon/Turing compute.
+        Anywhere else the activation client fails with ACTIVATION_FAILED,
+        so callers must route the eval's own model through its native
+        provider instead.
+
+        This is a deployment-level question (is the gateway reachable at
+        all), not a per-org entitlement: on cloud the gateway always exists
+        and per-org Turing access is enforced at model selection, so no
+        org_id is needed here. We consult the capability service rather than
+        DeploymentMode.is_ee() so an *expired* or managed-compute-excluded
+        EE license correctly routes direct instead of hitting a gateway that
+        would reject it.
+        """
         try:
-            from ee.usage.deployment import DeploymentMode
-
-            return DeploymentMode.is_cloud() or DeploymentMode.is_ee()
+            from tfc.capabilities import service
+            from tfc.licensing.types import DeploymentLocation
         except ImportError:
             return False
+
+        if service.get_deployment_location() == DeploymentLocation.CLOUD:
+            return True
+        # Self-hosted: reachable only when the license entitles managed
+        # compute. check() consults the license snapshot and is org-agnostic
+        # off-cloud, so no org_id is required.
+        return service.check("falcon_ai").allowed
 
     @staticmethod
     def _provider_for_user_model(model: object) -> str | None:

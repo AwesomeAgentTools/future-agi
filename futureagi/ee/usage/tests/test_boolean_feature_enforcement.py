@@ -1,7 +1,6 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from ee.usage.schemas.events import CheckResult
 from tfc.ee_gating import FeatureUnavailable
 
@@ -76,10 +75,22 @@ class TestBooleanFeatureEnforcement:
             response = view.agreement(request, pk="queue-1")
             assert response.status_code == 200
 
-    @patch("tfc.ee_gating.check_ee_feature")
-    def test_voice_sim_blocked_when_not_allowed(self, mock_check):
-        mock_check.side_effect = FeatureUnavailable(
-            "voice_sim", detail="Voice simulation requires PAYG plan"
+    @patch("ee.usage.deployment.DeploymentMode.is_cloud", return_value=True)
+    @patch("tfc.ee_gates.voice_sim_oss_gate_response", return_value=None)
+    @patch("ee.usage.services.entitlements.Entitlements.check_feature")
+    def test_voice_sim_blocked_when_not_allowed(
+        self, mock_check, _mock_oss_gate, _mock_is_cloud
+    ):
+        # voice_sim is NOT oss_locked: off-cloud it ships open, so the only
+        # block is the cloud per-org entitlement check. Force the cloud path
+        # (code present via oss_gate->None, is_cloud True) and deny the plan
+        # feature, then assert the gate consulted the right entitlement key —
+        # the previous mock target (tfc.ee_gating.check_ee_feature) is not on
+        # the voice path at all, so it proved nothing.
+        mock_check.return_value = CheckResult(
+            allowed=False,
+            reason="Voice simulation requires PAYG plan",
+            error_code="ENTITLEMENT_DENIED",
         )
 
         from simulate.models.agent_definition import AgentDefinition
@@ -95,18 +106,19 @@ class TestBooleanFeatureEnforcement:
         request.organization = request.user.organization
         request.data = {"agent_definition_id": "test-agent"}
 
-        voice_agent = MagicMock(
-            agent_type=AgentDefinition.AgentTypeChoices.VOICE
-        )
+        voice_agent = MagicMock(agent_type=AgentDefinition.AgentTypeChoices.VOICE)
 
-        with patch("simulate.views.run_test.CreateRunTestSerializer") as mock_ser, patch(
-            "simulate.views.run_test.AgentDefinition.objects"
-        ) as mock_agent_qs:
+        with (
+            patch("simulate.views.run_test.CreateRunTestSerializer") as mock_ser,
+            patch("simulate.views.run_test.AgentDefinition.objects") as mock_agent_qs,
+        ):
             mock_ser.return_value.is_valid.return_value = True
             mock_ser.return_value.validated_data = {"agent_definition_id": "test-agent"}
             mock_agent_qs.get.return_value = voice_agent
             response = view.post(request)
-            assert response.status_code == 403
+
+        assert response.status_code == 403
+        mock_check.assert_called_once_with("org-1", "has_voice_sim")
 
     @patch("ee.usage.services.entitlements.Entitlements.check_feature")
     def test_synthetic_data_blocked_when_not_allowed(self, mock_check):
@@ -186,6 +198,13 @@ class TestBooleanFeatureEnforcement:
                     with pytest.raises(FeatureUnavailable, match="Custom roles"):
                         view.post(request)
 
+        # Lock down that the view gated the *right* feature for the right org
+        # — the mock's side_effect raises regardless of args, so without this
+        # the test would pass even if the view checked the wrong capability.
+        feature_arg = mock_check.call_args.args[0]
+        assert getattr(feature_arg, "value", feature_arg) == "custom_roles"
+        assert mock_check.call_args.kwargs["org_id"] == "org-1"
+
     def test_review_workflow_is_oss_baseline_on_queue_create(self):
         """review_workflow is an OSS-baseline feature: queue creation with
         requires_review must never raise the license gate. (Downstream view
@@ -195,9 +214,7 @@ class TestBooleanFeatureEnforcement:
 
         view = AnnotationQueueViewSet()
         view._gm = MagicMock()
-        view.get_serializer = MagicMock(
-            side_effect=RuntimeError("stop after the gate")
-        )
+        view.get_serializer = MagicMock(side_effect=RuntimeError("stop after the gate"))
 
         request = MagicMock()
         request.user.organization.id = "org-1"
@@ -231,6 +248,10 @@ class TestBooleanFeatureEnforcement:
         with pytest.raises(FeatureUnavailable, match="Required labels"):
             view.add_label(request, pk="q-1")
 
+        feature_arg = mock_check.call_args.args[0]
+        assert getattr(feature_arg, "value", feature_arg) == "required_labels"
+        assert mock_check.call_args.kwargs["org_id"] == "org-1"
+
     @pytest.mark.django_db
     @patch("tfc.ee_gating.check_ee_feature")
     def test_required_labels_blocked_on_annotations_create(self, mock_check):
@@ -255,6 +276,10 @@ class TestBooleanFeatureEnforcement:
 
         with pytest.raises(FeatureUnavailable, match="Required labels"):
             view.create(request)
+
+        feature_arg = mock_check.call_args.args[0]
+        assert getattr(feature_arg, "value", feature_arg) == "required_labels"
+        assert mock_check.call_args.kwargs["org_id"] == "org-1"
 
     @patch("ee.usage.services.entitlements.Entitlements.check_feature")
     def test_annotation_summary_blocked_when_not_allowed(self, mock_check):
@@ -296,13 +321,19 @@ class TestBooleanFeatureEnforcement:
         request.organization = request.user.organization
         request.data = {"privacy": {"masking": {"enabled": True}}}
 
-        with patch("agentcc.views.org_config.AgentccOrgConfigWriteSerializer") as mock_ser:
+        with patch(
+            "agentcc.views.org_config.AgentccOrgConfigWriteSerializer"
+        ) as mock_ser:
             mock_ser.return_value.is_valid.return_value = True
             mock_ser.return_value.validated_data = {
                 "privacy": {"masking": {"enabled": True}}
             }
             with pytest.raises(FeatureUnavailable, match="Data masking"):
                 view.create(request)
+
+        feature_arg = mock_check.call_args.args[0]
+        assert getattr(feature_arg, "value", feature_arg) == "data_masking"
+        assert mock_check.call_args.kwargs["org_id"] == "org-1"
 
     @patch("tfc.ee_gating.check_ee_can_create")
     def test_gateway_webhooks_blocked_when_limit_reached(self, mock_can_create):
@@ -328,6 +359,15 @@ class TestBooleanFeatureEnforcement:
             mock_filter.return_value.count.return_value = 3
             with pytest.raises(FeatureUnavailable, match="webhook limit"):
                 view.create(request)
+
+        mock_can_create.assert_called_once()
+        resource_arg = mock_can_create.call_args.args[0]
+        assert getattr(resource_arg, "value", resource_arg) == "gateway_webhooks"
+        assert (
+            mock_can_create.call_args.kwargs["org_id"]
+            == "11111111-1111-1111-1111-111111111111"
+        )
+        assert mock_can_create.call_args.kwargs["current_count"] == 3
 
     @patch("tfc.ee_gating.check_ee_feature")
     def test_workspace_custom_roles_blocked_when_not_allowed(self, mock_check):
@@ -413,7 +453,9 @@ class TestBooleanFeatureEnforcement:
         # queryset out so the entitlement gate is reachable.
         scenario_id = "11111111-1111-1111-1111-111111111111"
         with patch("simulate.views.scenarios.Scenarios.objects") as mock_qs:
-            mock_qs.filter.return_value.select_related.return_value.first.return_value = None
+            mock_qs.filter.return_value.select_related.return_value.first.return_value = (
+                None
+            )
             response = view.post(request, scenario_id=scenario_id)
         assert response.status_code == 403
         mock_check.assert_called_once_with("org-1", "has_agentic_eval")

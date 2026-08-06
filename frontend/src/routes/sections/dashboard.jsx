@@ -1128,15 +1128,25 @@ export const dashboardRoutes = (
           index: true,
           element: <Develop />,
         },
-        // Synthetic data ships open on self-hosted; cloud plans enforce
-        // via the backend capability check.
+        // Synthetic data ships open on self-hosted; cloud plans enforce via
+        // the backend capability check. Gate the routes too (not just the
+        // AddDatasetDrawer tile) so a deep-link on a deployment/plan without
+        // it shows the upgrade screen instead of a page that 402s on generate.
         {
           path: "create-synthetic-dataset",
-          element: <CreateSyntheticData />,
+          element: (
+            <CapabilityGate feature="synthetic_data">
+              <CreateSyntheticData />
+            </CapabilityGate>
+          ),
         },
         {
           path: "edit-synthetic-dataset/:dataset",
-          element: <EditSyntheticDataDrawer />,
+          element: (
+            <CapabilityGate feature="synthetic_data">
+              <EditSyntheticDataDrawer />
+            </CapabilityGate>
+          ),
         },
 
         {

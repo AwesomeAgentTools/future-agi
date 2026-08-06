@@ -79,7 +79,11 @@ def _voice_sim_code_unavailable_response() -> Response:
 
 
 def _is_oss() -> bool:
-    """True when the deployment is OSS (ee/ stripped or DeploymentMode.is_oss)."""
+    """True when the deployment is OSS (ee/ stripped or DeploymentMode.is_oss).
+
+    Early-startup fallback only — prefer `_turing_denied_off_cloud()`, which
+    consults the capability service and also catches self-hosted EE installs
+    whose license doesn't include Turing (a case `is_oss()` alone misses)."""
     try:
         from ee.usage.deployment import DeploymentMode
 
@@ -88,16 +92,49 @@ def _is_oss() -> bool:
         return True  # ee.usage absent → OSS
 
 
+def _turing_denied_off_cloud() -> bool:
+    """Single boundary helper: True when Turing/Protect models aren't
+    available in this deployment and the gate should block/hide them.
+
+    Turing is an ``oss_locked`` capability, so off-cloud it needs either the
+    OSS build (never) or a self-hosted EE license that actually includes it.
+    We route through ``capability_service.check("turing_models")`` so an
+    EE deployment *without* Turing in its license is correctly denied —
+    something the older ``DeploymentMode.is_oss()`` probe let slip through
+    (is_oss() is False for any EE flavor, licensed or not).
+
+    Cloud is intentionally a no-op here (returns False): per-org Turing
+    entitlement on cloud is enforced by the usage/entitlement layer, not this
+    gate, so blocking here would double-gate and can't see the org context.
+
+    Falls back to the deployment probe during early startup, before the
+    capability service is wired in ``AppConfig.ready``."""
+    try:
+        from tfc.capabilities import service as capability_service
+        from tfc.licensing.types import DeploymentLocation
+    except Exception:
+        return _is_oss()  # capability layer unimportable → probe deployment
+
+    if not capability_service.is_configured():
+        return _is_oss()  # early startup → probe deployment
+
+    if capability_service.get_deployment_location() == DeploymentLocation.CLOUD:
+        return False  # cloud: enforced by the per-org entitlement layer
+
+    return not capability_service.check("turing_models").allowed
+
+
 def strip_turing_from_config_options(
     config_params_option: dict | None,
 ) -> dict:
-    """When running OSS, drop Turing/Protect models from the `model` option
-    list so the frontend dropdown never offers a model the gate would 402.
+    """When Turing models aren't available in this deployment, drop
+    Turing/Protect models from the `model` option list so the frontend
+    dropdown never offers a model the gate would 402.
 
     Returns a copy; the original dict is not mutated. No-op on cloud."""
     if not config_params_option:
         return config_params_option or {}
-    if not _is_oss():
+    if not _turing_denied_off_cloud():
         return config_params_option
 
     model_options = config_params_option.get("model")
@@ -142,20 +179,18 @@ def turing_oss_gate_for_template(
 
 def turing_oss_gate_response(model_name: object) -> Response | None:
     """Return a 402 response if the model is a Turing/Protect model AND
-    the deployment is OSS. Return None otherwise so the caller proceeds.
+    the deployment doesn't include Turing (OSS build, or a self-hosted EE
+    install whose license omits it). Return None otherwise so the caller
+    proceeds — including on cloud, where per-org entitlement is enforced by
+    the usage layer rather than this gate.
 
     Use at the top of any view that accepts a model selection and would
     otherwise route into ee/turing code."""
     if not is_turing_model(model_name):
         return None
 
-    try:
-        from ee.usage.deployment import DeploymentMode
-
-        if not DeploymentMode.is_oss():
-            return None
-    except ImportError:
-        pass  # ee.usage absent → treat as OSS
+    if not _turing_denied_off_cloud():
+        return None
 
     message = (
         "Turing and Protect models are not available on OSS. "

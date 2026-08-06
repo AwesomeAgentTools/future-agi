@@ -16,7 +16,7 @@ import {
 import CustomTooltip from "src/components/tooltip/CustomTooltip";
 import { LoadingButton } from "@mui/lab";
 import { enqueueSnackbar } from "notistack";
-import { useFeatureAllowed } from "src/hooks/useCapabilities";
+import { useFeatureLocked, CAPABILITY } from "src/hooks/useCapabilities";
 import { FAGI_MODEL_VALUES } from "src/sections/evals/components/ModelSelector";
 import PropTypes from "prop-types";
 import React, {
@@ -82,8 +82,8 @@ import {
 } from "./evalPickerConfigUtils";
 import RequiredMark from "src/components/RequiredMark";
 
-const ERROR_LOCALIZER_OSS_TOOLTIP =
-  "Error Localization is not available on self-hosted (OSS) deployments.";
+const ERROR_LOCALIZER_LOCKED_TOOLTIP =
+  "Error Localization isn't enabled for this workspace.";
 
 const build_tools_payload = (selected_tools) =>
   (selected_tools || []).reduce((acc, tool_name) => {
@@ -120,10 +120,10 @@ const getEvalPromptText = (evalData, config = {}) =>
   evalData?.instructions || config?.rule_prompt || "";
 
 const EvalPickerConfigFull = ({ evalData, onBack, onSave, isSaving }) => {
-  const { allowed: turingAllowed } = useFeatureAllowed("turing_models");
-  const { allowed: agentEvalAllowed } = useFeatureAllowed("agentic_eval");
-  const fagiLocked = !turingAllowed;
-  const agentEvalLocked = !agentEvalAllowed;
+  // Fail closed while capabilities load (both flags true) so gated controls
+  // never flash as available before the fetch resolves.
+  const { locked: fagiLocked } = useFeatureLocked(CAPABILITY.TURING_MODELS);
+  const { locked: agentEvalLocked } = useFeatureLocked(CAPABILITY.AGENTIC_EVAL);
   const {
     source,
     sourceId,
@@ -179,7 +179,7 @@ const EvalPickerConfigFull = ({ evalData, onBack, onSave, isSaving }) => {
   const [knowledgeBaseIds, setKnowledgeBaseIds] = useState([]);
   const [contextOptions, setContextOptions] = useState(["variables_only"]);
   const [errorLocalizerEnabled, setErrorLocalizerEnabled] = useState(false);
-  const errorLocalizerActive = errorLocalizerEnabled && agentEvalAllowed;
+  const errorLocalizerActive = errorLocalizerEnabled && !agentEvalLocked;
   // Name for the UserEvalMetric — defaults to template name, user can customise
   const [evalName, setEvalName] = useState("");
   const [dataReady, setDataReady] = useState(false);
@@ -836,7 +836,7 @@ const EvalPickerConfigFull = ({ evalData, onBack, onSave, isSaving }) => {
     }
     if (fagiLocked && FAGI_MODEL_VALUES.has(model)) {
       enqueueSnackbar(
-        "Turing models are not available in OSS. Please select your own model.",
+        "Turing models aren't enabled for this workspace. Please select your own model.",
         { variant: "error" },
       );
       return;
@@ -1704,7 +1704,7 @@ const EvalPickerConfigFull = ({ evalData, onBack, onSave, isSaving }) => {
                   show={agentEvalLocked}
                   type=""
                   arrow
-                  title={ERROR_LOCALIZER_OSS_TOOLTIP}
+                  title={ERROR_LOCALIZER_LOCKED_TOOLTIP}
                 >
                   <FormControlLabel
                     control={

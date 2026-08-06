@@ -47,7 +47,7 @@ import {
   DEFAULT_EVAL_MODEL,
 } from "src/sections/common/EvaluationDrawer/common";
 import { FAGI_MODEL_VALUES } from "src/sections/evals/components/ModelSelector";
-import { useFeatureAllowed } from "src/hooks/useCapabilities";
+import { useFeatureLocked, CAPABILITY } from "src/hooks/useCapabilities";
 
 const getDefaultValues = (evalConfig, editMode, allColumns, fagiLocked) => {
   const mapping = {};
@@ -187,8 +187,9 @@ const EvaluationConfigureFormChild = ({
     () => allowedColumnFilter(evalConfig, allColumns),
     [allColumns, evalConfig],
   );
-  const { allowed: turingAllowed } = useFeatureAllowed("turing_models");
-  const fagiLocked = !turingAllowed;
+  // Fail closed while capabilities load (locked===true) so form defaults never
+  // seed a Turing model the deployment can't run.
+  const { locked: fagiLocked } = useFeatureLocked(CAPABILITY.TURING_MODELS);
   const [rulePromptData, setRulePromptData] = useState("");
   const [isRulePrompt, setIsRulePrompt] = useState(false);
 
