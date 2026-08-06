@@ -641,8 +641,8 @@ export const RunPromptForm = React.forwardRef(
         meta: { errorHandled: true },
         onError: (error) => {
           const message =
-            error?.response?.data?.detail ||
-            error?.response?.data?.message ||
+            error?.detail ||
+            error?.message ||
             error?.result ||
             "Failed to update Run Prompt";
           enqueueSnackbar(message, {
@@ -1128,8 +1128,9 @@ export const RunPromptForm = React.forwardRef(
         setOpenRunPreViewModal(false);
       } catch (error) {
         const message =
-          error?.response?.data?.detail ||
-          error?.response?.data?.message ||
+          error?.detail ||
+          error?.message ||
+          error?.result ||
           "Failed to run prompt";
         enqueueSnackbar(message, { variant: "error" });
         logger.error("Failed to run prompt", error);

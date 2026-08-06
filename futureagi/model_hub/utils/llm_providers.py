@@ -19,7 +19,7 @@ def get_provider_for_model(
             organization_id=organization_id,
             workspace_id=workspace_id,
         )
-    except (ValueError, Exception):
+    except ValueError:
         logger.warning("provider_lookup_failed", model_name=model_name)
         return None
 
@@ -34,8 +34,17 @@ def get_provider_logo_url(
     return ProviderLogoUrls.get_url_by_provider(provider)
 
 
-def is_model_in_catalog(model_name: str) -> bool:
-    """Check if a model name exists in the current available models catalog."""
+def is_model_in_catalog(model_name: str, organization_id=None) -> bool:
+    """Check if a model name exists in the catalog (including custom models)."""
     from agentic_eval.core_evals.run_prompt.available_models import AVAILABLE_MODELS
 
-    return any(m["model_name"] == model_name for m in AVAILABLE_MODELS)
+    if any(m["model_name"] == model_name for m in AVAILABLE_MODELS):
+        return True
+    if organization_id:
+        from model_hub.models.custom_models import CustomAIModel
+
+        return CustomAIModel.objects.filter(
+            organization_id=organization_id,
+            user_model_id=model_name,
+        ).exists()
+    return False

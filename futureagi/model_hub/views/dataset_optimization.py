@@ -199,7 +199,8 @@ class DatasetOptimizationViewSet(BaseModelViewSetMixin, ModelViewSet):
     def create(self, request, *args, **kwargs):
         try:
             model_name = (request.data.get("optimizer_config") or {}).get("model_name")
-            if model_name and not is_model_in_catalog(model_name):
+            org = getattr(request, "organization", None) or request.user.organization
+            if model_name and not is_model_in_catalog(model_name, organization_id=org.id):
                 return self._gm.bad_request(
                     f"Model '{model_name}' is no longer available. "
                     "Please select a supported model to run optimization."

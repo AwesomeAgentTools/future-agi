@@ -1051,14 +1051,13 @@ class LitellmAPIView(CreateAPIView):
 
         validated_data = request.validated_data
 
+        organization = _request_organization(request)
         model_name = validated_data.get("model")
-        if model_name and not is_model_in_catalog(model_name):
+        if model_name and not is_model_in_catalog(model_name, organization_id=organization.id):
             return self._gm.bad_request(
                 f"Model '{model_name}' is no longer available. "
                 "Please update the column to use a supported model before running."
             )
-
-        organization = _request_organization(request)
         dataset = (
             _request_dataset_queryset(request)
             .filter(id=validated_data.get("dataset_id"))
@@ -1734,7 +1733,7 @@ class AddRunPromptColumnView(APIView):
                 return self._gm.bad_request(get_error_message("COLUMN_NAME_EXISTS"))
 
             model_name = config.get("model")
-            if model_name and not is_model_in_catalog(model_name):
+            if model_name and not is_model_in_catalog(model_name, organization_id=organization.id):
                 return self._gm.bad_request(
                     f"Model '{model_name}' is no longer available. "
                     "Please select a supported model."
@@ -2011,7 +2010,7 @@ class EditRunPromptColumnView(APIView):
                 return self._gm.not_found("Column or dataset not found")
 
             model_name = config.get("model")
-            if model_name and not is_model_in_catalog(model_name):
+            if model_name and not is_model_in_catalog(model_name, organization_id=dataset.organization_id):
                 return self._gm.bad_request(
                     f"Model '{model_name}' is no longer available. "
                     "Please select a supported model."
@@ -2777,12 +2776,16 @@ class RunPromptForRowsView(APIView):
                 if set(map(str, scoped_rows)) != requested_row_ids:
                     return self._gm.not_found("Row not found")
 
-            for rp in run_prompters:
-                if rp.model and not is_model_in_catalog(rp.model):
-                    return self._gm.bad_request(
-                        f"Model '{rp.model}' is no longer available. "
-                        "Please update the column to use a supported model before running."
-                    )
+            deprecated_models = [
+                rp.model for rp in run_prompters
+                if rp.model and not is_model_in_catalog(rp.model, organization_id=user_org_id)
+            ]
+            if deprecated_models:
+                names = ", ".join(f"'{m}'" for m in set(deprecated_models))
+                return self._gm.bad_request(
+                    f"Model(s) {names} no longer available. "
+                    "Please update the column(s) to use supported models before running."
+                )
 
             run_prompt = None
             if selected_all_rows:

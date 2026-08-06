@@ -316,6 +316,12 @@ class DatasetOptimizationListSerializer(serializers.ModelSerializer):
     column_id = serializers.UUIDField(source="column.id", read_only=True)
     model_deprecated = serializers.SerializerMethodField()
 
+    def _org_id(self, obj):
+        try:
+            return obj.column.dataset.organization_id
+        except AttributeError:
+            return None
+
     class Meta:
         model = OptimizeDataset
         fields = [
@@ -354,7 +360,7 @@ class DatasetOptimizationListSerializer(serializers.ModelSerializer):
         model_name = self._model_name(obj)
         if not model_name:
             return False
-        return not is_model_in_catalog(model_name)
+        return not is_model_in_catalog(model_name, organization_id=self._org_id(obj))
 
 
 class DatasetOptimizationStepSerializer(serializers.ModelSerializer):
@@ -536,7 +542,12 @@ class DatasetOptimizationDetailSerializer(serializers.ModelSerializer):
         model_name = self._model_name(obj)
         if not model_name:
             return False
-        return not is_model_in_catalog(model_name)
+        org_id = None
+        try:
+            org_id = obj.column.dataset.organization_id
+        except AttributeError:
+            pass
+        return not is_model_in_catalog(model_name, organization_id=org_id)
 
     @swagger_serializer_method(
         serializer_or_field=DatasetOptimizationParameterItemSerializer(many=True)
