@@ -46,5 +46,6 @@ def is_model_in_catalog(model_name: str, organization_id=None) -> bool:
         return CustomAIModel.objects.filter(
             organization_id=organization_id,
             user_model_id=model_name,
+            deleted=False,
         ).exists()
     return False
