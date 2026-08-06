@@ -106,7 +106,11 @@ class DatasetOptimizationViewSet(BaseModelViewSetMixin, ModelViewSet):
         # Note: We don't call super().get_queryset() because BaseModelViewSetMixin
         # adds a deleted=False filter, but OptimizeDataset doesn't have that field
         queryset = (
-            self.queryset.filter(
+            self.queryset.select_related(
+                "column__dataset__organization",
+                "optimizer_model",
+            )
+            .filter(
                 column__dataset__organization=user_organization,
                 column__dataset__deleted=False,
                 column__deleted=False,
