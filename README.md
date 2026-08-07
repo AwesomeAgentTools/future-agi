@@ -54,11 +54,13 @@
   Video: https://www.youtube.com/watch?v=6keOTAOUUWI
   GitHub's markdown sanitizer strips <iframe>/<video> but leaves the raw tag
   text behind, so an embed renders as a wall of markup on the repo page. We
-  use a clickable YouTube thumbnail that opens the video in a new tab instead.
+  use the video's still frame with a Play badge overlaid, linked to YouTube —
+  the same treatment PostHog uses. Asset: frontend/public/assets/readme/
+  demo-thumbnail.png (regenerate it whenever the demo video changes).
 -->
 <div align="center">
   <a href="https://www.youtube.com/watch?v=6keOTAOUUWI">
-    <img alt="Future AGI — trace an agent, run evals, simulate, and guardrail in one platform (watch on YouTube)" src="https://img.youtube.com/vi/6keOTAOUUWI/maxresdefault.jpg" width="720">
+    <img alt="Watch the demo — trace an agent, run evals, simulate, and guardrail on one platform" src="frontend/public/assets/readme/demo-thumbnail.png" width="720">
   </a>
 </div>
 
