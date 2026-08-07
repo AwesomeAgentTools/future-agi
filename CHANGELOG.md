@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.26.0](https://github.com/future-agi/future-agi/compare/v1.25.0...v1.26.0) (2026-08-07)
+
+
+### Features
+
+* **ee:** ship EE code in-repo behind license gating (TH-7256) ([c62c6be](https://github.com/future-agi/future-agi/commit/c62c6be305c461bc1d77d469854760d519e49bf8))
+
+
+### Bug Fixes
+
+* **accounts:** skip activate_account IP rate limit in OSS mode and add OSS-skip test coverage ([ac12a50](https://github.com/future-agi/future-agi/commit/ac12a50b4a9b1a4f51ae1d423b4e44933d6103e2))
+* **accounts:** skip IP rate limiting in OSS mode ([872487e](https://github.com/future-agi/future-agi/commit/872487e6492b9081e928aed20e2b8a424c579a7f))
+* **accounts:** skip IP rate limiting in OSS mode ([2e5cf01](https://github.com/future-agi/future-agi/commit/2e5cf016534e21bc242ed7e81e575366e133aeb1))
+* **frontend:** sync row highlight with drawer arrow navigation ([253d5df](https://github.com/future-agi/future-agi/commit/253d5df9e2815ddb30f8d38c41cb7307cbd390a0))
+* **frontend:** use snake_case dataset_id in HuggingFace import redirect ([09b4f8a](https://github.com/future-agi/future-agi/commit/09b4f8a9ecbed234d57154911ca270887357966d))
+* **frontend:** use snake_case dataset_id in HuggingFace import redirect ([82ba8a3](https://github.com/future-agi/future-agi/commit/82ba8a3477b859ae46d19b064d43f3b105d155e8))
+* **gateway:** point org config provider links at the real dashboard route [TH-7271] ([#1998](https://github.com/future-agi/future-agi/issues/1998)) ([fa85eec](https://github.com/future-agi/future-agi/commit/fa85eec711a2c421954b95934c880ff5e7260d60))
+* **gating:** KB patch stays oss_baseline; reconcile agent-eval block test ([76c7c9c](https://github.com/future-agi/future-agi/commit/76c7c9c834bfe1b7d296151f1cecb05bb32141d3))
+* **gating:** restore lost view gates and reconcile tests with two-tier design ([3ed7ea9](https://github.com/future-agi/future-agi/commit/3ed7ea9208ba4be50528d241c0358953fd1fb596))
+* **usage:** restore deployment_telemetry_schema wire contract (ee parity) ([ea2c95c](https://github.com/future-agi/future-agi/commit/ea2c95cc8329926f2f7fe0312763aa66041d9f10))
+
 ## [1.25.0](https://github.com/future-agi/future-agi/compare/v1.24.3...v1.25.0) (2026-08-07)
 
 
