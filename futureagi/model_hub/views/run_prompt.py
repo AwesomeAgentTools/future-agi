@@ -1049,8 +1049,16 @@ class LitellmAPIView(CreateAPIView):
     def post(self, request, *args, **kwargs):
         from django.db import transaction
 
+        from tfc.ee_gates import turing_oss_gate_response
+
         validated_data = request.validated_data
 
+        gate_response = turing_oss_gate_response(validated_data.get("model"))
+        if gate_response is not None:
+            return gate_response
+
+        # `validated_request` owns request-shape validation; from here the view
+        # handles only domain execution errors.
         organization = _request_organization(request)
         organization_id = organization.id if organization else None
         model_name = validated_data.get("model")
