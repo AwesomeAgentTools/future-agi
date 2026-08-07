@@ -423,11 +423,19 @@ class TraceScanner:
                 }
         except Exception as e:
             logger.exception("scanner_llm_call_failed", error=str(e))
+            # Retryable: the scan did not happen, so the trace is unknown rather
+            # than clean. Persisting a row here — of any status — would retire it
+            # permanently, because the already-scanned anti-join treats FAILED
+            # exactly like COMPLETED. A gateway outage would then silently take
+            # every trace it touched out of the feed for good. Traces that fail
+            # forever are still bounded: the sweep abandons anything left
+            # unscanned past the watermark lag with a durable FAILED marker.
             return [
                 ScanResult(
                     trace_id=trace_map[label][0]["trace_id"],
                     has_issues=False,
                     error=str(e),
+                    retryable=True,
                 )
                 for label in trace_map
             ]
