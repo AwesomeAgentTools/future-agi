@@ -405,3 +405,76 @@ class TestAbsenceSurvivesFrameworkScaffolding:
             TestAbsenceClaimsAreVerifiedNotQuoted._parsed_completion("dup"), "seen", trace,
         )
         assert out["issues"] == [], "an absence held against only one copy of the span"
+
+
+class TestTruncationIsQuotedButAbsenceIsNot:
+    """One dimension, two claims, two different burdens of proof.
+
+    "Produced nothing" is an absence: unquotable exactly when true, so it is
+    verified against the named span instead. "Stopped mid-answer" is not an
+    absence — there is a response, the prompt asks for its cut-off ending to be
+    quoted, and a quote nobody can find is invented for the same reason it is in
+    every other dimension. Exempting the whole dimension from quoting let the
+    second kind through unchecked.
+    """
+
+    CUT = "Your three invoices total $412.90 and the next one is due on the"
+
+    @staticmethod
+    def _trace(out):
+        return {"trace_id": "t", "spans": [{
+            "span_id": "root", "span_name": "agent",
+            "span_attributes": {"input.value": "list my invoices",
+                                "output.value": out},
+            "child_spans": [],
+        }]}
+
+    @staticmethod
+    def _parsed(evidence):
+        return {
+            "dimensions": {"completion": {"evidence": evidence, "verdict": "FAIL",
+                                          "span": "root"}},
+            "issues": [{"dim": "completion", "cat": "Incomplete Response",
+                        "brief": "response stops mid-sentence", "conf": "H"}],
+        }
+
+    def test_a_real_quote_of_the_cut_ending_survives(self):
+        out = TraceScanner._v8_to_trace_output(
+            self._parsed(self.CUT), f"out: {self.CUT}", self._trace(self.CUT),
+        )
+        assert len(out["issues"]) == 1, "a genuine truncation was gated away"
+
+    def test_an_invented_quote_of_a_truncation_is_dropped(self):
+        out = TraceScanner._v8_to_trace_output(
+            self._parsed("the agent stopped after acknowledging the request"),
+            f"out: {self.CUT}",
+            self._trace(self.CUT),
+        )
+        assert out["issues"] == [], "an unquotable truncation claim reached the user"
+
+    def test_an_absence_still_needs_no_quote(self):
+        """The exemption must survive: there is nothing to quote when the span
+        recorded no output at all."""
+        out = TraceScanner._v8_to_trace_output(
+            self._parsed(""), "out:", self._trace(""),
+        )
+        assert len(out["issues"]) == 1, "the absence exemption was lost"
+
+
+class TestAFinishedAnswerIsNotReadAsCutOff:
+    """The tail test fails open — an ending it does not recognise keeps the
+    claim alive and reaches the user, so every plausible finish belongs here."""
+
+    @pytest.mark.parametrize("ending", [
+        "Your three invoices come to a total of 412.90",
+        "Here is the query you asked for:\n```sql\nSELECT 1;\n```",
+        "All three tickets are now closed and resolved 🎉",
+        "The report is attached and the totals reconcile)",
+    ])
+    def test_complete_answers_are_not_truncations(self, ending):
+        assert not _completion_claim_holds(ending), f"read as cut off: {ending!r}"
+
+    def test_a_genuine_mid_word_cut_is_still_caught(self):
+        assert _completion_claim_holds(
+            "Your three invoices total $412.90 and the next one is due on the four"
+        )

@@ -63,6 +63,8 @@ _EVIDENCE_TRIGRAM_FLOOR = 0.8
 _ABSENCE_DIMENSION = "completion"
 # A response shorter than this is not a real answer to anything.
 _EMPTY_RESPONSE_CHARS = 24
+# Characters a finished answer plausibly ends on.
+_TERMINATORS = ".!?\"')]}>…`"
 
 
 def _trace_has_captured_content(trace) -> bool:
@@ -129,6 +131,16 @@ def _final_response_output(trace, span_id):
 # why it names the span; the gate only checks what it named.
 
 
+def _is_truncation_not_absence(raw_output) -> bool:
+    """Is the claim "it stopped mid-answer" rather than "it said nothing"?
+
+    Only the first has anything to quote, so only the first carries the quoting
+    burden. The line between them is the same floor an absence uses, because an
+    empty provider envelope unwraps to a short placeholder rather than to "".
+    """
+    return len(str(unwrap_output(raw_output) or "").strip()) >= _EMPTY_RESPONSE_CHARS
+
+
 def _completion_claim_holds(result_text) -> bool:
     """Is the agent's response actually missing or cut short?
 
@@ -144,7 +156,15 @@ def _completion_claim_holds(result_text) -> bool:
     if len(text) < _EMPTY_RESPONSE_CHARS:
         return True
     # Ends without terminal punctuation or a closing bracket: cut mid-thought.
-    return text[-1] not in ".!?\"')]}>…"
+    # The terminator set is deliberately wide, because this test fails OPEN — an
+    # ending it does not recognise keeps the claim alive and reaches the user. A
+    # response ending in a bare figure ("...bringing the total to 412.90"), a
+    # closed code fence, or an emoji is a complete answer, and every one of those
+    # read as truncated before they were listed here.
+    last = text[-1]
+    if last in _TERMINATORS or last.isdigit() or not last.isascii():
+        return False
+    return not text.endswith("```")
 
 
 def _norm_for_match(s) -> str:
@@ -629,6 +649,21 @@ class TraceScanner:
                     # empty, and raw JSON ending in "}" must not read as a
                     # cleanly terminated answer.
                     or not _completion_claim_holds(unwrap_output(named_output))
+                    # Two different claims share this dimension. "Produced
+                    # nothing" is an absence and is exempt from quoting. "Stopped
+                    # mid-answer" is not — there is a response, the prompt asks
+                    # for the cut-off ending to be quoted, and a quote that
+                    # cannot be found in what the model was shown is invented
+                    # here for the same reason it is anywhere else. The two are
+                    # told apart by the same floor that defines an absence, not
+                    # by mere non-emptiness: an empty provider envelope unwraps
+                    # to a short placeholder, which is still an absence and has
+                    # nothing to quote.
+                    or (
+                        hay
+                        and _is_truncation_not_absence(named_output)
+                        and not _evidence_is_quotable(v.get("evidence"), hay)
+                    )
                 ):
                     unverified.append(k)
                     continue
