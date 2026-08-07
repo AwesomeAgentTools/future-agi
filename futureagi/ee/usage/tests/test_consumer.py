@@ -52,14 +52,29 @@ def free_sub(db, org):
     )
 
 
+_VOLATILE_PATTERNS = ("usage:*", "plan:*", "pause:*", "budget:*")
+
+
+def _purge(r):
+    for pattern in _VOLATILE_PATTERNS:
+        for key in r.keys(pattern):
+            r.delete(key)
+
+
 @pytest.fixture
 def redis_client():
     r = get_redis()
+    # Purge on the way in as well as out. Redis outlives the per-test database
+    # rollback, so an event left in the stream by any earlier test names an
+    # organization whose row is already gone; draining it here writes a
+    # UsageEventLog with a dangling FK and the test errors in teardown when
+    # SET CONSTRAINTS ALL IMMEDIATE runs. Cleaning up afterwards only protects
+    # against tests that use this fixture — the pollution comes from ones that
+    # do not.
+    _purge(r)
     _ensure_consumer_group()
     yield r
-    for pattern in ("usage:*", "plan:*", "pause:*", "budget:*"):
-        for key in r.keys(pattern):
-            r.delete(key)
+    _purge(r)
 
 
 def _period_key(org_id, dimension: str) -> str:
