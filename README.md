@@ -52,12 +52,14 @@
 <!--
   [MARKETING] hero-demo (YouTube)
   Video: https://www.youtube.com/watch?v=6keOTAOUUWI
-  Embedded as an <iframe> so it plays inline on surfaces that render raw HTML.
-  Note: GitHub sanitizes <iframe> out of README markdown, so this block does
-  not render on the repo page itself.
+  GitHub's markdown sanitizer strips <iframe>/<video> but leaves the raw tag
+  text behind, so an embed renders as a wall of markup on the repo page. We
+  use a clickable YouTube thumbnail that opens the video in a new tab instead.
 -->
 <div align="center">
-  <iframe width="720" height="405" src="https://www.youtube.com/embed/6keOTAOUUWI" title="Future AGI — trace an agent, run evals, simulate, and guardrail in one platform" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+  <a href="https://www.youtube.com/watch?v=6keOTAOUUWI">
+    <img alt="Future AGI — trace an agent, run evals, simulate, and guardrail in one platform (watch on YouTube)" src="https://img.youtube.com/vi/6keOTAOUUWI/maxresdefault.jpg" width="720">
+  </a>
 </div>
 
 ---
