@@ -10,11 +10,21 @@ import asyncio
 from typing import List
 
 import pytest
-
 from ee.evals.llm.agent_evaluator.context import budget
 from ee.evals.llm.agent_evaluator.context.client import EvalLLMClient
 from ee.evals.llm.agent_evaluator.context.digest import DIGEST_OPEN
 from ee.falcon_ai.llm_client import FalconLLMClient
+
+
+@pytest.fixture(autouse=True)
+def _restore_falcon_stream():
+    """These tests assign FalconLLMClient.stream_completion on the CLASS;
+    without restore the stub leaks into every later test in the process
+    (e.g. test_managed_clients saw the stub's chunks instead of its mock).
+    """
+    original = FalconLLMClient.stream_completion
+    yield
+    FalconLLMClient.stream_completion = original
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -24,7 +34,11 @@ from ee.falcon_ai.llm_client import FalconLLMClient
 
 def _drain_sync(coro):
     """Run an async coroutine to completion synchronously."""
-    return asyncio.get_event_loop().run_until_complete(coro) if False else asyncio.run(coro)
+    return (
+        asyncio.get_event_loop().run_until_complete(coro)
+        if False
+        else asyncio.run(coro)
+    )
 
 
 async def _drain(agen):
@@ -44,12 +58,16 @@ def _make_stub_client(streamed_text: str = "ACK", model: str = "turing_large"):
 
     async def fake_stream(self, messages, tools=None):
         captured["calls"] += 1
-        captured["forwarded"].append([dict(m) if isinstance(m, dict) else m for m in messages])
+        captured["forwarded"].append(
+            [dict(m) if isinstance(m, dict) else m for m in messages]
+        )
         yield {"choices": [{"delta": {"content": streamed_text}}]}
 
     # Patch on FalconLLMClient class so super().stream_completion(...) hits our stub
     FalconLLMClient.stream_completion = fake_stream
-    client = EvalLLMClient(provider="turing", model=model, max_tokens=1024, temperature=0.0)
+    client = EvalLLMClient(
+        provider="turing", model=model, max_tokens=1024, temperature=0.0
+    )
     return client, captured
 
 
@@ -188,7 +206,9 @@ def test_l3b_compacting_flag_toggles_during_summarizer_call():
         yield {"choices": [{"delta": {"content": "synthetic digest"}}]}
 
     FalconLLMClient.stream_completion = fake_stream
-    client = EvalLLMClient(provider="turing", model="turing_large", max_tokens=1024, temperature=0.0)
+    client = EvalLLMClient(
+        provider="turing", model="turing_large", max_tokens=1024, temperature=0.0
+    )
 
     # Build messages substantially over soft budget — light_compact must
     # not be able to bring it under 80K alone, so L3b is reached.
@@ -226,13 +246,18 @@ def test_l3b_digest_attached_to_first_user_anchor_with_sentinels():
         yield {"choices": [{"delta": {"content": "synthetic digest content"}}]}
 
     FalconLLMClient.stream_completion = fake_stream
-    client = EvalLLMClient(provider="turing", model="turing_large", max_tokens=1024, temperature=0.0)
+    client = EvalLLMClient(
+        provider="turing", model="turing_large", max_tokens=1024, temperature=0.0
+    )
 
     chunk = "z" * 50_000
     messages = (
         [{"role": "system", "content": "SYS"}]
         + [{"role": "user", "content": "USR ORIGINAL"}]
-        + [{"role": "assistant" if i % 2 == 0 else "user", "content": chunk} for i in range(25)]
+        + [
+            {"role": "assistant" if i % 2 == 0 else "user", "content": chunk}
+            for i in range(25)
+        ]
     )
     asyncio.run(_drain(client.stream_completion(messages)))
 
@@ -264,18 +289,27 @@ def test_l3c_drops_paired_assistant_tool_calls_never_orphan():
         yield {"choices": [{"delta": {"content": ""}}]}
 
     FalconLLMClient.stream_completion = fake_stream
-    client = EvalLLMClient(provider="turing", model="turing_large", max_tokens=1024, temperature=0.0)
+    client = EvalLLMClient(
+        provider="turing", model="turing_large", max_tokens=1024, temperature=0.0
+    )
 
     # Construct anchor + lots of assistant/tool pairs, well over hard budget
     chunk = "z" * 40_000  # ~11.4k tokens
     pairs = []
     for i in range(15):
-        pairs.append({
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [{"id": f"call_{i}", "type": "function",
-                            "function": {"name": "x", "arguments": "{}"}}],
-        })
+        pairs.append(
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": f"call_{i}",
+                        "type": "function",
+                        "function": {"name": "x", "arguments": "{}"},
+                    }
+                ],
+            }
+        )
         pairs.append({"role": "tool", "tool_call_id": f"call_{i}", "content": chunk})
 
     messages = (
@@ -308,7 +342,9 @@ def test_l3c_never_drops_anchors():
         yield {"choices": [{"delta": {"content": ""}}]}
 
     FalconLLMClient.stream_completion = fake_stream
-    client = EvalLLMClient(provider="turing", model="turing_large", max_tokens=1024, temperature=0.0)
+    client = EvalLLMClient(
+        provider="turing", model="turing_large", max_tokens=1024, temperature=0.0
+    )
 
     chunk = "z" * 40_000
     messages = (
@@ -319,7 +355,9 @@ def test_l3c_never_drops_anchors():
     asyncio.run(_drain(client.stream_completion(messages)))
 
     # Both anchors must still be present
-    sys_msgs = [m for m in final_forwarded if isinstance(m, dict) and m.get("role") == "system"]
+    sys_msgs = [
+        m for m in final_forwarded if isinstance(m, dict) and m.get("role") == "system"
+    ]
     text_blob = " ".join(str(m.get("content", "")) for m in final_forwarded)
     assert any("ANCHOR_SYS_MARKER" in str(s.get("content", "")) for s in sys_msgs)
     assert "ANCHOR_USR_MARKER" in text_blob
@@ -334,11 +372,14 @@ def test_l4_soft_fails_and_stashes_marker():
     """When the cascade can't bring the prompt under guard, L4 must
     record ``last_oversized_attempt`` and STILL call the underlying
     LLM (no raise)."""
+
     async def fake_stream(self, messages, tools=None):
         yield {"choices": [{"delta": {"content": ""}}]}
 
     FalconLLMClient.stream_completion = fake_stream
-    client = EvalLLMClient(provider="turing", model="turing_large", max_tokens=1024, temperature=0.0)
+    client = EvalLLMClient(
+        provider="turing", model="turing_large", max_tokens=1024, temperature=0.0
+    )
 
     # Build > 180K guard tokens of unsummarizable content. Use a single
     # huge multimodal message (L1 skips it; light_compact preserves it;
@@ -351,7 +392,13 @@ def test_l4_soft_fails_and_stashes_marker():
         + [
             {
                 "role": "user",
-                "content": [{"type": "input_audio", "input_audio": {"data": "B", "format": "wav"}}] * 5,
+                "content": [
+                    {
+                        "type": "input_audio",
+                        "input_audio": {"data": "B", "format": "wav"},
+                    }
+                ]
+                * 5,
             }
             for _ in range(30)
         ]
@@ -359,7 +406,10 @@ def test_l4_soft_fails_and_stashes_marker():
     # The pipeline must NOT raise
     asyncio.run(_drain(client.stream_completion(msgs)))
     assert client.last_oversized_attempt is not None
-    assert client.last_oversized_attempt["tokens"] >= client.last_oversized_attempt["guard"]
+    assert (
+        client.last_oversized_attempt["tokens"]
+        >= client.last_oversized_attempt["guard"]
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -375,10 +425,14 @@ def test_iteration_hint_disabled_when_max_iterations_unset():
         yield {"choices": [{"delta": {"content": "x"}}]}
 
     FalconLLMClient.stream_completion = fake_stream
-    client = EvalLLMClient(provider="turing", model="turing_large", max_tokens=1024, temperature=0.0)
+    client = EvalLLMClient(
+        provider="turing", model="turing_large", max_tokens=1024, temperature=0.0
+    )
     # Default max_iterations None → no hint
     for _ in range(20):
-        asyncio.run(_drain(client.stream_completion([{"role": "user", "content": "hi"}])))
+        asyncio.run(
+            _drain(client.stream_completion([{"role": "user", "content": "hi"}]))
+        )
     # No system-content with iteration-hint text in any forwarded call
     for msgs in captured["forwarded"]:
         for m in msgs:
@@ -391,11 +445,15 @@ def test_iteration_hint_caution_fires_at_70pct_once():
     captured = {"forwarded": []}
 
     async def fake_stream(self, messages, tools=None):
-        captured["forwarded"].append([dict(m) if isinstance(m, dict) else m for m in messages])
+        captured["forwarded"].append(
+            [dict(m) if isinstance(m, dict) else m for m in messages]
+        )
         yield {"choices": [{"delta": {"content": "ok"}}]}
 
     FalconLLMClient.stream_completion = fake_stream
-    client = EvalLLMClient(provider="turing", model="turing_large", max_tokens=1024, temperature=0.0)
+    client = EvalLLMClient(
+        provider="turing", model="turing_large", max_tokens=1024, temperature=0.0
+    )
     client.max_iterations = 10
 
     base = [{"role": "user", "content": "hi"}]
@@ -421,16 +479,22 @@ def test_iteration_hint_hardstop_mentions_correct_output_format():
     captured = {"forwarded": []}
 
     async def fake_stream(self, messages, tools=None):
-        captured["forwarded"].append([dict(m) if isinstance(m, dict) else m for m in messages])
+        captured["forwarded"].append(
+            [dict(m) if isinstance(m, dict) else m for m in messages]
+        )
         yield {"choices": [{"delta": {"content": "ok"}}]}
 
     FalconLLMClient.stream_completion = fake_stream
-    client = EvalLLMClient(provider="turing", model="turing_large", max_tokens=1024, temperature=0.0)
+    client = EvalLLMClient(
+        provider="turing", model="turing_large", max_tokens=1024, temperature=0.0
+    )
     client.max_iterations = 10
     client.output_type = "Pass/Fail"
 
     for _ in range(11):
-        asyncio.run(_drain(client.stream_completion([{"role": "user", "content": "hi"}])))
+        asyncio.run(
+            _drain(client.stream_completion([{"role": "user", "content": "hi"}]))
+        )
 
     hardstop_msg = None
     for msgs in captured["forwarded"]:
@@ -450,16 +514,22 @@ def test_iteration_hint_hardstop_score_output():
     captured = {"forwarded": []}
 
     async def fake_stream(self, messages, tools=None):
-        captured["forwarded"].append([dict(m) if isinstance(m, dict) else m for m in messages])
+        captured["forwarded"].append(
+            [dict(m) if isinstance(m, dict) else m for m in messages]
+        )
         yield {"choices": [{"delta": {"content": "ok"}}]}
 
     FalconLLMClient.stream_completion = fake_stream
-    client = EvalLLMClient(provider="turing", model="turing_large", max_tokens=1024, temperature=0.0)
+    client = EvalLLMClient(
+        provider="turing", model="turing_large", max_tokens=1024, temperature=0.0
+    )
     client.max_iterations = 10
     client.output_type = "score"
 
     for _ in range(11):
-        asyncio.run(_drain(client.stream_completion([{"role": "user", "content": "hi"}])))
+        asyncio.run(
+            _drain(client.stream_completion([{"role": "user", "content": "hi"}]))
+        )
 
     hardstop_msg = None
     for msgs in captured["forwarded"]:
@@ -479,17 +549,23 @@ def test_iteration_hint_hardstop_choices_output():
     captured = {"forwarded": []}
 
     async def fake_stream(self, messages, tools=None):
-        captured["forwarded"].append([dict(m) if isinstance(m, dict) else m for m in messages])
+        captured["forwarded"].append(
+            [dict(m) if isinstance(m, dict) else m for m in messages]
+        )
         yield {"choices": [{"delta": {"content": "ok"}}]}
 
     FalconLLMClient.stream_completion = fake_stream
-    client = EvalLLMClient(provider="turing", model="turing_large", max_tokens=1024, temperature=0.0)
+    client = EvalLLMClient(
+        provider="turing", model="turing_large", max_tokens=1024, temperature=0.0
+    )
     client.max_iterations = 10
     client.output_type = "choices"
     client.output_choices = ["RED", "BLUE"]
 
     for _ in range(11):
-        asyncio.run(_drain(client.stream_completion([{"role": "user", "content": "hi"}])))
+        asyncio.run(
+            _drain(client.stream_completion([{"role": "user", "content": "hi"}]))
+        )
 
     hardstop_msg = None
     for msgs in captured["forwarded"]:
@@ -519,7 +595,9 @@ def test_compacting_flag_skips_hint_and_defense():
         yield {"choices": [{"delta": {"content": "ok"}}]}
 
     FalconLLMClient.stream_completion = fake_stream
-    client = EvalLLMClient(provider="turing", model="turing_large", max_tokens=1024, temperature=0.0)
+    client = EvalLLMClient(
+        provider="turing", model="turing_large", max_tokens=1024, temperature=0.0
+    )
     client.max_iterations = 2
     client._compacting = True
 
@@ -537,12 +615,17 @@ def test_compacting_flag_skips_hint_and_defense():
 def test_two_clients_have_independent_state():
     """Concurrency-safety: separate ``EvalLLMClient`` instances must
     not share mutable state (iteration counters, oversized markers)."""
+
     async def fake_stream(self, messages, tools=None):
         yield {"choices": [{"delta": {"content": "ok"}}]}
 
     FalconLLMClient.stream_completion = fake_stream
-    c1 = EvalLLMClient(provider="turing", model="turing_large", max_tokens=1024, temperature=0.0)
-    c2 = EvalLLMClient(provider="turing", model="turing_large", max_tokens=1024, temperature=0.0)
+    c1 = EvalLLMClient(
+        provider="turing", model="turing_large", max_tokens=1024, temperature=0.0
+    )
+    c2 = EvalLLMClient(
+        provider="turing", model="turing_large", max_tokens=1024, temperature=0.0
+    )
     c1.max_iterations = 5
     c2.max_iterations = 5
 

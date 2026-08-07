@@ -3028,6 +3028,13 @@ class AnnotationQueueViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelVie
         try:
             serializer.is_valid(raise_exception=True)
 
+            requires_review = _is_truthy(
+                serializer.validated_data.get("requires_review", False)
+            )
+            if requires_review:
+                from tfc.ee_gating import check_ee_feature
+
+                check_ee_feature("review_workflow", org_id=str(org.id))
             _check_annotation_queue_create_limit(
                 org, getattr(request, "workspace", None)
             )
@@ -3056,6 +3063,15 @@ class AnnotationQueueViewSet(BaseModelViewSetMixinWithUserOrg, viewsets.ModelVie
             return self._gm.forbidden_response(
                 "Only queue managers can update queue settings."
             )
+
+        requires_review_requested = request.data.get("requires_review")
+        if requires_review_requested is not None and _is_truthy(
+            requires_review_requested
+        ):
+            from tfc.ee_gating import check_ee_feature
+
+            org = getattr(request, "organization", None) or request.user.organization
+            check_ee_feature("review_workflow", org_id=str(org.id))
 
         try:
             return super().update(request, *args, **kwargs)

@@ -6,20 +6,19 @@ Tests that resource creation is gated by plan limits via Entitlements.can_create
 from unittest.mock import patch
 
 import pytest
-from django.utils import timezone
-from rest_framework import status
-
 from accounts.models import Organization, User
 from accounts.models.workspace import Workspace
-from conftest import WorkspaceAwareAPIClient
 from agentcc.models.email_alert import AgentccEmailAlert
+from conftest import WorkspaceAwareAPIClient
+from django.utils import timezone
+from ee.usage.schemas.events import CheckResult
 from model_hub.models.annotation_queues import (
     AnnotationQueue,
     AnnotationQueueAnnotator,
     AnnotatorRole,
     AutomationRule,
 )
-from ee.usage.schemas.events import CheckResult
+from rest_framework import status
 
 
 @pytest.fixture
@@ -94,7 +93,12 @@ class TestEmailAlertEnforcement:
             assert resp.status_code == status.HTTP_200_OK
 
     def test_create_blocked_at_limit(self, db, auth_client, organization):
-        with patch("ee.usage.services.entitlements.Entitlements.can_create") as mock:
+        # Count limits are cloud-only (check_ee_can_create no-ops off-cloud),
+        # so simulate cloud mode to exercise the enforcement path.
+        with (
+            patch("ee.usage.deployment.DeploymentMode.is_cloud", return_value=True),
+            patch("ee.usage.services.entitlements.Entitlements.can_create") as mock,
+        ):
             mock.return_value = CheckResult(
                 allowed=False,
                 reason="You've reached the 3 alerts limit",
