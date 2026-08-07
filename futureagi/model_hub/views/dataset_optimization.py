@@ -202,9 +202,16 @@ class DatasetOptimizationViewSet(BaseModelViewSetMixin, ModelViewSet):
     @transaction.atomic
     def create(self, request, *args, **kwargs):
         try:
-            model_name = (request.data.get("optimizer_config") or {}).get("model_name")
+            # The API receives the model as top-level `optimizer_model_id`;
+            # fall back to optimizer_config.model_name for direct API callers.
+            model_name = request.data.get("optimizer_model_id") or (
+                request.data.get("optimizer_config") or {}
+            ).get("model_name")
             org = getattr(request, "organization", None) or request.user.organization
-            if model_name and not is_model_in_catalog(model_name, organization_id=org.id):
+            org_id = org.id if org else None
+            if model_name and not is_model_in_catalog(
+                model_name, organization_id=org_id
+            ):
                 return self._gm.bad_request(
                     f"Model '{model_name}' is no longer available. "
                     "Please select a supported model to run optimization."

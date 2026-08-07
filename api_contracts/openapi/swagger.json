@@ -91507,6 +91507,11 @@
                     "type": "string",
                     "readOnly": true
                 },
+                "model_deprecated": {
+                    "title": "Model deprecated",
+                    "type": "boolean",
+                    "readOnly": true
+                },
                 "column_id": {
                     "title": "Column id",
                     "type": "string",
@@ -91774,6 +91779,11 @@
                     "readOnly": true,
                     "minLength": 1,
                     "x-nullable": true
+                },
+                "model_deprecated": {
+                    "title": "Model deprecated",
+                    "type": "boolean",
+                    "readOnly": true
                 },
                 "provider_logo": {
                     "title": "Provider logo",

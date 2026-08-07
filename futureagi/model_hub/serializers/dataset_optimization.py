@@ -356,11 +356,23 @@ class DatasetOptimizationListSerializer(serializers.ModelSerializer):
     def get_optimizer_model_id(self, obj):
         return self._model_name(obj)
 
+    @swagger_serializer_method(serializer_or_field=serializers.BooleanField())
     def get_model_deprecated(self, obj):
         model_name = self._model_name(obj)
         if not model_name:
             return False
-        return not is_model_in_catalog(model_name, organization_id=self._org_id(obj))
+        return not self._is_model_available(model_name, self._org_id(obj))
+
+    def _is_model_available(self, model_name, org_id):
+        # Memoized per serializer instance: rows on a page usually share the
+        # same model/org, so this avoids one catalog lookup per row.
+        cache = getattr(self, "_catalog_cache", None)
+        if cache is None:
+            cache = self._catalog_cache = {}
+        key = (model_name, org_id)
+        if key not in cache:
+            cache[key] = is_model_in_catalog(model_name, organization_id=org_id)
+        return cache[key]
 
 
 class DatasetOptimizationStepSerializer(serializers.ModelSerializer):
@@ -538,6 +550,7 @@ class DatasetOptimizationDetailSerializer(serializers.ModelSerializer):
         workspace_id = workspace.id if workspace else None
         return get_provider_logo_url(model_name, organization_id, workspace_id)
 
+    @swagger_serializer_method(serializer_or_field=serializers.BooleanField())
     def get_model_deprecated(self, obj):
         model_name = self._model_name(obj)
         if not model_name:

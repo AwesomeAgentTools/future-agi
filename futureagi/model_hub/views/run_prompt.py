@@ -1052,8 +1052,11 @@ class LitellmAPIView(CreateAPIView):
         validated_data = request.validated_data
 
         organization = _request_organization(request)
+        organization_id = organization.id if organization else None
         model_name = validated_data.get("model")
-        if model_name and not is_model_in_catalog(model_name, organization_id=organization.id):
+        if model_name and not is_model_in_catalog(
+            model_name, organization_id=organization_id
+        ):
             return self._gm.bad_request(
                 f"Model '{model_name}' is no longer available. "
                 "Please update the column to use a supported model before running."

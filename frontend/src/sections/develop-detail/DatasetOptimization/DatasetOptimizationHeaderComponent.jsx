@@ -295,7 +295,8 @@ const DatasetOptimizationHeaderComponent = ({ optimization, isLoading }) => {
         <ShowComponent condition={RERUN_ALLOWED_STATUSES.includes(status)}>
           <Box sx={{ display: "flex", gap: 1 }}>
             <CustomTooltip
-              title={modelDeprecated ? "Model is no longer available. Select a new model to rerun." : ""}
+              show={Boolean(modelDeprecated)}
+              title="Model is no longer available. Select a new model to rerun."
             >
               <span>
                 <Button

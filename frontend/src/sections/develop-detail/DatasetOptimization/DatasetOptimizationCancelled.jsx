@@ -80,7 +80,8 @@ const DatasetOptimizationCancelled = ({ optimization }) => {
           The run was stopped before completion. Click below to start it again.
         </Typography>
         <CustomTooltip
-          title={optimization?.modelDeprecated ? "Model is no longer available. Select a new model to rerun." : ""}
+          show={Boolean(optimization?.modelDeprecated)}
+          title="Model is no longer available. Select a new model to rerun."
         >
           <span>
             <Button
