@@ -23,7 +23,9 @@ def test_default_installed_apps_migrate_cleanly():
     assert applied_count > 0
 
 
-@pytest.mark.django_db
+# makemigrations --check verifies migration-history consistency against every
+# alias the router's allow_migrate accepts — default_direct included.
+@pytest.mark.django_db(databases=["default", "default_direct"])
 def test_makemigrations_reports_no_pending_changes():
     from io import StringIO
 
@@ -44,8 +46,7 @@ def test_control_plane_tables_exist_when_installed():
     Prevents shipping a cloud image whose migrations were half-applied.
     """
     if not any(
-        app == "ee.cloud.control_plane"
-        or app.endswith(".CloudControlPlaneConfig")
+        app == "ee.cloud.control_plane" or app.endswith(".CloudControlPlaneConfig")
         for app in settings.INSTALLED_APPS
     ):
         pytest.skip("Cloud control-plane not installed in this configuration")
