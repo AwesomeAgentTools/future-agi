@@ -61,7 +61,7 @@
 -->
 <div align="center">
   <a href="https://www.youtube.com/watch?v=6keOTAOUUWI">
-    <img alt="Watch the demo — trace an agent, run evals, simulate, and guardrail on one platform" src="frontend/public/assets/readme/demo-6keOTAOUUWI.png" width="100%">
+    <img alt="Watch the demo — trace an agent, run evals, simulate, and guardrail on one platform" src="frontend/public/assets/readme/demo-6keOTAOUUWI-v2.png" width="100%">
   </a>
 </div>
 
