@@ -321,11 +321,6 @@ def create_cluster(
                 first_seen=timezone.now(),
                 last_seen=timezone.now(),
             )
-            # Fix 7: a brand-new cluster has one trace and therefore no trend.
-            # It becomes ESCALATING only once _ESCALATING_MIN_TRACES is reached.
-            if cluster.status != FeedIssueStatus.FOR_REVIEW:
-                cluster.status = FeedIssueStatus.FOR_REVIEW
-                cluster.save(update_fields=["status", "updated_at"])
     except IntegrityError:
         # A concurrent run created this cluster between the lookup above and
         # this insert (unique_project_cluster_if_not_deleted). Without this the
@@ -542,46 +537,6 @@ def _refresh_severity(cluster) -> None:
     )
 
 
-# Below this many distinct traces a cluster has no trend to speak of, so calling
-# it "escalating" is a decoration rather than a claim. 234 of 235 production
-# clusters carried that status, including 138 singletons seen exactly once.
-_ESCALATING_MIN_TRACES = 5
-
-
-def _refresh_status(cluster) -> None:
-    """Fix 7 — only claim "escalating" when there is evidence for it.
-
-    Status was hardcoded to ESCALATING at creation and never recomputed; nothing
-    in tracer/ transitioned it automatically. This does not invent a trend model
-    — it applies the floor that makes the existing label honest, and leaves any
-    status a human has since set (acknowledged/resolved) alone.
-    """
-    if cluster.status in (FeedIssueStatus.ACKNOWLEDGED, FeedIssueStatus.RESOLVED):
-        return  # a person has triaged this; never overwrite that
-
-    traces = cluster.unique_traces or 0
-    target = (
-        FeedIssueStatus.ESCALATING
-        if traces >= _ESCALATING_MIN_TRACES
-        else FeedIssueStatus.FOR_REVIEW
-    )
-    if cluster.status == target:
-        return
-    previous = cluster.status
-    cluster.status = target
-    cluster.save(update_fields=["status", "updated_at"])
-    logger.info(
-        "cluster_status_refreshed",
-        cluster_id=cluster.cluster_id,
-        traces=traces,
-        previous=previous,
-        new=target,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Cluster assignment
-# ---------------------------------------------------------------------------
 
 
 def assign_to_cluster(
@@ -705,13 +660,6 @@ def assign_to_cluster(
             logger.warning(
                 "cluster_retitle_failed", cluster_id=cluster_id, exc_info=True
             )
-
-    # Status depends only on trace count, so it is checked on every assignment —
-    # a cluster crossing the threshold should stop saying "for review" promptly.
-    try:
-        _refresh_status(cluster)
-    except Exception:
-        logger.warning("cluster_status_failed", cluster_id=cluster_id, exc_info=True)
 
     logger.info(
         "issue_assigned_to_cluster",
@@ -964,10 +912,10 @@ _TRIAGED = (FeedIssueStatus.ACKNOWLEDGED, FeedIssueStatus.RESOLVED)
 def _merge_cluster_pair(keep_id: str, absorb_id: str, project_id: str) -> bool:
     """Fold ``absorb`` into ``keep``: issues, junction rows, counts, centroid.
 
-    Refuses to dissolve a cluster a person has triaged. ``_refresh_status`` already
-    guarantees automation never overwrites acknowledged/resolved; absorbing such a
-    cluster into a for_review one would launder a triaged issue back into the feed
-    by the back door, which is the same harm with extra steps.
+    Refuses to dissolve a cluster a person has triaged. Status is a human field
+    apart from the escalating default, so absorbing an acknowledged or resolved
+    cluster into another would launder a triaged issue back into the feed by the
+    back door.
     """
     with transaction.atomic():
         # _merge_pg may SWAP the pair (it refuses to dissolve a triaged cluster), so the

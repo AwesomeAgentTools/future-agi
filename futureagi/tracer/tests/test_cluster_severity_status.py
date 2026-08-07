@@ -22,9 +22,7 @@ from tracer.models.trace_error_analysis import (
     TraceErrorGroup,
 )
 from tracer.queries.scan_clustering import (
-    _ESCALATING_MIN_TRACES,
     _refresh_severity,
-    _refresh_status,
     _volume_floor,
 )
 
@@ -59,7 +57,7 @@ class TestSeverityVolumeFloor:
         """A defect reproducing across many traces is at least a medium
         regardless of how its title reads — breadth is evidence the text alone
         cannot carry."""
-        cluster = _cluster(project, traces=_ESCALATING_MIN_TRACES)
+        cluster = _cluster(project, traces=5)
 
         with _graded("low"):
             _refresh_severity(cluster)
@@ -174,60 +172,34 @@ class TestVolumeFloorBands:
 
 
 @pytest.mark.django_db
-class TestStatusFloor:
-    def test_a_singleton_is_for_review_not_escalating(self, project):
-        """The headline defect: 138 clusters seen exactly once were labelled
-        escalating."""
-        cluster = _cluster(project, traces=1, status=FeedIssueStatus.ESCALATING)
+class TestStatusIsEscalatingAndOtherwiseHuman:
+    """Status is escalating by default; every other value belongs to a person.
 
-        _refresh_status(cluster)
+    Automation briefly downgraded low-volume clusters to for_review. That is a
+    triage state a user sets through PATCH /tracer/feed/issues/{cluster_id}/, so
+    writing it by machine both invented a review nobody did and — because the
+    guard only covered acknowledged/resolved — flipped a user's own for_review
+    back to escalating the moment the cluster gained a fifth trace.
+    """
 
-        cluster.refresh_from_db()
-        assert cluster.status == FeedIssueStatus.FOR_REVIEW
-
-    def test_recurrence_earns_escalating(self, project):
-        cluster = _cluster(
-            project,
-            traces=_ESCALATING_MIN_TRACES,
-            status=FeedIssueStatus.FOR_REVIEW,
-        )
-
-        _refresh_status(cluster)
-
-        cluster.refresh_from_db()
-        assert cluster.status == FeedIssueStatus.ESCALATING
-
-    def test_the_threshold_is_inclusive_at_its_boundary(self, project):
-        below = _cluster(
-            project,
-            traces=_ESCALATING_MIN_TRACES - 1,
-            cluster_id="S-BELOW01",
-            status=FeedIssueStatus.ESCALATING,
-        )
-
-        _refresh_status(below)
-
-        below.refresh_from_db()
-        assert below.status == FeedIssueStatus.FOR_REVIEW
+    def test_a_new_cluster_is_escalating(self, project):
+        assert _cluster(project, traces=1).status == FeedIssueStatus.ESCALATING
 
     @pytest.mark.parametrize(
-        "triaged", [FeedIssueStatus.ACKNOWLEDGED, FeedIssueStatus.RESOLVED]
+        "human",
+        [
+            FeedIssueStatus.FOR_REVIEW,
+            FeedIssueStatus.ACKNOWLEDGED,
+            FeedIssueStatus.RESOLVED,
+        ],
     )
-    def test_human_triage_is_never_overwritten(self, project, triaged):
-        """Someone looked at this and made a call. Growing past the threshold
-        must not silently reopen it underneath them."""
-        cluster = _cluster(project, traces=50, status=triaged)
+    def test_assignment_never_rewrites_a_human_status(self, project, human):
+        """Growing past any volume must not reopen or relabel a triaged cluster."""
+        from tracer.queries import scan_clustering
 
-        _refresh_status(cluster)
-
+        cluster = _cluster(project, traces=50, status=human)
+        assert not hasattr(scan_clustering, "_refresh_status"), (
+            "status recomputation is back; it must not write human states"
+        )
         cluster.refresh_from_db()
-        assert cluster.status == triaged
-
-    def test_no_write_when_already_at_target(self, project):
-        cluster = _cluster(project, traces=1, status=FeedIssueStatus.FOR_REVIEW)
-        before = cluster.updated_at
-
-        _refresh_status(cluster)
-
-        cluster.refresh_from_db()
-        assert cluster.updated_at == before
+        assert cluster.status == human

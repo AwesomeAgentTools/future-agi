@@ -235,9 +235,9 @@ class TestJunctionReconciliation:
 class TestTriageIsNeverTrampled:
     """A merge must not launder a human-triaged cluster back into the feed.
 
-    ``_refresh_status`` already refuses to overwrite acknowledged/resolved. Absorbing
-    such a cluster into a for_review one would dissolve that decision by the back door
-    — same harm, extra steps.
+    Status is a human field apart from the escalating default, so absorbing an
+    acknowledged or resolved cluster into another would dissolve that decision by
+    the back door — same harm, extra steps.
     """
 
     def _run(self, pid):
