@@ -54,13 +54,13 @@
   Video: https://www.youtube.com/watch?v=6keOTAOUUWI
   GitHub's markdown sanitizer strips <iframe>/<video> but leaves the raw tag
   text behind, so an embed renders as a wall of markup on the repo page. We
-  use the video's still frame with a Play badge overlaid, linked to YouTube —
-  the same treatment PostHog uses. Asset: frontend/public/assets/readme/
-  demo-thumbnail.png (regenerate it whenever the demo video changes).
+  use the video's still frame with a YouTube play button on it, linked to the
+  video. Asset: frontend/public/assets/readme/demo-thumbnail.png — regenerate
+  it whenever the demo video changes.
 -->
 <div align="center">
   <a href="https://www.youtube.com/watch?v=6keOTAOUUWI">
-    <img alt="Watch the demo — trace an agent, run evals, simulate, and guardrail on one platform" src="frontend/public/assets/readme/demo-thumbnail.png" width="720">
+    <img alt="Watch the demo — trace an agent, run evals, simulate, and guardrail on one platform" src="frontend/public/assets/readme/demo-thumbnail.png" width="100%">
   </a>
 </div>
 
