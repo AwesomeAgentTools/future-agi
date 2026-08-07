@@ -76,6 +76,13 @@ VALID_SUBCATEGORIES = set(SUBCAT_TO_GROUP.keys())
 # The lever is DECOMPOSITION, not the input rework that ships alongside it: forcing a
 # separate verdict per failure dimension, each gated behind a verbatim quote, stops the
 # model scoring a holistic impression. An unquotable failure is a hallucinated one.
+#
+# Those figures are PRE-REWORK: they were measured while the model still received a
+# compressed reconstruction with the final answer pre-selected for it, which this
+# module no longer builds. Decomposition is unaffected, but the precision and recall
+# numbers describe an input that is gone, so treat them as the reason the prompt is
+# shaped this way rather than as the current standing of the scanner. They stand until
+# the gold corpus is re-run against the full span tree.
 # Reference: GPA (arXiv 2510.08847) reports a suite of specialised judges catching 95%
 # of annotated errors vs 54.8% for a monolithic judge. Running five SEPARATE judge calls
 # was also measured here and did NOT beat this single decomposed call (F1 0.794 vs 0.852,
