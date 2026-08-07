@@ -12,7 +12,7 @@ floor. Fix 7 stops claiming a trend below a threshold where there is none.
 Neither invents a model. They make the existing labels defensible.
 """
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -41,6 +41,56 @@ def _cluster(project, *, traces=1, title="Queried the wrong period", **kwargs):
         unique_traces=traces,
         error_count=traces,
         **kwargs,
+    )
+
+
+_EMBEDDING = [0.1] * 8
+
+
+def _ch_stub():
+    """ClickHouseVectorDB double whose reads return no rows.
+
+    The centroid SELECT is unpacked when it returns anything, so a bare
+    MagicMock fails on the unpack rather than on the behaviour under test.
+    """
+    db = MagicMock()
+    db.client.execute.return_value = []
+    return patch(
+        "tracer.queries.scan_clustering.ClickHouseVectorDB", return_value=db
+    )
+
+
+def _issue(project, brief="Queried the wrong period"):
+    """A real TraceScanIssue row plus the clustering view of it. Assignment
+    writes to both, so a fabricated id would make the test pass without
+    exercising the membership writes that sit beside the status field."""
+    from tracer.models.trace_scan import TraceScanIssue, TraceScanResult, TraceScanStatus
+    from tracer.types.scan_types import ClusterableIssue
+
+    trace_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    result = TraceScanResult.objects.create(
+        trace_id=trace_id,
+        project_id=project.id,
+        status=TraceScanStatus.COMPLETED,
+        has_issues=True,
+    )
+    row = TraceScanIssue.objects.create(
+        scan_result=result,
+        category="Context Handling Failures",
+        group="Context Handling Failures",
+        fix_layer="prompt",
+        confidence="H",
+        brief=brief,
+    )
+    return ClusterableIssue(
+        issue_id=str(row.id),
+        trace_id=trace_id,
+        project_id=str(project.id),
+        category="Context Handling Failures",
+        group="Context Handling Failures",
+        fix_layer="prompt",
+        brief=brief,
+        confidence="H",
     )
 
 
@@ -183,7 +233,20 @@ class TestStatusIsEscalatingAndOtherwiseHuman:
     """
 
     def test_a_new_cluster_is_escalating(self, project):
-        assert _cluster(project, traces=1).status == FeedIssueStatus.ESCALATING
+        """Through create_cluster, not the model default — the downgrade this
+        replaces lived in create_cluster, so asserting the default would pass
+        with the downgrade restored."""
+        from tracer.queries.scan_clustering import create_cluster
+
+        with _ch_stub(), \
+             patch("tracer.queries.scan_clustering.ensure_centroid_table"), \
+             _graded("medium"):
+            cluster_id = create_cluster(str(project.id), _issue(project), _EMBEDDING)
+
+        created = TraceErrorGroup.objects.get(
+            cluster_id=cluster_id, project_id=project.id
+        )
+        assert created.status == FeedIssueStatus.ESCALATING
 
     @pytest.mark.parametrize(
         "human",
@@ -194,12 +257,24 @@ class TestStatusIsEscalatingAndOtherwiseHuman:
         ],
     )
     def test_assignment_never_rewrites_a_human_status(self, project, human):
-        """Growing past any volume must not reopen or relabel a triaged cluster."""
-        from tracer.queries import scan_clustering
+        """Growing past any volume must not reopen or relabel a triaged cluster.
+
+        Drives the real assignment path rather than asserting a function is
+        absent: a rename would defeat a name check, and the point is that no
+        code path writes status, whatever it is called.
+        """
+        from tracer.queries.scan_clustering import assign_to_cluster
 
         cluster = _cluster(project, traces=50, status=human)
-        assert not hasattr(scan_clustering, "_refresh_status"), (
-            "status recomputation is back; it must not write human states"
-        )
+        issue = _issue(project)
+
+        with _ch_stub(), \
+             patch("tracer.queries.scan_clustering.ensure_centroid_table"):
+            assign_to_cluster(
+                cluster.cluster_id, str(project.id), issue, _EMBEDDING
+            )
+
         cluster.refresh_from_db()
-        assert cluster.status == human
+        assert cluster.status == human, (
+            f"assignment rewrote a status a person set ({human} -> {cluster.status})"
+        )
