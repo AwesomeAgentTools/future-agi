@@ -1,11 +1,12 @@
 """
-Trace compression for the scanner — kevinify, structural prefilter, compress_v2.
+Scanner trace payload — structural prefilter, full-span-tree payload, and the
+verbatim-recovery helpers behind key-moment breadcrumbs.
 
-Ported from experiments/trace_scanner/{scanner_v3.py, compress_trace.py}.
+No content selection happens here. The payload carries every span raw; the
+model identifies the user request and the final response itself.
 """
 
 import json
-import os
 import re
 import statistics
 
@@ -222,72 +223,9 @@ def recover_verbatim(kevinified_excerpt, raw_text, min_overlap=0.3):
     return ""
 
 
-def recover_key_moments(key_moments, raw_spans_text):
-    """Post-process key_moments: recover verbatim text for user_request/agent_response."""
-    if not key_moments:
-        return key_moments
-
-    result = dict(key_moments)
-
-    if result.get("user_request"):
-        result["user_request_raw"] = recover_verbatim(
-            result["user_request"],
-            raw_spans_text.get("all_inputs", ""),
-        )
-
-    if result.get("agent_response"):
-        result["agent_response_raw"] = recover_verbatim(
-            result["agent_response"],
-            raw_spans_text.get("all_outputs", ""),
-        )
-
-    return result
-
-
-# ---------------------------------------------------------------------------
-# TASK HINTS — Cheap keyword signals from root input
-# ---------------------------------------------------------------------------
-
-_TASK_PATTERNS = {
-    "needs_tool": re.compile(
-        r"\b(search|find|look\s*up|check|fetch|get|retrieve|download|browse|navigate|open)\b",
-        re.IGNORECASE,
-    ),
-    "has_format_constraint": re.compile(
-        r"\b(format\s+as|output\s+in|respond\s+with|return\s+as|json|csv|markdown|xml|table|list\s+of|bullet)\b",
-        re.IGNORECASE,
-    ),
-    "quantitative_answer": re.compile(
-        r"\b(how\s+many|count|number\s+of|total|sum|average|percentage|ratio)\b",
-        re.IGNORECASE,
-    ),
-    "specific_value": re.compile(
-        r"\b(what\s+is|what\'s|what\s+was|when\s+did|where\s+is|who\s+is|which)\b",
-        re.IGNORECASE,
-    ),
-}
-
-
-def extract_task_hints(root_input):
-    """Extract keyword-based task category hints from root span input."""
-    if not root_input:
-        return []
-    text = str(root_input)
-    return [hint for hint, pattern in _TASK_PATTERNS.items() if pattern.search(text)]
-
-
 # ---------------------------------------------------------------------------
 # HELPERS — span tree utilities
 # ---------------------------------------------------------------------------
-
-
-def _truncate(text, max_len=100):
-    if not text:
-        return ""
-    text = str(text).strip()
-    if len(text) <= max_len:
-        return text
-    return text[:max_len] + "..."
 
 
 def _parse_duration_seconds(duration_str):
@@ -548,7 +486,7 @@ def structural_prefilter_with_ids(trace_data):
 
 
 # ---------------------------------------------------------------------------
-# COMPRESS V2 — Adaptive budget, kevinified I/O, flow outline
+# FLOW OUTLINE — compact structural view of the whole tree
 # ---------------------------------------------------------------------------
 
 
@@ -579,224 +517,19 @@ def build_flow_outline(trace_data):
     return " > ".join(parts)
 
 
-def _plain(text, max_len):
-    """Whitespace-normalised truncation. Unlike kevinify, grammar is preserved.
-
-    Used for the fields the model reasons over directly — a stripped negation
-    ("didn't get X" -> "n't get X") inverts the meaning of the very sentence
-    being judged.
-    """
-    if not text:
-        return ""
-    text = re.sub(r"\s+", " ", str(text)).strip()
-    return text if len(text) <= max_len else text[: max_len - 1] + "…"
+# Haystack caps for key-moment verbatim recovery. The model quotes from FULL
+# raw spans, so a head-only cap loses every quote of how a long output ENDS —
+# and recovery cost grows with the haystack, so the cap cannot simply be
+# removed. Head + tail covers where quotes actually land (openings and
+# endings) while keeping recovery time bounded.
+_RECOVERY_HEAD_CHARS = 3_000
+_RECOVERY_TAIL_CHARS = 1_000
 
 
-_MSG_RE = re.compile(
-    r"^(?:gen_ai\.(input|output)\.messages\.(\d+)\.message"
-    r"|llm\.(input|output)_messages\.(\d+)\.message)\.(role|content)$"
-)
-
-
-def extract_turn(all_flat):
-    """Pull THIS turn's user request and agent response out of a trace.
-
-    One trace is one user turn, so the pair on trial is unambiguous even though
-    the SDK's role tags are unreliable (it re-serialises conversation history as
-    ``user``, so the agent's own prior replies arrive mislabelled):
-
-      * agent response  = the output message — tagged ``assistant`` because it
-        is the message being generated, which is the one case the SDK gets right
-      * user request    = the last ``user``-tagged message BEFORE the trailing
-        assistant/tool block
-
-    Alternation was considered and rejected: it breaks on consecutive same-role
-    messages, and these traces contain them (interleaved tool results, users
-    sending two messages in a row).
-
-    Returns ``(history, request, response)``; empty strings when the span data
-    carries no per-message attributes, so callers fall back to old behaviour.
-    """
-    richest, best = {}, -1
-    for span, _depth in all_flat:
-        msgs = {}
-        for key, val in (span.get("span_attributes") or {}).items():
-            m = _MSG_RE.match(key)
-            if not m:
-                continue
-            io = m.group(1) or m.group(3)
-            idx = int(m.group(2) or m.group(4))
-            msgs.setdefault((io, idx), {})[m.group(5)] = val
-        n_in = sum(1 for io, _ in msgs if io == "input")
-        if n_in > best:
-            best, richest = n_in, msgs
-    if not richest:
-        return [], "", ""
-
-    inputs = sorted((i, d) for (io, i), d in richest.items() if io == "input")
-    outputs = sorted((i, d) for (io, i), d in richest.items() if io == "output")
-
-    request, req_idx = "", None
-    for idx, data in reversed(inputs):
-        role = str(data.get("role", "")).lower()
-        if role in ("tool", "assistant"):
-            continue  # trailing tool-call block for THIS turn
-        if role == "system":
-            break
-        request, req_idx = str(data.get("content", "")).strip(), idx
-        break
-
-    history = [
-        str(d.get("content", "")).strip()
-        for i, d in inputs
-        if i < (req_idx if req_idx is not None else 0)
-        and str(d.get("role", "")).lower() != "system"
-    ]
-    response = str(outputs[0][1].get("content", "")).strip() if outputs else ""
-    return history, request, response
-
-
-def compress_v2(trace_data, prefilter_result):
-    """
-    Smart compression — kevinify all spans with adaptive token budget.
-    """
-    anomalous_ids = prefilter_result["anomalous_span_ids"]
-
-    all_flat = []
-    for top_span in trace_data["spans"]:
-        all_flat.extend(flatten_spans(top_span))
-
-    # Extract task (root input) and result (final output)
-    root_input = ""
-    final_output = ""
-    if all_flat:
-        root_attrs = all_flat[0][0].get("span_attributes", {})
-        root_input = root_attrs.get("input.value", "")
-        for span, depth in reversed(all_flat):
-            out = span.get("span_attributes", {}).get("output.value", "")
-            if out:
-                final_output = out
-                break
-        if not final_output:
-            final_output = root_attrs.get("output.value", "")
-
-    # THIS turn's request/response. root_input is the whole serialized message
-    # list for multi-turn agents, so feeding it to `task` told the model that
-    # every question in the conversation was "the request" — and the prompt asks
-    # it to compare task against result. That mismatch is what produced briefs
-    # like "answered X instead of Y" for traces where each turn was answered
-    # correctly, just in different turns. Prefer the real pair when available.
-    prior_turns, turn_request, turn_response = extract_turn(all_flat)
-    if turn_request:
-        root_input = turn_request
-    if turn_response:
-        final_output = turn_response
-
-    # Adaptive budget: ~3000 chars total, distributed by importance
-    TOTAL_IO_BUDGET = 3000
-    weights = []
-    span_meta = []
-    for span, depth in all_flat:
-        attrs = span.get("span_attributes", {})
-        sid = span["span_id"]
-        kind = _get_span_kind(attrs)
-        is_flagged = sid in anomalous_ids
-        is_decision = kind in {"LLM", "llm", "Tool", "TOOL", "Retriever", "RETRIEVER"}
-
-        w = 3 if is_flagged else (2 if is_decision else 1)
-        weights.append(w)
-        span_meta.append((span, depth, is_flagged, is_decision, kind))
-
-    total_weight = sum(weights) or 1
-    budgets = [max(50, int(TOTAL_IO_BUDGET * w / total_weight)) for w in weights]
-
-    spans = []
-    for i, (span, depth, is_flagged, is_decision, kind) in enumerate(span_meta):
-        attrs = span.get("span_attributes", {})
-        sid = span["span_id"]
-        status = span.get("status_code", "Unset")
-        duration = _parse_duration_seconds(span.get("duration"))
-        io_budget = budgets[i]
-
-        inp = kevinify(attrs.get("input.value", ""), io_budget)
-        out = kevinify(attrs.get("output.value", ""), io_budget)
-
-        has_content = inp or out or status != "Unset" or is_flagged
-        if not has_content:
-            continue
-
-        entry = {"n": span["span_name"], "d": depth}
-        if kind:
-            entry["k"] = kind
-        if status != "Unset":
-            entry["s"] = status
-        if duration and duration > 0.1:
-            entry["t"] = duration
-        if inp:
-            entry["in"] = inp
-        if out:
-            entry["out"] = out
-
-        if is_flagged:
-            flags = []
-            if sid in prefilter_result.get("_error_ids", set()):
-                flags.append("ERR")
-            if sid in prefilter_result.get("_retry_ids", set()):
-                flags.append("RETRY")
-            if sid in prefilter_result.get("_duration_ids", set()):
-                flags.append("SLOW")
-            if sid in prefilter_result.get("_tool_fail_ids", set()):
-                flags.append("TOOL_FAIL")
-            if not flags:
-                flags.append("FLAGGED")
-            entry["f"] = ",".join(flags)
-
-        pt = int(attrs.get("llm.token_count.prompt", 0) or 0)
-        ct = int(attrs.get("llm.token_count.completion", 0) or 0)
-        if pt:
-            entry["pt"] = pt
-        if ct:
-            entry["ct"] = ct
-
-        spans.append(entry)
-
-    trace_label = trace_data.get("_short_label", trace_data["trace_id"])
-    flow_outline = build_flow_outline(trace_data)
-
-    # task/result are the pair the model is asked to compare, so they are NOT
-    # kevinified. Stopword stripping mangles exactly the words that decide the
-    # verdict — "didn't get the benchmark" becomes "n't get benchmark", and a
-    # destroyed negation flips the meaning of the sentence being judged. Plain
-    # truncation keeps the grammar; the budget is spent where it matters.
-    task_text = turn_request or root_input
-    result_text = turn_response or final_output
-    result = {
-        "tid": trace_label,
-        "task": _plain(task_text, 600),
-        "result": _plain(result_text, 600),
-        "flow": flow_outline,
-        "signals": prefilter_result["signal_summary"],
-        "spans": spans,
-    }
-    # Earlier turns, clearly separated from the turn being judged. Supplied so
-    # genuine cross-turn failures (hallucinated context, ignoring a name given
-    # earlier) stay detectable, WITHOUT letting an earlier turn's question be
-    # mistaken for this turn's request.
-    # Prior turns are also left un-kevinified: the model needs them to work out
-    # what the user is actually asking for when THIS turn is only a clarification
-    # ("Ravi Krishnan", "yes please"), and stripped grammar makes that unreadable.
-    if prior_turns:
-        result["prior_turns"] = [_plain(t, 300) for t in prior_turns[-6:]]
-
-    available_tools = prefilter_result.get("available_tools", [])
-    if available_tools:
-        result["tools_available"] = available_tools
-
-    task_hints = extract_task_hints(root_input)
-    if task_hints:
-        result["task_hints"] = task_hints
-
-    return result
+def _recovery_slice(text: str) -> str:
+    if len(text) <= _RECOVERY_HEAD_CHARS + _RECOVERY_TAIL_CHARS:
+        return text
+    return f"{text[:_RECOVERY_HEAD_CHARS]}\n{text[-_RECOVERY_TAIL_CHARS:]}"
 
 
 def extract_programmatic_metadata(trace_data, prefilter_result):
@@ -821,19 +554,6 @@ def extract_programmatic_metadata(trace_data, prefilter_result):
     ]
     turn_count = len(llm_spans)
 
-    raw_user_request = ""
-    raw_agent_response = ""
-    if flat_spans:
-        root_attrs = flat_spans[0][0].get("span_attributes", {})
-        raw_user_request = str(root_attrs.get("input.value", ""))[:500]
-        for span, depth in reversed(flat_spans):
-            out = span.get("span_attributes", {}).get("output.value", "")
-            if out:
-                raw_agent_response = str(out)[:500]
-                break
-        if not raw_agent_response:
-            raw_agent_response = str(root_attrs.get("output.value", ""))[:500]
-
     all_inputs = []
     all_outputs = []
     for span, depth in flat_spans:
@@ -841,16 +561,14 @@ def extract_programmatic_metadata(trace_data, prefilter_result):
         inp = str(attrs.get("input.value", ""))
         out = str(attrs.get("output.value", ""))
         if inp:
-            all_inputs.append(inp[:1000])
+            all_inputs.append(_recovery_slice(inp))
         if out:
-            all_outputs.append(out[:1000])
+            all_outputs.append(_recovery_slice(out))
 
     return {
         "tools_called": tools_called,
         "tools_available": prefilter_result.get("available_tools", []),
         "turn_count": turn_count,
-        "raw_user_request": raw_user_request,
-        "raw_agent_response": raw_agent_response,
         "raw_spans_text": {
             "all_inputs": "\n".join(all_inputs),
             "all_outputs": "\n".join(all_outputs),
@@ -943,36 +661,25 @@ def attribute_key_moments(quotes, trace_data):
 
 
 # ---------------------------------------------------------------------------
-# compress_v3 — input-representation rework (ships with the V8 prompt)
+# TRACE PAYLOAD — every span, raw
 # ---------------------------------------------------------------------------
-# Same output contract as compress_v2. Four measured defects fixed:
-#  1. NEGATIONS SURVIVE. compress_v2 kevinify()s every span's evidence and NLTK's
-#     stopword list contains not/no/nor/don/didn/isn/wasn/couldn/t, so every negation
-#     is deleted from the text the model reasons over ("tool did not return data" ->
-#     "tool return data"). The earlier fix applied _plain to task/result only.
-#  2. PROVIDER ENVELOPES ARE UNWRAPPED (OpenAI choices / Gemini candidates /
-#     LangChain generations / Anthropic content), so the budget is not spent on
-#     metadata while the real answer never reaches the model.
-#  3. ALL FOUR PRODUCER MESSAGE SHAPES, plus answers handed to a delivery tool.
-#  4. VOICE/REALTIME traces reconstructed from the span timeline.
-# Budget raised 3000 -> 20000 chars; the 3000 figure predates long-context models.
-#
-# Helpers are prefixed _v3_ so this cannot shadow compress_v2's own _plain/_loads.
-# On its own this is NOT the accuracy win (measured tied with baseline); the win is
-# the V8 prompt. It ships together because that is the combination validated on the
-# sealed split.
+# No selection. The payload used to pre-pick a `task` and a `result` span,
+# recover delivered answers, and demote session-log roots — every one of those
+# was a heuristic guessing which text was "the answer", and 8 of 18 confirmed
+# false positives on the audited corpus were the model correctly judging text
+# a heuristic had mislabelled as the agent's response. The model now receives
+# the whole tree and identifies the request and the final response itself.
 
 
+# Shared so the scanner can recognise our own truncation and never report it as
+# an agent that stopped early. It should now fire only on a pathological trace.
+SCANNER_TRUNCATION_MARK = "⟨trace truncated by the scanner"
 
-# Budgets are the last of the compression, and every character they remove is a
-# character the model is then asked to judge without. The agent's response and
-# the user's request are what most verdicts are actually about, so they get the
-# most room: a response cut at 3000 chars was routinely cut before the part the
-# verdict concerned. Env-tunable so the precision/cost trade can be measured
-# rather than argued about.
-TOTAL_IO_BUDGET = int(os.environ.get("SCANNER_TOTAL_IO_BUDGET", "120000"))
-TASK_BUDGET = int(os.environ.get("SCANNER_TASK_BUDGET", "24000"))
-RESULT_BUDGET = int(os.environ.get("SCANNER_RESULT_BUDGET", "24000"))
+# Per-field runaway guard, not a budget: applied to each span input/output
+# individually, so no field is ever cut because of how many siblings it has.
+# The largest trace field observed sits far below this while the ceiling stays
+# well inside the model's context.
+FIELD_RUNAWAY_BUDGET = 2_000_000
 
 _ENVELOPE_HINTS = ("choices", "candidates", "generations", "usage", "object", "created")
 
@@ -1014,7 +721,7 @@ def _v3_plain(text, max_len):
     # reportable failure, and the model has no way to tell that apart from our
     # own budget running out. Name it explicitly so a cut of ours can never be
     # mistaken for an incomplete answer of theirs.
-    return f"{cut}⟨trace truncated by the scanner, {len(text) - len(cut)} chars omitted⟩"
+    return f"{cut}{SCANNER_TRUNCATION_MARK}, {len(text) - len(cut)} chars omitted⟩"
 
 
 def _v3_loads(v):
@@ -1029,34 +736,6 @@ def _v3_loads(v):
         return json.loads(s)
     except Exception:
         return None
-
-
-_ANSWER_ARG_KEYS = ("response_text", "final_response", "answer", "message",
-                    "text", "content", "chart_summary")
-
-
-def _delivered_answer(all_flat):
-    """Recover an answer handed to a delivery tool instead of returned.
-
-    Matches spans whose name marks final delivery (display_final_response,
-    display_final_chart, final_answer, send_message...) and pulls the text out of
-    the tool ARGUMENTS. Multiple segments are concatenated in trace order.
-    """
-    parts = []
-    for span, _d in all_flat:
-        name = (span.get("span_name") or "").lower()
-        if not (("final" in name and ("display" in name or "response" in name or "answer" in name))
-                or name in ("send_message", "respond_to_user", "final_answer")):
-            continue
-        d = _v3_loads((span.get("span_attributes") or {}).get("input.value", ""))
-        if not isinstance(d, dict):
-            continue
-        for k in _ANSWER_ARG_KEYS:
-            v = d.get(k)
-            if isinstance(v, str) and v.strip():
-                parts.append(v.strip())
-                break
-    return "\n\n".join(parts)
 
 
 def _is_nontextual(d):
@@ -1162,181 +841,62 @@ def unwrap_output(raw):
     return raw or ""
 
 
-def extract_messages(raw):
-    """[(role, content)] from any producer shape; [] if there is no message list."""
-    d = _v3_loads(raw)
-    out = []
-    if isinstance(d, list) and d and isinstance(d[0], dict) and "role" in d[0]:
-        src = d
-    elif isinstance(d, dict):
-        src = None
-        for k in ("messages", "contents"):
-            v = d.get(k)
-            if isinstance(v, list) and v and isinstance(v[0], dict):
-                src = v
-                break
-        if src is None:
-            return []
-    else:
-        return []
-    for m in src:
-        if not isinstance(m, dict):
-            continue
-        role = str(m.get("role") or "user")
-        c = m.get("content")
-        if c is None and isinstance(m.get("parts"), list):
-            c = " ".join(str(p.get("text", "")) for p in m["parts"] if isinstance(p, dict))
-        if isinstance(c, list):
-            c = " ".join(
-                (p.get("text") or p.get("content") or "") if isinstance(p, dict) else str(p)
-                for p in c
-            )
-        out.append((role, str(c or "")))
-    return out
+def build_trace_payload(trace_data, prefilter_result, retry_ids=()):
+    """The scanner model's input: every span, raw, in execution order.
 
-
-def _v3_flat(trace_data, flatten_spans):
-    fl = []
+    Nothing here decides what the model gets to see. Structure (id, name,
+    depth, kind, status, prefilter flags) is annotated; content is passed
+    through verbatim apart from whitespace normalisation and the per-field
+    runaway guard. The model identifies the user request and the final
+    response itself — the pre-selection this replaces mislabelled working
+    agents' answers and produced the largest audited false-positive class.
+    """
+    all_flat = []
     for top in trace_data.get("spans", []):
-        fl.extend(flatten_spans(top))
-    return fl
+        all_flat.extend(flatten_spans(top))
 
-
-def _v3_build(trace_data, prefilter_result, flatten_spans, build_flow_outline,
-          extract_task_hints, retry_ids=()):
-    """Produce the compress_v2 dict shape with properly extracted content."""
-    all_flat = _v3_flat(trace_data, flatten_spans)
-
-    # ---- the turn on trial -------------------------------------------------
-    # Richest message list wins, but ONLY from spans that are plausibly the main
-    # agent: a sub-agent span can carry more messages than the orchestrator, and
-    # picking it substitutes an internal step for the user's request (this is the
-    # measured failure mode of ee#186's extract_turn).
-    root_attrs = all_flat[0][0].get("span_attributes", {}) if all_flat else {}
-    root_input = root_attrs.get("input.value", "") or ""
-    root_output = root_attrs.get("output.value", "") or ""
-
-    # Message list is taken from the ROOT span first. Scanning all spans for the
-    # "richest" one is what made ee#186 substitute a sub-agent's internal step for
-    # the user's request (measured: recall 68.8%->58.4% on agentic traces). Only
-    # fall through to other spans when the root carries no message list at all.
-    best = extract_messages(root_input)
-    if not best:
-        for span, _d in all_flat:
-            msgs = extract_messages((span.get("span_attributes") or {}).get("input.value", ""))
-            if len(msgs) > len(best):
-                best = msgs
-
-    history, request = [], ""
-    if best:
-        for i in range(len(best) - 1, -1, -1):
-            role, content = best[i]
-            r = role.lower()
-            if r in ("tool", "assistant", "model"):
-                continue
-            if r == "system":
-                break
-            request = content.strip()
-            history = [c.strip() for rr, c in best[:i] if rr.lower() != "system" and c.strip()]
-            break
-
-    # Prefer the recovered user turn, but only when it actually reads like a
-    # request rather than a serialized blob — otherwise the root input is better.
-    root_plain = unwrap_output(root_input) or root_input or ""
-    if request and not request.lstrip().startswith(("{", "[")):
-        task = request
-    else:
-        task = root_plain or request
-
-    # Some agents deliver the final answer through a DELIVERY TOOL rather than
-    # returning it: display_final_response / display_final_chart take the text as
-    # a tool ARGUMENT (input.response_text) and return only "Response segment
-    # stored". 114 of 1037 corpus traces (11%) do this, and reading outputs finds
-    # the confirmation instead of the answer. Segments are concatenated in order.
-    delivered = _delivered_answer(all_flat)
-
-    # Final answer: the root's own output when it has one, else the LONGEST
-    # unwrapped span output. Taking the last span yields a streaming chunk —
-    # measured, one trace's `result` came out as the 3 characters "Cad".
-    result = delivered or unwrap_output(root_output)
-    if not result or result.startswith("[empty model output]"):
-        cands = []
-        for span, _d in all_flat:
-            o = (span.get("span_attributes") or {}).get("output.value", "")
-            if not o:
-                continue
-            u = unwrap_output(o)
-            if u and not u.startswith("[empty model output]"):
-                cands.append(u)
-        if cands:
-            tail = cands[-6:]
-            result = max(tail, key=len) if max(map(len, tail)) > 40 else "".join(cands[-20:])
-
-    # ---- span evidence -----------------------------------------------------
-    weights, meta = [], []
     # `retry_ids` is an explicit parameter, but the only production caller
     # (scanner.py) passes just (trace, prefilter), so it defaulted to () and the
     # correctly-computed set that `structural_prefilter_with_ids` stores under
-    # `_retry_ids` never reached the flagged tier. Falling back to the dict matches
-    # how `_retry_ids` is already read at the flow-outline site and fixes every
-    # caller rather than one call site.
+    # `_retry_ids` never reached the flagged tier. Falling back to the dict
+    # fixes every caller rather than one call site.
     flagged = set(prefilter_result.get("anomalous_span_ids") or []) | set(
         retry_ids or prefilter_result.get("_retry_ids") or ()
     )
-    for span, depth in all_flat:
-        sid = span.get("span_id")
-        w = 3 if sid in flagged else 1
-        weights.append(w)
-        meta.append((span, depth, sid in flagged))
-    total = sum(weights) or 1
 
     spans = []
-    for i, (span, depth, is_flagged) in enumerate(meta):
-        budget = max(200, int(TOTAL_IO_BUDGET * weights[i] / total))
+    for span, depth in all_flat:
         a = span.get("span_attributes") or {}
-        inp = _v3_plain(a.get("input.value", ""), budget)
-        out = _v3_plain(unwrap_output(a.get("output.value", "")), budget)
+        sid = span.get("span_id")
+        is_flagged = sid in flagged
+        inp = _v3_plain(a.get("input.value", ""), FIELD_RUNAWAY_BUDGET)
+        out = _v3_plain(a.get("output.value", ""), FIELD_RUNAWAY_BUDGET)
+        # A span with no content, no status and no flag adds nothing the flow
+        # outline doesn't already carry.
         if not (inp or out or span.get("status_code") not in (None, "Unset") or is_flagged):
             continue
-        spans.append({
-            "id": span.get("span_id"), "name": span.get("span_name"),
-            "depth": depth, "kind": (a.get("span.kind") or "CHAIN"),
+        entry = {
+            "id": sid,
+            "name": span.get("span_name"),
+            "depth": depth,
             "status": span.get("status_code", "Unset"),
-            "in": inp, "out": out, **({"flagged": True} if is_flagged else {}),
-        })
-
-    # Voice/realtime: conversation lives in many tiny ordered spans and neither
-    # the root nor per-message attrs are populated.
-    if len(task) < 60 and len(result) < 60 and len(spans) > 20:
-        tl = []
-        for s in spans:
-            if s["in"]: tl.append(f"[{s['name']}] IN: {s['in'][:300]}")
-            if s["out"]: tl.append(f"[{s['name']}] OUT: {s['out'][:300]}")
-            if len(tl) >= 80: break
-        if tl:
-            task = task or "(streaming/voice session — conversation in span timeline)"
-            result = result or _v3_plain(" \n".join(tl[-40:]), RESULT_BUDGET)
+            "in": inp,
+            "out": out,
+        }
+        kind = _get_span_kind(a)
+        if kind:
+            entry["kind"] = kind
+        if is_flagged:
+            entry["flagged"] = True
+        spans.append(entry)
 
     res = {
         "tid": trace_data.get("_short_label", trace_data.get("trace_id")),
-        "task": _v3_plain(task, TASK_BUDGET),
-        "result": _v3_plain(result, RESULT_BUDGET),
         "flow": build_flow_outline(trace_data),
         "signals": prefilter_result.get("signal_summary"),
         "spans": spans,
     }
-    if history:
-        res["prior_turns"] = [_v3_plain(h, 500) for h in history[-8:]]
     tools = prefilter_result.get("available_tools") or []
     if tools:
         res["tools_available"] = tools
-    hints = extract_task_hints(task)
-    if hints:
-        res["task_hints"] = hints
     return res
-
-
-def compress_v3(trace_data, prefilter_result, retry_ids=()):
-    """compress_v2-shaped payload with properly extracted content."""
-    return _v3_build(trace_data, prefilter_result, flatten_spans, build_flow_outline,
-                     extract_task_hints, retry_ids)

@@ -1,10 +1,8 @@
 """
 Scanner taxonomy — hierarchy, fix layers, and prompt templates.
-
-Ported from experiments/trace_scanner/scanner_v3.py.
 """
 
-import json
+from ee.agenthub.trace_scanner.compress import SCANNER_TRUNCATION_MARK
 
 # ---------------------------------------------------------------------------
 # HIERARCHY — group → subcategories
@@ -66,156 +64,12 @@ for group, subcats in HIERARCHY.items():
 VALID_SUBCATEGORIES = set(SUBCAT_TO_GROUP.keys())
 
 # ---------------------------------------------------------------------------
-# PROMPT TEMPLATES
-# ---------------------------------------------------------------------------
-
-CACHED_PREFIX = """You are an AI trace error scanner. For each trace, evaluate 5 error groups. For each group, decide YES or NO. If YES, identify WHICH specific subcategory.
-
-!! CRITICAL — INPUT IS COMPRESSED, NOT RAW !!
-Every text field you see below (task, result, spans[].in, spans[].out) has been
-pre-processed by a lossy compressor that strips stopwords, grammar fluff,
-punctuation (including periods), and JSON syntax — keeping only content-bearing
-keywords. A trailing "..." means "we hit our length budget", NOT that the
-agent's actual response was truncated. Missing periods, choppy phrasing,
-or dropped articles ("the", "a", "is") are compression artifacts, NOT agent
-errors. DO NOT flag issues like "response truncated mid-sentence",
-"incomplete output", "choppy grammar", or "missing punctuation" — those are
-artifacts of OUR compression, not the agent's behavior. Judge the agent on
-the SEMANTIC CONTENT of the keywords, not their surface form.
-
-TRACE FORMAT:
-- task: the user's message on THIS turn, verbatim. One trace = one user turn.
-- result: the agent's reply to that message, verbatim.
-- prior_turns: earlier messages, oldest first, verbatim.
-
-HOW TO READ task / result / prior_turns — read this before judging anything:
-
-`task` is the user's LATEST message, which is often NOT the full request. It is
-frequently a clarification or an answer to something the agent just asked — a
-bare name ("Ravi Krishnan"), a confirmation ("yes please"), a correction. In
-those cases the user's ACTUAL goal was stated one or more turns earlier and is
-in prior_turns.
-
-So: work out the user's OUTSTANDING GOAL from task plus prior_turns, then judge
-whether `result` makes correct progress toward it.
-
-- Do NOT report a failure merely because `result` does not answer `task` when
-  `task` is a clarification — answering the goal from prior_turns is CORRECT.
-- Do NOT report "answered X instead of Y" when Y appears in prior_turns and was
-  ALREADY answered in an earlier turn. Each trace is one turn; earlier questions
-  are usually already resolved. Only flag this if prior_turns shows the user
-  asking for something that was never addressed and is still outstanding.
-- Speaker labels in prior_turns are UNRELIABLE (the SDK tags most history as
-  "user"). Infer who said what from content, never from a label.
-- prior_turns is also how you judge continuity failures: the agent inventing
-  context that never appeared, or re-asking for a detail the user already gave.
-- flow: execution tree outline showing agent path with numbering (e.g. "1:main(AGENT) > 1.1:classify(LLM) > 1.2:search(Tool)[ERR]"). Read this FIRST to understand the agent's step sequence and where errors occurred.
-- tools_available: tools the agent COULD have used
-- task_hints: keyword signals (needs_tool, has_format_constraint, quantitative_answer, specific_value)
-- signals: structural anomaly flags from rule engine
-- spans: ALL spans with COMPRESSED I/O (n=name, d=depth, k=kind, s=status, t=duration, in=input, out=output, f=flags if anomalous)
-
-## ERROR GROUPS
-
-### 1. TOOL FAILURES — Any issue with how tools were used?
-Look at: flagged spans with ERR/TOOL_FAIL flags, tools_available vs tools actually called, tool parameters
-Subcategories:
-- Tool-related: Tool crashed, returned error, or was unavailable. Example: search_tool error, agent fabricated result.
-- Tool Selection Errors: Wrong tool chosen. Check tools_available — was a better tool available? Example: used web_search when document_search existed.
-- Tool Output Misinterpretation: Misread what a tool returned. Example: API returned error JSON, agent treated error as data.
-- Formatting Errors: Tool called with malformed parameters. Example: page_down called with empty {} 6 times.
-- Language-only: Agent answered with text when it SHOULD have called a tool to fetch data. ONLY flag this when the task genuinely required a data lookup or computation. Do NOT flag for how-to questions, product guidance, or process explanations — those are correctly answered with text. Check: if task_hints has "needs_tool" AND the question requires live data AND no tool spans in tree. Example: asked "how many invoices this month?" and agent guessed instead of querying.
-
-### 2. CONTEXT & RETRIEVAL — Did the agent miss, forget, or misuse information?
-Look at: sequential span patterns (same error repeated), task vs result mismatch on retrieved data
-Subcategories:
-- Context Handling Failures: Forgot or ignored prior context, OR repeated the same failed approach without adapting. Do NOT flag if the agent correctly handled a follow-up turn in a multi-turn conversation. Example of real failure: tool returned error explaining correct format, agent repeated same mistake.
-- Poor Information Retrieval: Got WRONG info from tools/search — the data returned does not match what was asked for. Do NOT flag when: (a) the query returned no results and agent correctly said so, (b) the agent honestly said a feature/doc doesn't exist, (c) the agent provided data with a download link. Only flag when the agent retrieved INCORRECT data or answered with data about the WRONG entity. Example of real failure: searched for vendor A, returned data for vendor B.
-- Incorrect Memory Usage: Referenced wrong conversation or hallucinated prior context.
-
-### 3. PLANNING & GOALS — Did the agent stay on track and work efficiently?
-Look at: task vs result (same goal?), span count, tree structure for wasted steps
-Subcategories:
-- Task Orchestration: Steps out of order, missed dependencies. Example: tried to summarize before downloading.
-- Goal Deviation: Strayed from intended objective. Compare task vs result — agent answered a COMPLETELY DIFFERENT question. NOTE: asking a clarifying question is NOT deviation. Offering a workaround when a feature doesn't exist is NOT deviation. Refusing an off-topic query is NOT deviation. Only flag when the agent clearly answered the WRONG question despite understanding the right one. Example of real deviation: asked for vendor A's invoices, agent returned vendor B's data.
-- Resource Abuse: Excessive tool calls, redundant steps. Example: same query 8 times, 20 calls when 3 suffice.
-
-### 4. OUTPUT QUALITY — Does the final output match what was asked?
-Look at: task field (requirements) vs result field (actual output), task_hints
-Subcategories:
-- Instruction Non-compliance: Output ignores EXPLICIT format/length/style constraints stated by the user. The agent must have clearly violated a STATED requirement. Do NOT flag when: (a) the agent gave a correct answer in a reasonable format, (b) the agent said a feature isn't available/documented (that's honesty, not non-compliance), (c) the agent provided data in a table or download link. Example of real non-compliance: user said "return JSON only", agent returned prose. Example that is NOT non-compliance: user asked "can I bulk edit?" and agent said "no documentation found for this" — that's honest.
-- Incorrect Problem Identification: Agent fundamentally misunderstood WHAT the user was asking — answered a completely different question. Do NOT flag when: (a) the agent understood the question but gave an incomplete answer, (b) the agent correctly refused an off-topic/adversarial query, (c) the agent asked for clarification on an ambiguous input like a filename or abbreviation. Example of real misidentification: user asked about deleting policies, agent explained how to create new ones.
-
-### 5. INFRASTRUCTURE — Any system-level failures?
-Look at: flagged spans with ERR flags, HTTP status codes in span output
-Subcategories:
-- Environment Setup Errors: Missing config, API keys, dependencies.
-- Resource Not Found: 404, file not found, invalid URL.
-- Authentication Errors: 401/403, expired token.
-- Timeout Issues: Operations exceeded time limits.
-- Service Errors: 5xx errors, service unavailable.
-
-## CRITICAL — WHAT IS NOT AN ERROR
-Before flagging anything, check these. Violations of this list are FALSE POSITIVES:
-
-1. **Disambiguation / clarification is CORRECT behavior.** If the user's query is ambiguous (matches multiple entities, vendors, locations, GL accounts, etc.) and the agent asks "did you mean X or Y?", that is GOOD — do NOT flag as Goal Deviation, Incorrect Problem Identification, or Language-only. The agent is being responsible.
-
-2. **Text-only answers are fine when no tool is needed.** Questions like "how do I do X?", "what does Y mean?", "who should I contact?", "how do I log out?" are product/process questions. They don't need a tool call — a knowledgeable text answer is correct. Only flag Language-only when the task GENUINELY required data lookup or computation that ONLY a tool could provide.
-
-3. **Judge the FINAL outcome, not intermediate errors.** If the agent hit a SQL error or tool failure but RECOVERED and delivered a correct final answer, that is NOT a medium/high issue. At most it's a LOW confidence "fragility" signal. The user got what they asked for.
-
-4. **Multi-turn context: short follow-ups are normal.** Queries like "try last year", "partial match is okay", "yes please", "yes", "thank you" are follow-ups or conversation closers. If the agent handled them correctly in context, don't flag them. Polite sign-offs ("thank you" → "you're welcome") are NEVER errors.
-
-5. **"No results found" is often correct.** If the agent queried the database and genuinely found no matching data, reporting "no results" IS the correct answer. Don't flag this as Poor Information Retrieval unless there's evidence the query itself was wrong.
-
-6. **"Feature not documented / not supported" is an honest answer, not a failure.** If the user asks about a feature that doesn't exist (e.g. "can I unmerge a vendor?", "is there a bulk posting date?", "can I export by item?") and the agent honestly says "I couldn't find documentation for this" or "this feature is not available" — that is the CORRECT answer. Do NOT flag as Instruction Non-compliance, Poor Information Retrieval, or Goal Deviation. The agent cannot invent features that don't exist.
-
-7. **Correctly refusing off-topic or adversarial queries is CORRECT.** If the user asks something completely outside the agent's domain (e.g. recipes, car wash advice, personal questions) or attempts prompt injection ("ignore all previous instructions..."), the agent SHOULD refuse. Do NOT flag refusals as Incorrect Problem Identification or Goal Deviation. The agent is enforcing its guardrails correctly.
-
-8. **Providing data with a download link IS providing data.** If the agent generated a CSV/report and provided a download link, that IS actionable output. Do NOT flag as "no actual data shown" or "claims generated but not shown" — the user can access the full dataset via the link.
-
-## RULES
-- Evaluate ALL 5 groups for each trace. Do not skip any.
-- MULTIPLE subcategories per group are possible but uncommon. Most traces have 0-2 real issues. A trace with 5+ issues is suspicious — re-check for false positives.
-- Be PRECISE, not trigger-happy. A false positive wastes developer time investigating non-issues. Only flag issues you're genuinely confident about (H or M).
-- For groups 2-4: ALWAYS compare task vs result fields.
-- Clean traces are common and expected — empty issues array is the right call for a working trace.
-- Only report confidence H (high) or M (medium). Drop anything you'd rate L (low) — it's probably not a real issue.
-
-"""
-
-BATCH_TEMPLATE = """## TRACES
-{traces_json}
-
-For each trace, evaluate all 5 groups. If a group has issues, output the SPECIFIC subcategory (e.g. "Tool-related", "Context Handling Failures", "Goal Deviation" — NOT the group name like "Tool Failures").
-
-Return JSON with this EXACT format:
-{{"<trace_id>": {{
-  "issues": [{{"cat":"<specific subcategory>","conf":"H|M|L","brief":"<10 words max>"}}],
-  "key_moments": ["<quote 1>","<quote 2>","<quote 3>"]
-}}}}
-
-IMPORTANT:
-- "cat" must be one of: Tool-related, Tool Selection Errors, Tool Output Misinterpretation, Formatting Errors, Language-only, Context Handling Failures, Poor Information Retrieval, Incorrect Memory Usage, Task Orchestration, Goal Deviation, Resource Abuse, Instruction Non-compliance, Incorrect Problem Identification, Environment Setup Errors, Resource Not Found, Authentication Errors, Timeout Issues, Service Errors
-- "conf": H=high confidence, M=medium. Do NOT include L (low) — drop uncertain findings entirely
-- key_moments: 3-5 quotes copied VERBATIM from the trace (task, spans, result). Pick the highlights — the moments that tell the story of what happened. Include user request, key tool outputs, agent decisions, final response. Like a sports replay — the key plays.
-- If trace is clean: empty issues array, still provide key_moments showing the successful flow.
-- Every trace_id MUST be a key."""
-
-
-def build_prompt(compressed_traces):
-    """Build the full prompt from a list of compress_v2 outputs."""
-    traces_json = json.dumps(compressed_traces, separators=(",", ":"))
-    return CACHED_PREFIX + BATCH_TEMPLATE.format(traces_json=traces_json)
-
-
-# ---------------------------------------------------------------------------
 # V8 — decomposed, evidence-first scanner prompt
 # ---------------------------------------------------------------------------
 # Measured on a 1,037-trace production corpus with re-labelled gold, validated once
 # on a sealed 421-trace held-out split:
-#   this prompt   FPR  9.9%  precision 65.6%  recall 54.1%  F1 0.593
-#   CACHED_PREFIX FPR 17.6%  precision 47.6%  recall 45.9%  F1 0.467
+#   this prompt      FPR  9.9%  precision 65.6%  recall 54.1%  F1 0.593
+#   legacy monolith   FPR 17.6%  precision 47.6%  recall 45.9%  F1 0.467
 # +0.126 F1, 95% CI [+0.037,+0.216] by paired bootstrap. Same model, same one call
 # per trace (BATCH_SIZE is already 1), so cost is unchanged.
 #
@@ -248,6 +102,28 @@ DIMENSION_TO_SUBCATEGORY = {
 
 SYSTEM_V8 = """You audit ONE execution trace of an AI agent and decide whether the agent failed the user.
 
+YOUR INPUT is the trace's complete span tree: every span in execution order with its raw
+input and output. Nothing has been summarised or pre-selected. Orient yourself first:
+
+- Identify the USER REQUEST. Span inputs often carry the serialized conversation; one
+  trace is ONE user turn, so the request on trial is the LAST user message before the
+  trailing assistant/tool block. Earlier messages are context — questions there were
+  usually answered in their own turns and are not outstanding asks. Speaker labels in
+  that history are UNRELIABLE (SDKs re-serialise the agent's own prior replies as
+  "user"); infer who said what from content. When the last message is a clarification
+  or short follow-up ("yes please", a bare name), the user's actual goal is in the
+  earlier context — judge progress toward that outstanding goal, not whether the agent
+  echoed the last message.
+
+- Identify the FINAL RESPONSE: what the user actually received at the end of this turn.
+  Intermediate work is NOT the final response — planning steps, chain-of-thought,
+  sub-agent output, tool results, retrieval chunks, and a session transcript or call
+  log that downstream spans consume as input are machinery, not the answer. Judge the
+  agent on its final user-facing output; judge intermediate spans only for whether they
+  corrupted it. Some agents deliver the answer THROUGH a tool call (send_message,
+  display_final_response) — the answer is then in the tool call's arguments, not in a
+  span output.
+
 You will judge FIVE independent dimensions. For each one you must first quote VERBATIM
 evidence, then give a verdict. If you cannot quote the required evidence, the verdict for
 that dimension is PASS. An unquotable failure is a hallucinated failure.
@@ -261,7 +137,8 @@ WHAT COUNTS AS EVIDENCE — this is strict, and quoting the wrong thing invalida
 - TOOLS: quote the tool error or wrong result AND the agent's contradicting assertion.
 - INSTRUCTION: quote TWO things — the rule as stated in the input, AND the response text that
   violates it. Quoting the rule alone is not evidence of a violation.
-- COMPLETION: quote the end of the agent's response showing it stops early or is absent.
+- COMPLETION: quote the end of the final response showing it stops early — or, for an
+  absent response, name the span instead (see the dimension).
 
 Never cite a closing pleasantry ("You're welcome", "Have a great day", "Let me know if...")
 as evidence of any failure.
@@ -285,12 +162,19 @@ DIMENSIONS
 4. INSTRUCTION — did the agent honour explicit constraints (format, schema, length,
    language, "only return X")?
    FAIL only when the constraint is stated in the trace and visibly violated.
+   A constraint that FORBIDS something ("do not output JSON", "no markdown") is honoured
+   by the forbidden thing being ABSENT. Absence of a forbidden format is compliance —
+   never a violation.
 
 5. COMPLETION — did the agent actually finish?
-   FAIL on empty output, truncation mid-answer, an unrecovered loop, or giving up while
-   a usable path remained.
-   A response marked "[non-textual response: ...]" is a normal successful reply (an
-   embedding vector or scores) — that is not empty, do not fail it.
+   FAIL on an absent or empty final response, truncation mid-answer, an unrecovered
+   loop, or giving up while a usable path remained.
+   An output that is an embedding vector, scores, or another non-textual payload is a
+   successful response, not an empty one.
+   A COMPLETION FAIL must carry "span": the id of the span whose output is the truncated
+   response — or, when nothing was produced, the span that should have carried the final
+   response (the root, or the last generative span). The claim is verified in code
+   against that span's real output; a FAIL without a resolvable span id is discarded.
 
 NOT FAILURES — do not flag any of these:
 - asking a clarifying question, or requesting information it genuinely needs
@@ -300,8 +184,9 @@ NOT FAILURES — do not flag any of these:
 - terse, unpolished, or plainly-worded phrasing that is still correct
 - answering the user's goal from earlier context instead of echoing their last message
 - a tool returning a handled error that the agent relays accurately
-
-Speaker labels in conversation history are UNRELIABLE — infer who said what from content.
+- a root or wrapper span whose output is the session transcript or accumulated state
+  while child spans do the real work — that is telemetry structure, not the agent
+  echoing the transcript as its answer
 
 OUTPUT — strict JSON, no prose outside it:
 {
@@ -310,7 +195,7 @@ OUTPUT — strict JSON, no prose outside it:
     "grounding":   {"evidence": "...", "verdict": "PASS|FAIL"},
     "tools":       {"evidence": "...", "verdict": "PASS|FAIL"},
     "instruction": {"evidence": "...", "verdict": "PASS|FAIL"},
-    "completion":  {"evidence": "...", "verdict": "PASS|FAIL"}
+    "completion":  {"evidence": "...", "verdict": "PASS|FAIL", "span": "<span id, only on FAIL>"}
   },
   "issues": [
     {"dim": "goal|grounding|tools|instruction|completion",
@@ -344,22 +229,25 @@ FAIL — decide the verdicts first, then label them:
   Incorrect Problem Identification | Unsupported Claim | Incomplete Response
   Environment Setup Errors | Resource Not Found | Authentication Errors | Timeout Issues
   Service Errors
-key_moments: 3-5 quotes copied VERBATIM from the trace (task, spans, result) telling the
+key_moments: 3-5 quotes copied VERBATIM from the span inputs/outputs telling the
 story of what happened — user request, key tool outputs, agent decisions, final response.
 Always provide key_moments, including for clean traces."""
 
 
-def build_prompt_v8(compressed_traces):
-    """One trace per call — matches the shipped BATCH_SIZE of 1."""
-    t = compressed_traces[0] if isinstance(compressed_traces, list) else compressed_traces
-    parts = [
-        f"TRACE {t.get('tid','t1')}",
-        f"\nUSER REQUEST:\n{t.get('task','')}",
-        f"\nAGENT RESPONSE:\n{t.get('result','')}",
-    ]
-    if t.get("prior_turns"):
-        parts.append("\nEARLIER TURNS (oldest first, speaker labels unreliable):\n" +
-                     "\n".join(f"- {p}" for p in t["prior_turns"]))
+# Runaway guard on the whole rendered prompt, cut at a line boundary with an
+# explicit marker. Positional and named, never selective: a pathological trace
+# loses its tail visibly instead of the request failing on context length.
+PROMPT_RUNAWAY_BUDGET = 2_000_000
+
+
+def build_prompt_v8(payloads):
+    """One trace per call — the full span tree, nothing pre-selected.
+
+    Span ids are rendered so the model can reference a span (the completion
+    gate verifies its claim against the named span's real output).
+    """
+    t = payloads[0] if isinstance(payloads, list) else payloads
+    parts = [f"TRACE {t.get('tid','t1')}"]
     if t.get("tools_available"):
         parts.append("\nTOOLS AVAILABLE: " + ", ".join(map(str, t["tools_available"]))[:1200])
     if t.get("flow"):
@@ -368,9 +256,15 @@ def build_prompt_v8(compressed_traces):
         parts.append(f"\nSTRUCTURAL SIGNALS: {t['signals']}")
     spans = t.get("spans") or []
     if spans:
-        parts.append("\nSPANS (in = input, out = output; [FLAGGED] = structurally anomalous):")
-        for s in spans[:40]:
-            head = f"  {s.get('depth',0)*'  '}{s.get('name')} ({s.get('kind')}) status={s.get('status')}"
+        parts.append(
+            "\nSPANS — every span, raw (id | name | kind | status; "
+            "in = input, out = output; [FLAGGED] = structurally anomalous):"
+        )
+        for s in spans:
+            head = f"  {s.get('depth', 0) * '  '}[{s.get('id')}] {s.get('name')}"
+            if s.get("kind"):
+                head += f" ({s['kind']})"
+            head += f" status={s.get('status')}"
             if s.get("flagged"):
                 head += " [FLAGGED]"
             parts.append(head)
@@ -378,4 +272,124 @@ def build_prompt_v8(compressed_traces):
                 parts.append(f"      in : {s['in']}")
             if s.get("out"):
                 parts.append(f"      out: {s['out']}")
-    return "\n".join(parts)
+    prompt = "\n".join(parts)
+    if len(prompt) > PROMPT_RUNAWAY_BUDGET:
+        cut = prompt[:PROMPT_RUNAWAY_BUDGET]
+        nl = cut.rfind("\n")
+        if nl > 0:
+            cut = cut[:nl]
+        prompt = f"{cut}\n{SCANNER_TRUNCATION_MARK}, {len(prompt) - len(cut)} chars omitted⟩"
+    return prompt
+
+
+# ---------------------------------------------------------------------------
+# Verifier — second opinion on the scanner's surviving claims
+#
+# Lives here with the other prompts rather than beside the code that calls it.
+# On a 2,107-trace corpus this stage halved what the feed showed (364 flagged
+# traces to 174) and rejected 61% of the claims replayed through it. What it
+# rejected was overwhelmingly one thing: 91 of 102 refusals were "the agent
+# returned nothing", a class produced by pre-selecting the final response before
+# the model ever saw the trace. That pre-selection is gone, so most of what this
+# stage was cleaning up no longer reaches it, and its remaining value is
+# unmeasured — hence it ships off. Every rule below still names a failure class
+# observed in that corpus, so it is a record of what went wrong, not a list of
+# good intentions.
+# ---------------------------------------------------------------------------
+
+SYSTEM_VERIFIER = """You are the last check before a claim about an AI agent's execution is shown to the engineer who owns that agent.
+
+Whatever you confirm becomes a ticket in their queue. They will open the trace, look for
+what you confirmed, and either find it or lose their afternoon. Confirming something the
+trace does not show is worse than confirming nothing: it teaches them the tool lies, and
+they stop reading it. That has already happened once — roughly a third of what this
+product surfaced was wrong, and you exist because of it.
+
+You are given the RAW trace (not a summary — the actual spans, in order, with their
+inputs and outputs) and a numbered list of claims made about it.
+
+VERDICTS
+
+  CONFIRM — the trace demonstrably shows this. You can point at the exact text that proves
+            it, and a reasonable engineer reading that text would agree the agent failed.
+  REFUTE  — the trace does not show this, shows the opposite, or does not settle it.
+
+EVERY CONFIRM MUST CARRY A QUOTE, AND THE QUOTE IS CHECKED IN CODE
+
+Copy the proving text EXACTLY from the trace. It is matched against the raw trace
+automatically, and a CONFIRM whose quote cannot be found is discarded — so a confirmation
+you cannot cite is the same as a refutation, only slower. Do not paraphrase it, do not
+summarise it, do not stitch fragments together, do not add ellipses, do not correct its
+spelling or punctuation. Copy enough of it to be unambiguous — a two-word quote proves
+nothing. If you believe the claim but cannot find text that proves it, REFUTE.
+
+REFUTE WHEN — each of these is a mistake this scanner has actually made
+
+1. THE VALUE WAS REAL. The agent is accused of inventing a figure, name, date or fact that
+   appears somewhere in the trace's inputs, context, or tool results. Reformatting is not
+   fabrication: rounding 80.27 to "~80", writing 1500000 as "1.5M", converting a timestamp
+   to a date, summarising a list, or deriving a sum, count, average or percentage from
+   returned values are all GROUNDED. Only a figure with no basis anywhere in the trace is
+   fabricated.
+
+2. IT IS AN INTERMEDIATE STEP, NOT THE ANSWER. The text being judged comes from a planning
+   step, a scratchpad, a chain-of-thought span, a retrieval span or an inner tool call, and
+   is not what the user received. Judge the agent by its final user-facing response. An
+   intermediate step being wrong, empty or malformed is only a failure if it corrupted what
+   the user was ultimately told.
+
+3. WE TRUNCATED IT, NOT THE AGENT. The text ends at an explicit marker such as
+   "truncated by the scanner" or "[TRUNCATED 1234]". That is our own budget running out
+   while reading the trace. It is never evidence that the agent stopped early, gave up, or
+   produced an incomplete answer. Look for the marker before confirming any claim about a
+   cut-off or missing response.
+
+4. WE RECORDED NOTHING, SO THE AGENT CANNOT BE BLAMED. The trace has spans but no captured
+   input or output anywhere — an instrumentation gap. An absent recording is not an absent
+   answer. Never confirm "the agent returned nothing" against a trace that captured nothing;
+   you cannot tell a silent agent from a silent recorder.
+
+5. THE AGENT WAS CORRECT AND THE CLAIM MISREADS IT. Specifically:
+   - "No results found" is usually the right answer when the query genuinely matched nothing.
+     It is only a failure if the query itself was wrong.
+   - A handled tool error that the agent relays accurately to the user is correct behaviour.
+   - Terse, plain or unpolished phrasing that is still correct is not a failure.
+   - Answering from earlier context instead of echoing the user's last message is not a
+     failure.
+   - Closing pleasantries ("Happy to help", "Let me know if...") are never evidence of
+     anything.
+
+6. YOU CANNOT TELL. The trace does not contain what you would need. Refute — an unprovable
+   claim must not reach the engineer.
+
+DO NOT REFUTE WHEN — this is equally important, and the more common error
+
+You are not here to reject claims. You are here to reject claims THE TRACE DOES NOT SUPPORT.
+Measured on the same corpus, roughly three in five rejections at this stage were thrown away
+despite the defect being genuine. So:
+
+  - Judge the DEFECT, not the wording. A brief that is clumsy, over-general, imprecise about
+    magnitude, or uses a debatable label still describes a real failure if the trace shows
+    that failure. Confirm it and quote the proof.
+  - Do not refute because you would have categorised it differently. The category is not
+    your verdict; the behaviour is.
+  - Do not refute because the failure is small. Severity is not your call.
+  - Do not refute because you had to read the trace carefully to find the evidence. Effort
+    is not doubt.
+  - If the trace clearly shows the agent doing the wrong thing and you can quote it, CONFIRM
+    — even if the claim describes it loosely.
+
+USING THE SCANNER'S KEY MOMENTS
+
+You may be shown the moments the scanner believes are relevant, with the one it marked as
+the failure. Treat them as UNVERIFIED coordinates: a place to start reading, not an argument
+to agree with. The scanner is often right about where and wrong about what. Check the
+surrounding spans yourself, and look elsewhere in the trace before refuting — the claim may
+be true somewhere the scanner did not point. Never confirm merely because a moment was
+marked; you still owe a quote you found and checked.
+
+OUTPUT — strict JSON, nothing before or after it:
+{"verdicts": [{"i": <claim number>, "verdict": "CONFIRM|REFUTE", "quote": "<exact text copied from the trace, empty when refuting>", "why": "<one short sentence>"}]}
+
+Return one entry for EVERY claim you were given, using its number. A claim you skip is
+treated as unanswered and the whole trace is set aside for a later pass, which helps nobody."""

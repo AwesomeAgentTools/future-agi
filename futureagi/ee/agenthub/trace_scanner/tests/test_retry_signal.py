@@ -8,22 +8,22 @@ Two independent defects, both silent:
    loop fired 249 times — so the signal looked alive in any count-based view. But
    `anomalous_ids` is a set, so N copies of one id collapse to a single entry.
 
-2. `compress_v3` takes `retry_ids` as an explicit parameter and the only production
-   caller does not pass it, so it defaulted to empty and the correctly-computed set
-   under `_retry_ids` never reached `flagged`.
+2. `build_trace_payload` takes `retry_ids` as an explicit parameter and the only
+   production caller does not pass it, so it defaulted to empty and the
+   correctly-computed set under `_retry_ids` never reached `flagged`.
 
 Measured over 2,107 real traces before the fix: 844 carried at least one retry; 566
 of those (67%) had the signal collapse, and 556 (66%) had production's flagged set
 contain none of their retry spans. Retries cluster at the tail of long agentic
-traces, which is also what the span cap truncates, so an unflagged retry is likely to
-be dropped from the prompt entirely.
+traces, so an unflagged retry loses the structural emphasis the prefilter exists
+to provide.
 
 A trace here uses repeated same-name same-depth siblings, which is the detector's own
 definition of a retry.
 """
 
 from ee.agenthub.trace_scanner.compress import (
-    compress_v3,
+    build_trace_payload,
     structural_prefilter,
     structural_prefilter_with_ids,
 )
@@ -79,8 +79,8 @@ def test_retry_ids_are_real_span_ids_not_the_last_span():
     assert len(ids) > 1, "a single distinct id is the collapse signature"
 
 
-def test_compress_v3_flags_retries_without_being_passed_them():
-    """Production calls compress_v3(trace, prefilter) with no third argument.
+def test_payload_flags_retries_without_being_passed_them():
+    """Production calls build_trace_payload(trace, prefilter) with no third argument.
 
     Asserts EVERY retry is flagged, not merely one. Asserting `flagged & retry_ids`
     passed on the unfixed code: the stale id was the last span, which in a run of
@@ -91,7 +91,7 @@ def test_compress_v3_flags_retries_without_being_passed_them():
     """
     trace = _trace_with_retries(5)
     prefilter = structural_prefilter_with_ids(trace)
-    out = compress_v3(trace, prefilter)          # deliberately no retry_ids
+    out = build_trace_payload(trace, prefilter)  # deliberately no retry_ids
     flagged = {s["id"] for s in (out.get("spans") or []) if s.get("flagged")}
     retry_ids = set(prefilter.get("_retry_ids") or ())
     assert retry_ids <= flagged, (
@@ -103,7 +103,7 @@ def test_explicit_retry_ids_still_honoured():
     """The parameter must keep working for callers that do pass it."""
     trace = _trace_with_retries(5)
     prefilter = structural_prefilter_with_ids(trace)
-    out = compress_v3(trace, prefilter, retry_ids=["s1"])
+    out = build_trace_payload(trace, prefilter, retry_ids=["s1"])
     flagged = {s["id"] for s in (out.get("spans") or []) if s.get("flagged")}
     assert "s1" in flagged
 
