@@ -78,6 +78,45 @@ def _cluster_with(project, briefs):
 
 @pytest.mark.django_db
 class TestRetitleFromMembers:
+    """Medoid selection, with title generation held OFF.
+
+    ``_retitle_from_members`` prefers a generated group title and falls back to
+    the medoid only when one is unavailable. These tests are about the fallback,
+    so they pin the generator to None rather than letting the environment decide
+    — otherwise they assert the medoid while silently depending on EE being
+    absent, and start failing the moment it is present. That is not theoretical:
+    they pass in CI, where the EE symbol is missing, and fail against a checkout
+    where it resolves.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _no_generated_title(self):
+        with patch(
+            "tracer.ee_boundary.generate_scan_cluster_title", return_value=None
+        ):
+            yield
+
+    def test_a_generated_title_wins_over_the_medoid(self, project):
+        """The generator is the preferred source — the medoid is the fallback.
+
+        Without this, every test here runs with generation off and nothing
+        covers the path that actually executes when EE is present.
+        """
+        medoid = "Queried past month instead of requested quarterly performance"
+        cluster = _cluster_with(project, [medoid, "Queried past month, not the quarter"])
+        generated = "Agent used the wrong period when answering performance questions"
+
+        with patch(
+            "tracer.queries.scan_clustering.embed_texts",
+            side_effect=lambda briefs: [[1.0, 0.0] for _ in briefs],
+        ), patch(
+            "tracer.ee_boundary.generate_scan_cluster_title", return_value=generated
+        ):
+            _retitle_from_members(cluster)
+
+        cluster.refresh_from_db()
+        assert cluster.title == generated
+
     def test_medoid_is_chosen_over_first_arrival(self, project):
         """The core fix. The outlier arrived first and named the cluster; the
         medoid is the member the group is actually about."""

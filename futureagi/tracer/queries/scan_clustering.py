@@ -1045,9 +1045,13 @@ def merge_duplicate_clusters(
     Together: 234 -> 210 entries, 13 merges, every one of them a genuine duplicate —
     including two pairs whose titles were character-identical.
 
-    Note the asymmetry with ``PARTITION_BY_CATEGORY``, which is off for ASSIGNMENT.
-    A mis-categorised issue landing in its own cluster is recoverable; a merge is
-    not, so the looser rule belongs on the reversible side.
+    ``PARTITION_BY_CATEGORY`` gates assignment the same way, so category is strict
+    at BOTH stages: an issue never joins a cluster of a different category, and two
+    clusters of different categories never merge. State the consequence plainly —
+    one defect filed under two categories stays two entries permanently, because no
+    path exists by which they reunite. That is a real cost, paid to keep the
+    chaining above in check, and it is the number to weigh when revisiting either
+    guard.
 
     ``max_merges`` bounds a single pass: this runs periodically, so it is better to
     make steady progress than to hold a long transaction over a pathological project.
