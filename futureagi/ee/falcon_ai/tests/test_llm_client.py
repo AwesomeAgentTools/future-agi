@@ -36,7 +36,7 @@ class ManagedTransportTests(unittest.IsolatedAsyncioTestCase):
                 "ee.licensing.managed_ai.chat_completion",
                 return_value=response,
             ) as managed_call,
-            mock.patch("falcon_ai.llm_client.httpx.AsyncClient") as direct_client,
+            mock.patch("ee.falcon_ai.llm_client.httpx.AsyncClient") as direct_client,
         ):
             client = FalconLLMClient()
             result = await client.generate_summary("Summarize", "conversation")
