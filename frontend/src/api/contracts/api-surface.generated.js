@@ -734,6 +734,9 @@ export const API_SURFACE_CONTRACT = Object.freeze({
       "/api/public/traces": [
         "get"
       ],
+      "/api/setup-checks/": [
+        "get"
+      ],
       "/api/traces/span-attribute-detail/": [
         "get"
       ],
@@ -4039,6 +4042,9 @@ export const API_SURFACE_PATHS = Object.freeze({
     "post"
   ],
   "/api/public/traces": [
+    "get"
+  ],
+  "/api/setup-checks/": [
     "get"
   ],
   "/api/traces/span-attribute-detail/": [

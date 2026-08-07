@@ -33,6 +33,7 @@ from tfc.views.health import (
     HealthCheckView,
     LangfuseCompatTracesView,
 )
+from tfc.views.setup_checks import SetupChecksView
 from tfc.views.socket import CallWebsocketView
 from tracer.views.clickhouse_health import ClickHouseHealthView
 from tracer.views.langfuse_ingestion import LangfuseIngestionView
@@ -147,6 +148,11 @@ urlpatterns = [
         "api/capabilities/",
         CapabilitiesView.as_view(),
         name="capabilities",
+    ),
+    path(
+        "api/setup-checks/",
+        SetupChecksView.as_view(),
+        name="setup-checks",
     ),
 ]
 
