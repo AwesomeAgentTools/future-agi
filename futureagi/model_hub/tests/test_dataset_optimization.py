@@ -846,3 +846,15 @@ def test_list_serializer_marks_available_model(output_column, ai_model):
     data = DatasetOptimizationListSerializer(run).data
 
     assert data["model_deprecated"] is False
+
+
+def test_list_pagination_caps_limit_param():
+    from rest_framework.request import Request
+    from rest_framework.test import APIRequestFactory
+
+    from model_hub.views.dataset_optimization import DatasetOptimizationPagination
+
+    paginator = DatasetOptimizationPagination()
+    request = Request(APIRequestFactory().get("/", {"limit": "100000"}))
+
+    assert paginator.get_page_size(request) == 100

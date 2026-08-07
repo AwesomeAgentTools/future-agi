@@ -48,8 +48,15 @@ from tfc.utils.base_viewset import BaseModelViewSetMixin
 from tfc.utils.error_codes import get_error_message
 from tfc.utils.errors import format_validation_error
 from tfc.utils.general_methods import GeneralMethods
+from tfc.utils.pagination import ExtendedPageNumberPagination
 
 logger = structlog.get_logger(__name__)
+
+
+class DatasetOptimizationPagination(ExtendedPageNumberPagination):
+    """Caps the `limit` query param; the shared default has no maximum."""
+
+    max_page_size = 100
 
 
 def _request_workspace_filter(request, field_name="column__dataset__workspace"):
@@ -86,6 +93,7 @@ class DatasetOptimizationViewSet(BaseModelViewSetMixin, ModelViewSet):
 
     queryset = OptimizeDataset.objects.all()
     permission_classes = [IsAuthenticated]
+    pagination_class = DatasetOptimizationPagination
     _gm = GeneralMethods()
     serializer_class = DatasetOptimizationSerializer
 
