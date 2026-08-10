@@ -5,14 +5,15 @@ Provides async-to-sync wrappers for starting test execution workflows.
 """
 
 import asyncio
-from typing import Optional
 
 import structlog
 from asgiref.sync import async_to_sync
 
 from simulate.temporal.constants import (
     QUEUE_L,
+    QUEUE_RUNNER,
     RERUN_COORDINATOR_WORKFLOW_ID_PREFIX,
+    SIMULATION_RUNNER_WORKFLOW_ID_PREFIX,
     TEST_EXECUTION_WORKFLOW_ID_PREFIX,
 )
 from simulate.temporal.types.rerun import MergeCallsSignal, RerunCoordinatorInput
@@ -26,7 +27,7 @@ def start_test_execution_workflow(
     run_test_id: str,
     org_id: str,
     scenario_ids: list[str],
-    simulator_id: Optional[str] = None,
+    simulator_id: str | None = None,
 ) -> str:
     """
     Start a TestExecutionWorkflow from sync Django code.
@@ -58,7 +59,7 @@ async def _start_test_execution_workflow_async(
     run_test_id: str,
     org_id: str,
     scenario_ids: list[str],
-    simulator_id: Optional[str] = None,
+    simulator_id: str | None = None,
 ) -> str:
     """Async implementation for starting test execution workflow."""
     from temporalio.common import WorkflowIDConflictPolicy, WorkflowIDReusePolicy
@@ -73,8 +74,7 @@ async def _start_test_execution_workflow_async(
     workflow_id = f"{TEST_EXECUTION_WORKFLOW_ID_PREFIX}-{test_execution_id}"
 
     logger.info(
-        f"Starting TestExecutionWorkflow: {workflow_id}, "
-        f"scenarios={len(scenario_ids)}"
+        f"Starting TestExecutionWorkflow: {workflow_id}, scenarios={len(scenario_ids)}"
     )
 
     await client.start_workflow(
@@ -94,6 +94,69 @@ async def _start_test_execution_workflow_async(
 
     logger.info(f"Started TestExecutionWorkflow: {workflow_id}")
 
+    return workflow_id
+
+
+def start_simulation_runner_workflow(
+    test_execution_id: str,
+    run_test_id: str,
+    org_id: str,
+    scenario_ids: list[str],
+    mode: str = "chat",
+    simulator_id: str | None = None,
+) -> str:
+    """Start a hosted SimulationRunnerWorkflow from sync Django code.
+
+    Unlike ``start_test_execution_workflow`` this does not launch native
+    per-call workflows — it dispatches the released SDK to the simulation-runner
+    worker, which submits results back through the ALK ingestion API.
+    """
+    return async_to_sync(_start_simulation_runner_workflow_async)(
+        test_execution_id=test_execution_id,
+        run_test_id=run_test_id,
+        org_id=org_id,
+        scenario_ids=scenario_ids,
+        mode=mode,
+        simulator_id=simulator_id,
+    )
+
+
+async def _start_simulation_runner_workflow_async(
+    test_execution_id: str,
+    run_test_id: str,
+    org_id: str,
+    scenario_ids: list[str],
+    mode: str = "chat",
+    simulator_id: str | None = None,
+) -> str:
+    from temporalio.common import WorkflowIDConflictPolicy, WorkflowIDReusePolicy
+
+    from simulate.temporal.types.hosted_runner import SimulationRunnerInput
+    from simulate.temporal.workflows.simulation_runner_workflow import (
+        SimulationRunnerWorkflow,
+    )
+    from tfc.temporal.common.client import get_client
+
+    client = await get_client()
+    workflow_id = f"{SIMULATION_RUNNER_WORKFLOW_ID_PREFIX}-{test_execution_id}"
+
+    await client.start_workflow(
+        SimulationRunnerWorkflow.run,
+        SimulationRunnerInput(
+            test_execution_id=test_execution_id,
+            run_test_id=run_test_id,
+            org_id=org_id,
+            scenario_ids=scenario_ids,
+            mode=mode,
+            simulator_id=simulator_id,
+        ),
+        id=workflow_id,
+        task_queue=QUEUE_RUNNER,
+        id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE,
+        id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
+    )
+
+    logger.info(f"Started SimulationRunnerWorkflow: {workflow_id}")
     return workflow_id
 
 
@@ -162,7 +225,7 @@ async def _cancel_test_execution_async(test_execution_id: str) -> bool:
     return await _cancel_with_retries(client, workflow_id)
 
 
-def cancel_workflow(workflow_id: str, cancel_signal: Optional[str] = None) -> bool:
+def cancel_workflow(workflow_id: str, cancel_signal: str | None = None) -> bool:
     """
     Cancel a Temporal workflow by its full workflow ID.
 
@@ -179,7 +242,7 @@ def cancel_workflow(workflow_id: str, cancel_signal: Optional[str] = None) -> bo
 
 
 async def _cancel_workflow_async(
-    workflow_id: str, cancel_signal: Optional[str] = None
+    workflow_id: str, cancel_signal: str | None = None
 ) -> bool:
     """Async implementation for cancelling any workflow by ID.
 
@@ -251,7 +314,7 @@ def rerun_call_executions(
     org_id: str,
     workspace_id: str,
     eval_only: bool = False,
-    active_workflow_id: Optional[str] = None,
+    active_workflow_id: str | None = None,
 ) -> dict:
     """
     Rerun specific call executions via RerunCoordinatorWorkflow.
@@ -292,7 +355,7 @@ async def _rerun_call_executions_async(
     org_id: str,
     workspace_id: str,
     eval_only: bool = False,
-    active_workflow_id: Optional[str] = None,
+    active_workflow_id: str | None = None,
 ) -> dict:
     """
     Async implementation for rerunning call executions.

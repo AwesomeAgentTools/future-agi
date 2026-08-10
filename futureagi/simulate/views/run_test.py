@@ -782,8 +782,19 @@ class RunTestExecutionView(APIView):
             if gate_response is not None:
                 return gate_response
 
+            # Route to the hosted runner (released SDK) when enabled and the run
+            # is eligible; otherwise fall through to the native Temporal/Celery
+            # paths. Default off — existing flows are unaffected.
+            if getattr(
+                app_settings, "HOSTED_RUNNER_ENABLED", False
+            ) and self._hosted_runner_eligible(run_test):
+                result = self._execute_with_hosted_runner(
+                    run_test=run_test,
+                    scenario_ids=final_scenario_ids,
+                    simulator_id=simulator_id,
+                )
             # Check if Temporal test execution is enabled
-            if getattr(app_settings, "TEMPORAL_TEST_EXECUTION_ENABLED", False):
+            elif getattr(app_settings, "TEMPORAL_TEST_EXECUTION_ENABLED", False):
                 result = self._execute_with_temporal(
                     run_test=run_test,
                     scenario_ids=final_scenario_ids,
@@ -886,6 +897,87 @@ class RunTestExecutionView(APIView):
             return {
                 "success": False,
                 "error": f"Failed to start test execution: {str(e)}",
+                "run_test_id": str(run_test.id),
+            }
+
+    def _hosted_runner_eligible(self, run_test: RunTest) -> bool:
+        """Chat (TEXT) always routes to the hosted runner. Voice routes only
+        when HOSTED_RUNNER_VOICE_ENABLED is on (default off ⇒ voice stays on
+        the native path, no regression)."""
+        agent_definition = run_test.agent_definition
+        if agent_definition is None:
+            return False
+        if agent_definition.agent_type == AgentDefinition.AgentTypeChoices.TEXT:
+            return True
+        if agent_definition.agent_type == AgentDefinition.AgentTypeChoices.VOICE:
+            return bool(getattr(app_settings, "HOSTED_RUNNER_VOICE_ENABLED", False))
+        return False
+
+    def _hosted_runner_mode(self, run_test: RunTest) -> str:
+        from simulate.services.hosted_runner import resolve_runner_mode
+
+        return resolve_runner_mode(run_test.agent_definition)
+
+    def _execute_with_hosted_runner(
+        self, run_test: RunTest, scenario_ids: list[str], simulator_id: str | None
+    ) -> dict:
+        """Dispatch the run to the hosted simulation-runner (released SDK).
+
+        Pre-creates the TestExecution (so the UI has an id immediately) and
+        starts SimulationRunnerWorkflow; results stream back via ALK ingestion.
+        """
+        from simulate.temporal.client import start_simulation_runner_workflow
+
+        try:
+            simulator_agent = None
+            if simulator_id:
+                try:
+                    simulator_agent = SimulatorAgent.objects.get(id=simulator_id)
+                except SimulatorAgent.DoesNotExist:
+                    simulator_agent = run_test.simulator_agent
+            else:
+                simulator_agent = run_test.simulator_agent
+
+            test_execution = TestExecution.objects.create(
+                run_test=run_test,
+                status=TestExecution.ExecutionStatus.PENDING,
+                started_at=timezone.now(),
+                total_scenarios=len(scenario_ids),
+                scenario_ids=[str(sid) for sid in scenario_ids],
+                picked_up_by_executor=True,
+                simulator_agent=simulator_agent,
+                agent_definition=run_test.agent_definition,
+                agent_version=run_test.agent_version,
+            )
+
+            workflow_id = start_simulation_runner_workflow(
+                test_execution_id=str(test_execution.id),
+                run_test_id=str(run_test.id),
+                org_id=str(run_test.organization_id),
+                scenario_ids=[str(sid) for sid in scenario_ids],
+                mode=self._hosted_runner_mode(run_test),
+                simulator_id=str(simulator_id) if simulator_id else None,
+            )
+
+            logger.info(
+                f"Started hosted SimulationRunnerWorkflow {workflow_id} "
+                f"for test execution {test_execution.id}"
+            )
+
+            return {
+                "success": True,
+                "run_test_id": str(run_test.id),
+                "execution_id": str(test_execution.id),
+                "workflow_id": workflow_id,
+                "status": "started",
+                "total_scenarios": len(scenario_ids),
+                "total_calls": 0,
+            }
+        except Exception as e:
+            logger.exception(f"Failed to start hosted runner workflow: {str(e)}")
+            return {
+                "success": False,
+                "error": f"Failed to start hosted test execution: {str(e)}",
                 "run_test_id": str(run_test.id),
             }
 

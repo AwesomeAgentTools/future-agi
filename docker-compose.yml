@@ -1,4 +1,3 @@
-
 name: futureagi
 
 # PeerDB CDC shared config — used by 5 PeerDB containers
@@ -209,7 +208,6 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-
   worker-default:
     <<: &queue-worker
       image: futureagi/future-agi:${FUTURE_AGI_VERSION:-latest}
@@ -278,6 +276,26 @@ services:
       TEMPORAL_TASK_QUEUE: agent_compass
       TEMPORAL_MAX_CONCURRENT_ACTIVITIES: ${TEMPORAL_COMPASS_MAX_ACTIVITIES:-50}
       TEMPORAL_MAX_CONCURRENT_WORKFLOW_TASKS: ${TEMPORAL_COMPASS_MAX_WORKFLOWS:-50}
+
+  # Hosted simulation runner (plan §9). Polls only the simulation_runner queue
+  # and spawns the released SDK as a child process (ALK_RUNNER_PYTHON). Uses the
+  # dedicated runner image which bundles the SDK — the backend image does not.
+  worker-simulation-runner:
+    <<: *queue-worker
+    image: futureagi/future-agi-simulation-runner:${SIMULATION_RUNNER_VERSION:-latest}
+    environment:
+      <<: *backend-env
+      SERVICE_TYPE: temporal-worker
+      TEMPORAL_TASK_QUEUE: simulation_runner
+      ALK_RUNNER_PYTHON: ${ALK_RUNNER_PYTHON:-/opt/alk-venv/bin/python}
+      ALK_RUNNER_MAX_CONCURRENCY: ${ALK_RUNNER_MAX_CONCURRENCY:-4}
+      HOSTED_RUNNER_ENABLED: ${HOSTED_RUNNER_ENABLED:-true}
+      HOSTED_RUNNER_VOICE_ENABLED: ${HOSTED_RUNNER_VOICE_ENABLED:-false}
+      # DID-pool lease script (livekit-infra); unset ⇒ SDK self-provisions the
+      # per-run dispatch rule for sip_inbound. Only voice_sip leases.
+      ALK_SIM_SLOT_LEASE_SCRIPT: ${ALK_SIM_SLOT_LEASE_SCRIPT:-}
+      TEMPORAL_MAX_CONCURRENT_ACTIVITIES: ${TEMPORAL_SIMRUNNER_MAX_ACTIVITIES:-8}
+      TEMPORAL_MAX_CONCURRENT_WORKFLOW_TASKS: ${TEMPORAL_SIMRUNNER_MAX_WORKFLOWS:-8}
 
   # LLM gateway. Provider creds live in agentcc-gateway/config.yaml (override
   # the shipped example via AGENTCC_CONFIG_PATH).
@@ -513,7 +531,6 @@ services:
       retries: 15
       start_period: 90s
     restart: unless-stopped
-
 
   temporal-ui:
     image: temporalio/ui:2.43.3
