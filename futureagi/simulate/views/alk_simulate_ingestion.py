@@ -24,6 +24,8 @@ from rest_framework.viewsets import ViewSet
 from simulate.models import CallExecution, RunTest, SimulatorAgent, TestExecution
 from simulate.serializers.alk_simulate_ingestion import (
     ALKSimulateBatchCreateResponseSerializer,
+    ALKSimulateProvisionResponseSerializer,
+    ALKSimulateProvisionRunTestRequestSerializer,
     ALKSimulateResultResponseSerializer,
     ALKSimulateResultSerializer,
     ALKSimulateStartTestExecutionRequestSerializer,
@@ -34,6 +36,7 @@ from simulate.services.alk_simulate_ingestion import (
     create_alk_sim_call_execution_batch,
     create_alk_sim_test_execution,
     ingest_alk_sim_result,
+    provision_alk_sim_run_test,
     store_alk_recording,
 )
 from tfc.utils.api_contracts import validated_request
@@ -111,6 +114,52 @@ class ALKSimulateIngestionViewSet(ViewSet):
         return run_test, organization
 
     # -- endpoints --------------------------------------------------------------
+
+    @action(detail=False, methods=["post"], url_path=r"run-tests/provision")
+    @validated_request(
+        request_serializer=ALKSimulateProvisionRunTestRequestSerializer,
+        responses={
+            200: ALKSimulateProvisionResponseSerializer,
+            400: ApiTextErrorResponseSerializer,
+            404: ApiTextErrorResponseSerializer,
+            500: ApiTextErrorResponseSerializer,
+        },
+        reject_unknown_fields=True,
+    )
+    def provision_run_test(self, request):
+        """Stand up a chat RunTest + scenario-of-record from SDK personas so an
+        SDK-first run has somewhere to post — without the native UI's async
+        scenario generation. See ``provision_alk_sim_run_test``."""
+        organization = self._resolve_organization(request)
+        if organization is None:
+            return self.gm.not_found("Organization not found")
+
+        payload = request.validated_data
+        try:
+            run_test, scenarios, agent_definition = provision_alk_sim_run_test(
+                organization,
+                name=payload["name"],
+                personas=payload.get("personas"),
+                scenario_ids=payload.get("scenario_ids"),
+                agent_definition_id=payload.get("agent_definition_id"),
+                agent_name=payload.get("agent_name"),
+                description=payload.get("description", ""),
+            )
+        except ALKSimulateIngestionError as e:
+            return self.gm.bad_request(str(e))
+        except Exception:
+            logger.exception("alk_provision_run_test_failed")
+            return self.gm.internal_server_error_response(
+                "Failed to provision ALK run test"
+            )
+
+        return self.gm.success_response(
+            {
+                "run_test_id": str(run_test.id),
+                "scenario_ids": [str(s.id) for s in scenarios],
+                "agent_definition_id": str(agent_definition.id),
+            }
+        )
 
     @action(
         detail=False,

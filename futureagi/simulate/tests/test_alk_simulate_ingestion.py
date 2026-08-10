@@ -11,6 +11,7 @@ object-storage upload. Everything else — metric computation, DB writes,
 the API envelope — runs for real.
 """
 
+import json
 from unittest.mock import patch
 
 import pytest
@@ -152,6 +153,127 @@ def _start_and_batch(auth_client, run_test):
     assert batch.status_code == 200, batch.content
     call_ids = batch.json()["result"]["call_execution_ids"]
     return test_execution_id, call_ids
+
+
+# ---------------------------------------------------------------------------
+# provision (SDK-first RunTest + scenario-of-record)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+@pytest.mark.api
+@pytest.mark.django_db
+class TestProvisionRunTest:
+    """Stand up a chat RunTest + scenario-of-record from SDK personas (no async
+    generation), then confirm it feeds the normal ingestion flow."""
+
+    def _provision(self, auth_client, **body):
+        return auth_client.post(f"{ALK_BASE}/run-tests/provision/", body, format="json")
+
+    def test_provision_creates_text_agent_scenario_and_run_test(self, auth_client):
+        resp = self._provision(
+            auth_client,
+            name="sdk-e2e",
+            personas=[
+                {"name": "Sam", "situation": "refund please", "outcome": "refunded"}
+            ],
+        )
+        assert resp.status_code == 200, resp.content
+        result = resp.json()["result"]
+        assert len(result["scenario_ids"]) == 1
+
+        run_test = RunTest.objects.get(id=result["run_test_id"])
+        assert (
+            run_test.agent_definition.agent_type
+            == AgentDefinition.AgentTypeChoices.TEXT
+        )
+        assert run_test.scenarios.count() == 1
+        scenario = Scenarios.objects.get(id=result["scenario_ids"][0])
+        assert scenario.status == StatusType.COMPLETED.value
+        assert scenario.metadata["persona"]["name"] == "Sam"
+
+        # A real 1-row persona dataset backs the scenario so it renders with a
+        # row and the {{persona}}/{{situation}} placeholders resolve.
+        from model_hub.models.develop_dataset import Cell, Row
+
+        assert scenario.dataset_id is not None
+        rows = Row.objects.filter(dataset=scenario.dataset)
+        assert rows.count() == 1
+        cell_values = {
+            c.column.name: c.value
+            for c in Cell.objects.filter(row=rows.first()).select_related("column")
+        }
+        assert cell_values["situation"] == "refund please"
+        assert cell_values["outcome"] == "refunded"
+        assert json.loads(cell_values["persona"])["name"] == "Sam"
+
+    def test_provisioned_run_test_batches_one_call_per_persona(self, auth_client):
+        resp = self._provision(
+            auth_client,
+            name="sdk-e2e-batch",
+            personas=[{"name": "Morgan", "situation": "late delivery"}],
+        )
+        run_test = RunTest.objects.get(id=resp.json()["result"]["run_test_id"])
+        _te_id, call_ids = _start_and_batch(auth_client, run_test)
+        assert len(call_ids) == 1
+
+    def test_provision_reuses_existing_scenario(self, auth_client, scenario):
+        before = Scenarios.objects.count()
+        resp = self._provision(
+            auth_client, name="sdk-reuse", scenario_ids=[str(scenario.id)]
+        )
+        assert resp.status_code == 200, resp.content
+        result = resp.json()["result"]
+        assert result["scenario_ids"] == [str(scenario.id)]
+        # No scenario fabricated — the existing one is attached as-is.
+        assert Scenarios.objects.count() == before
+
+        run_test = RunTest.objects.get(id=result["run_test_id"])
+        assert list(run_test.scenarios.values_list("id", flat=True)) == [scenario.id]
+        # Run-test-level simulator agent set from the scenario so batch never
+        # writes simulator_agent back onto the shared scenario.
+        assert run_test.simulator_agent_id == scenario.simulator_agent_id
+        # Chat run test carries a fresh TEXT agent, not the scenario's VOICE one.
+        assert (
+            run_test.agent_definition.agent_type
+            == AgentDefinition.AgentTypeChoices.TEXT
+        )
+
+    def test_provision_rejects_both_personas_and_scenario_ids(
+        self, auth_client, scenario
+    ):
+        resp = self._provision(
+            auth_client,
+            name="both",
+            personas=[{"name": "x"}],
+            scenario_ids=[str(scenario.id)],
+        )
+        assert resp.status_code == 400, resp.content
+
+    def test_provision_rejects_neither_personas_nor_scenario_ids(self, auth_client):
+        resp = self._provision(auth_client, name="neither")
+        assert resp.status_code == 400, resp.content
+
+    def test_provision_reuse_rejects_missing_scenario(self, auth_client):
+        import uuid as _uuid
+
+        resp = self._provision(
+            auth_client, name="missing", scenario_ids=[str(_uuid.uuid4())]
+        )
+        assert resp.status_code == 400, resp.content
+
+    def test_provision_rejects_voice_agent_definition(
+        self, auth_client, agent_definition
+    ):
+        # `agent_definition` fixture is VOICE — provisioning must refuse it so it
+        # cannot bypass the voice entitlement gate.
+        resp = self._provision(
+            auth_client,
+            name="voice-nope",
+            personas=[{"name": "x"}],
+            agent_definition_id=str(agent_definition.id),
+        )
+        assert resp.status_code == 400, resp.content
 
 
 # ---------------------------------------------------------------------------
@@ -407,3 +529,578 @@ class TestRecordingUpload:
         )
         assert resp.status_code == 400
         assert resp.json()["status"] is False
+
+
+# ---------------------------------------------------------------------------
+# Hosted runner (chat / TEXT mode)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def text_agent_definition(db, organization, workspace):
+    return AgentDefinition.objects.create(
+        agent_name="ALK Chat Agent",
+        agent_type=AgentDefinition.AgentTypeChoices.TEXT,
+        contact_number="",
+        inbound=True,
+        description="Chat agent under test for the hosted runner",
+        organization=organization,
+        workspace=workspace,
+        languages=["en"],
+    )
+
+
+@pytest.fixture
+def text_run_test(
+    db, organization, workspace, text_agent_definition, scenario, simulator_agent
+):
+    rt = RunTest.objects.create(
+        name="ALK Chat Run Test",
+        description="Chat run for the hosted runner",
+        agent_definition=text_agent_definition,
+        simulator_agent=simulator_agent,
+        organization=organization,
+        workspace=workspace,
+    )
+    rt.scenarios.add(scenario)
+    return rt
+
+
+@pytest.mark.integration
+@pytest.mark.api
+@pytest.mark.django_db
+class TestTextModeIngestion:
+    def test_batch_creates_text_call(self, auth_client, text_run_test, scenario):
+        te_id, call_ids = _start_and_batch(auth_client, text_run_test)
+        assert len(call_ids) == 1
+
+        call = CallExecution.objects.get(id=call_ids[0])
+        assert call.simulation_call_type == CallExecution.SimulationCallType.TEXT
+        assert call.call_metadata["call_channel"] == "chat"
+        assert call.call_metadata["external_runner"] == "alk"
+
+    def test_text_result_ingest_writes_chat_messages(self, auth_client, text_run_test):
+        from simulate.models.chat_message import ChatMessageModel
+
+        _, call_ids = _start_and_batch(auth_client, text_run_test)
+        resp = auth_client.patch(
+            f"{ALK_BASE}/call-executions/{call_ids[0]}/result/",
+            {"status": "completed", "transcript": _transcript_payload()},
+            format="json",
+        )
+        assert resp.status_code == 200, resp.content
+
+        call = CallExecution.objects.get(id=call_ids[0])
+        assert call.status == CallExecution.CallStatus.COMPLETED
+        # Chat runs render from ChatMessage (not voice CallTranscript).
+        chat_rows = ChatMessageModel.objects.filter(call_execution=call)
+        assert chat_rows.count() == 3
+        assert CallTranscript.objects.filter(call_execution=call).count() == 0
+        # turn_count = number of ASSISTANT rows (one agent turn in the fixture).
+        cmd = call.conversation_metrics_data or {}
+        assert cmd.get("turn_count") == 1
+
+    def test_text_result_ingest_folds_tool_calls_into_agent_turn(
+        self, auth_client, text_run_test
+    ):
+        from simulate.models.chat_message import ChatMessageModel
+
+        _, call_ids = _start_and_batch(auth_client, text_run_test)
+        transcript = [
+            {"speaker_role": "user", "content": "My order A1 arrived damaged."},
+            {
+                "speaker_role": "tool_calls",
+                "content": 'lookup_order({"order_id": "A1"})',
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "name": "lookup_order",
+                        "arguments": {"order_id": "A1"},
+                    }
+                ],
+            },
+            {
+                "speaker_role": "tool_call_result",
+                "content": "order A1: eligible for refund",
+                "tool_call_id": "c1",
+            },
+            {"speaker_role": "assistant", "content": "You're eligible — refund done."},
+        ]
+        resp = auth_client.patch(
+            f"{ALK_BASE}/call-executions/{call_ids[0]}/result/",
+            {"status": "completed", "transcript": transcript},
+            format="json",
+        )
+        assert resp.status_code == 200, resp.content
+
+        call = CallExecution.objects.get(id=call_ids[0])
+        rows = list(
+            ChatMessageModel.objects.filter(call_execution=call).order_by("created_at")
+        )
+        # One exchange: 1 USER row + 1 folded ASSISTANT row (tool call + result +
+        # final text). turn_count stays 1 (native exchange semantic).
+        assert len(rows) == 2
+        assistant = next(r for r in rows if r.role == "assistant")
+        blob = json.dumps(assistant.content)
+        assert "lookup_order" in blob
+        assert "eligible for refund" in blob
+        assert any(item.get("tool_calls") for item in assistant.content)
+        assert (call.conversation_metrics_data or {}).get("turn_count") == 1
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+class TestBuildRunnerJob:
+    def test_builds_chat_job_for_text_run(self, text_run_test, scenario):
+        from django.test import override_settings
+
+        from simulate.services.alk_simulate_ingestion import (
+            create_alk_sim_test_execution,
+        )
+        from simulate.services.hosted_runner import build_start_runner_job
+
+        te = create_alk_sim_test_execution(text_run_test)
+
+        with override_settings(
+            ALK_RUNNER_DEFAULT_CHAT_TARGET="my_module:reply",
+            ALK_RUNNER_API_URL="http://localhost:8000",
+        ):
+            job = build_start_runner_job(
+                test_execution_id=str(te.id),
+                run_test_id=str(text_run_test.id),
+                scenario_ids=[str(scenario.id)],
+                mode="chat",
+            )
+
+        assert job["schema_version"] == "futureagi.runner-job.v1"
+        assert job["mode"] == "chat"
+        assert job["spec"]["environment"]["adapter"] == "chat"
+        # No provider server_url -> falls back to the configured callable target.
+        assert job["spec"]["target"]["adapter"] == "callable"
+        assert job["spec"]["target"]["config"]["target"] == "my_module:reply"
+        assert len(job["spec"]["scenario"]["dataset"]) == 1
+        # Sink points at the pre-created execution + carries secret refs only.
+        assert job["sink"]["test_execution_id"] == str(te.id)
+        assert job["sink"]["run_test_id"] == str(text_run_test.id)
+        assert job["sink"]["secret_refs"]["api_key"]["manager"] == "env"
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+class TestBuildVoiceRunnerJob:
+    """#149 — the voice branch maps a platform VOICE run test to a voice job
+    (VoiceRunConfig shape) with the transport derived from provider + phone."""
+
+    def _voice_agent(
+        self,
+        organization,
+        workspace,
+        *,
+        provider=None,
+        phone="",
+        inbound=True,
+        assistant_id="",
+        server_url="",
+        agent_name="",
+    ):
+        agent = AgentDefinition.objects.create(
+            agent_name="Voice Target",
+            agent_type=AgentDefinition.AgentTypeChoices.VOICE,
+            contact_number=phone,
+            inbound=inbound,
+            description="Voice agent under test",
+            provider=provider,
+            assistant_id=assistant_id,
+            organization=organization,
+            workspace=workspace,
+            languages=["en"],
+        )
+        if provider in {"vapi", "retell", "livekit"}:
+            from simulate.models.agent_definition import ProviderCredentials
+
+            ProviderCredentials.objects.create(
+                agent_definition=agent,
+                provider_type=provider,
+                api_key="secret-key-value",
+                api_secret="secret-secret-value" if provider == "livekit" else "",
+                assistant_id=assistant_id,
+                server_url=server_url,
+                agent_name=agent_name,
+            )
+        return agent
+
+    def _run_test(self, organization, workspace, agent, simulator_agent, scenario):
+        rt = RunTest.objects.create(
+            name="Voice Run",
+            description="voice",
+            agent_definition=agent,
+            simulator_agent=simulator_agent,
+            organization=organization,
+            workspace=workspace,
+        )
+        rt.scenarios.add(scenario)
+        return rt
+
+    def _scenario(self, organization, workspace, agent, simulator_agent):
+        return Scenarios.objects.create(
+            name="Voice Scenario",
+            description="A late delivery.",
+            source="test",
+            scenario_type=Scenarios.ScenarioTypes.DATASET,
+            organization=organization,
+            workspace=workspace,
+            agent_definition=agent,
+            simulator_agent=simulator_agent,
+            status=StatusType.COMPLETED.value,
+        )
+
+    def _build(self, organization, workspace, simulator_agent, agent):
+        from simulate.services.alk_simulate_ingestion import (
+            create_alk_sim_test_execution,
+        )
+        from simulate.services.hosted_runner import (
+            build_start_runner_job,
+            resolve_runner_mode,
+        )
+
+        scenario = self._scenario(organization, workspace, agent, simulator_agent)
+        rt = self._run_test(organization, workspace, agent, simulator_agent, scenario)
+        te = create_alk_sim_test_execution(rt)
+        mode = resolve_runner_mode(agent)
+        job = build_start_runner_job(
+            test_execution_id=str(te.id),
+            run_test_id=str(rt.id),
+            scenario_ids=[str(scenario.id)],
+            mode=mode,
+        )
+        return job, mode
+
+    def test_resolve_runner_mode(self, organization, workspace):
+        from simulate.services.hosted_runner import resolve_runner_mode
+
+        web = self._voice_agent(organization, workspace, provider="vapi", phone="")
+        phoned = self._voice_agent(
+            organization, workspace, provider="vapi", phone="+15551234567"
+        )
+        assert resolve_runner_mode(web) == "voice_webrtc"
+        assert resolve_runner_mode(phoned) == "voice_sip"
+
+    def test_builds_vapi_websocket_job(self, organization, workspace, simulator_agent):
+        agent = self._voice_agent(
+            organization, workspace, provider="vapi", phone="", assistant_id="asst_123"
+        )
+        job, mode = self._build(organization, workspace, simulator_agent, agent)
+        assert mode == "voice_webrtc"
+        assert job["mode"] == "voice_webrtc"
+        assert "spec" not in job
+        adef = job["voice"]["agent_definition"]
+        assert adef["transport"]["kind"] == "vapi_websocket"
+        assert adef["target"] == {
+            "provider": "vapi",
+            "assistant_id": "asst_123",
+            "api_key_env": "VAPI_API_KEY",
+        }
+        assert job["voice"]["params"]["record_audio"] is True
+        # Provider secret resolves from ProviderCredentials, LiveKit from env.
+        keys = {r["key"]: r for r in job["metadata"]["secret_env"]}
+        assert keys["VAPI_API_KEY"]["manager"] == "provider_credentials"
+        assert keys["LIVEKIT_API_KEY"]["manager"] == "env"
+        assert job["metadata"]["run_id"] == job["sink"]["test_execution_id"]
+
+    def test_builds_retell_webcall_job(self, organization, workspace, simulator_agent):
+        agent = self._voice_agent(
+            organization,
+            workspace,
+            provider="retell",
+            phone="",
+            assistant_id="agent_xyz",
+        )
+        job, mode = self._build(organization, workspace, simulator_agent, agent)
+        adef = job["voice"]["agent_definition"]
+        assert mode == "voice_webrtc"
+        assert adef["transport"]["kind"] == "retell_webcall"
+        assert adef["target"]["provider"] == "retell"
+        assert adef["target"]["agent_id"] == "agent_xyz"
+        assert adef["target"]["api_key_env"] == "RETELL_API_KEY"
+
+    def test_builds_webrtc_job_uses_customer_livekit(
+        self, organization, workspace, simulator_agent
+    ):
+        agent = self._voice_agent(
+            organization,
+            workspace,
+            provider="livekit",
+            phone="",
+            server_url="wss://customer.livekit.cloud",
+            agent_name="target-worker",
+        )
+        job, mode = self._build(organization, workspace, simulator_agent, agent)
+        adef = job["voice"]["agent_definition"]
+        assert mode == "voice_webrtc"
+        assert adef["transport"] == {"kind": "webrtc"}
+        assert adef["agent_name"] == "target-worker"
+        rt = job["voice"]["livekit_runtime"]
+        assert rt["url"] == "wss://customer.livekit.cloud"
+        keys = {r["key"]: r for r in job["metadata"]["secret_env"]}
+        assert keys["LIVEKIT_API_KEY"]["manager"] == "provider_credentials"
+        assert keys["LIVEKIT_API_SECRET"]["field"] == "api_secret"
+
+    def test_builds_sip_outbound_job(self, organization, workspace, simulator_agent):
+        from django.test import override_settings
+
+        agent = self._voice_agent(
+            organization,
+            workspace,
+            provider="livekit",
+            phone="+15551230000",
+            inbound=True,
+        )
+        with override_settings(
+            LIVEKIT_OUTBOUND_TRUNK_ID="ST_trunk", PSTN_CALLER_NUMBER="+15550009999"
+        ):
+            job, mode = self._build(organization, workspace, simulator_agent, agent)
+        assert mode == "voice_sip"
+        t = job["voice"]["agent_definition"]["transport"]
+        assert t["kind"] == "sip_outbound"
+        assert t["sip_trunk_id"] == "ST_trunk"
+        assert t["sip_number"] == "+15550009999"
+        assert t["sip_call_to"] == "+15551230000"
+
+    def test_builds_sip_inbound_job_no_did_at_build(
+        self, organization, workspace, simulator_agent
+    ):
+        # Outbound agent (inbound=False) dials the simulator DID -> sip_inbound;
+        # the DID/dispatch rule are leased by the runner activity, not here.
+        agent = self._voice_agent(
+            organization,
+            workspace,
+            provider="vapi",
+            phone="+15551230000",
+            inbound=False,
+        )
+        job, mode = self._build(organization, workspace, simulator_agent, agent)
+        assert mode == "voice_sip"
+        t = job["voice"]["agent_definition"]["transport"]
+        assert t["kind"] == "sip_inbound"
+        assert "dispatch_rule_name" not in t
+        assert t["inbound_call_originator"] == "vapi"
+
+
+class TestHostedRunnerActivityHelpers:
+    """The DID pool is touched only for sip_inbound (mirrors _needs_phone)."""
+
+    def test_inject_did_slot_only_for_sip_inbound(self):
+        from simulate.temporal.activities.hosted_runner import _inject_did_slot
+
+        slot = {"did": "+15557654321", "dispatch_rule_name": "rule-1", "slot_id": "s1"}
+        inbound = {
+            "voice": {
+                "agent_definition": {"transport": {"kind": "sip_inbound"}},
+                "params": {},
+            },
+            "metadata": {},
+        }
+        _inject_did_slot(inbound, slot)
+        t = inbound["voice"]["agent_definition"]["transport"]
+        assert t["dispatch_rule_name"] == "rule-1"
+        assert inbound["voice"]["params"]["inbound_did"] == "+15557654321"
+
+        outbound = {
+            "voice": {
+                "agent_definition": {
+                    "transport": {"kind": "sip_outbound", "sip_call_to": "+1"}
+                }
+            }
+        }
+        _inject_did_slot(outbound, slot)
+        # sip_outbound dials the target directly; never consumes a leased DID.
+        assert (
+            "dispatch_rule_name"
+            not in (outbound["voice"]["agent_definition"]["transport"])
+        )
+
+    def test_acquire_did_slot_none_without_script(self, monkeypatch):
+        import asyncio
+
+        from simulate.temporal.activities.hosted_runner import _acquire_did_slot
+
+        monkeypatch.delenv("ALK_SIM_SLOT_LEASE_SCRIPT", raising=False)
+        assert asyncio.run(_acquire_did_slot("job-1")) is None
+
+
+class _FakeStdout:
+    def __init__(self, lines):
+        self._lines = list(lines)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if not self._lines:
+            raise StopAsyncIteration
+        return self._lines.pop(0)
+
+
+class _FakeProc:
+    def __init__(self, lines, return_code=0):
+        self.stdout = _FakeStdout(lines)
+        self.returncode = return_code
+        self._rc = return_code
+
+    async def wait(self):
+        self.returncode = self._rc
+        return self._rc
+
+    def terminate(self):  # pragma: no cover - cancel path only
+        pass
+
+
+class TestRunHostedSdkJob:
+    """Runtime-exercise the restructured run_hosted_sdk_job (try/finally + DID
+    lease + secret env), spawning a fake child instead of the real SDK."""
+
+    def _run(
+        self, monkeypatch, *, mode, job, status_lines, acquire=None, released=None
+    ):
+        import asyncio
+
+        from simulate.temporal.activities import hosted_runner as hr
+        from simulate.temporal.types.hosted_runner import RunHostedJobInput
+
+        async def _fake_exec(*args, **kwargs):
+            return _FakeProc([ln.encode() for ln in status_lines])
+
+        monkeypatch.setattr(hr.asyncio, "create_subprocess_exec", _fake_exec)
+        # Bare-calling the activity (no worker) => no Temporal activity context.
+        monkeypatch.setattr(hr.activity, "heartbeat", lambda *a, **k: None)
+        if acquire is not None:
+            monkeypatch.setattr(hr, "_acquire_did_slot", acquire)
+        if released is not None:
+            monkeypatch.setattr(hr, "_release_did_slot", released)
+
+        inp = RunHostedJobInput(
+            job_id="job-x", run_id="run-x", mode=mode, job_json=json.dumps(job)
+        )
+        return asyncio.run(hr.run_hosted_sdk_job(inp))
+
+    def test_chat_job_runs_and_completes(self, monkeypatch):
+        job = {
+            "mode": "chat",
+            "spec": {"run_id": "run-x", "target": {"secret_refs": {}}},
+            "sink": {"api_url": "http://localhost:8000"},
+            "metadata": {"run_id": "run-x"},
+        }
+        lines = [
+            '{"phase": "running", "job_id": "job-x"}',
+            '{"phase": "completed", "job_id": "job-x", "report_hash": "h1", '
+            '"submission_status": "submitted"}',
+        ]
+        out = self._run(monkeypatch, mode="chat", job=job, status_lines=lines)
+        assert out.phase == "completed"
+        assert out.return_code == 0
+        assert out.submission_status == "submitted"
+
+    def test_voice_sip_leases_injects_and_releases(self, monkeypatch):
+        released_slots = []
+
+        async def _acquire(job_id):
+            return {
+                "did": "+15557654321",
+                "dispatch_rule_name": "rule-9",
+                "slot_id": "s9",
+            }
+
+        async def _release(slot):
+            released_slots.append(slot["slot_id"])
+
+        job = {
+            "mode": "voice_sip",
+            "voice": {
+                "agent_definition": {"transport": {"kind": "sip_inbound"}},
+                "params": {},
+            },
+            "sink": {"api_url": "http://localhost:8000"},
+            "metadata": {"run_id": "run-x", "secret_env": []},
+        }
+        lines = [
+            '{"phase": "completed", "job_id": "job-x", "submission_status": "submitted"}'
+        ]
+        out = self._run(
+            monkeypatch,
+            mode="voice_sip",
+            job=job,
+            status_lines=lines,
+            acquire=_acquire,
+            released=_release,
+        )
+        assert out.phase == "completed"
+        # The leased slot was released in finally.
+        assert released_slots == ["s9"]
+
+    def test_web_voice_never_leases(self, monkeypatch):
+        async def _acquire(job_id):  # pragma: no cover - must not be called
+            raise AssertionError("web voice must not lease a DID")
+
+        job = {
+            "mode": "voice_webrtc",
+            "voice": {
+                "agent_definition": {"transport": {"kind": "webrtc"}},
+                "params": {},
+            },
+            "sink": {"api_url": "http://localhost:8000"},
+            "metadata": {"run_id": "run-x", "secret_env": []},
+        }
+        lines = [
+            '{"phase": "completed", "job_id": "job-x", "submission_status": "submitted"}'
+        ]
+        out = self._run(
+            monkeypatch,
+            mode="voice_webrtc",
+            job=job,
+            status_lines=lines,
+            acquire=_acquire,
+        )
+        assert out.phase == "completed"
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+class TestVoiceSecretResolution:
+    def test_resolve_provider_credential_decrypts(self, organization, workspace):
+        import asyncio
+
+        from simulate.models.agent_definition import (
+            AgentDefinition,
+            ProviderCredentials,
+        )
+        from simulate.temporal.activities.hosted_runner import (
+            _resolve_voice_secret_env,
+        )
+
+        agent = AgentDefinition.objects.create(
+            agent_name="v",
+            agent_type=AgentDefinition.AgentTypeChoices.VOICE,
+            inbound=True,
+            description="d",
+            organization=organization,
+            workspace=workspace,
+        )
+        creds = ProviderCredentials.objects.create(
+            agent_definition=agent,
+            provider_type="vapi",
+            api_key="plain-vapi-key",
+        )
+        job = {
+            "metadata": {
+                "secret_env": [
+                    {
+                        "key": "VAPI_API_KEY",
+                        "manager": "provider_credentials",
+                        "credential_id": str(creds.id),
+                        "field": "api_key",
+                    }
+                ]
+            }
+        }
+        resolved = asyncio.run(_resolve_voice_secret_env(job))
+        assert resolved["VAPI_API_KEY"] == "plain-vapi-key"

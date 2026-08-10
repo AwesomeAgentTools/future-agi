@@ -13,6 +13,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import timedelta
 from io import BytesIO
 from typing import Any
 
@@ -20,13 +21,16 @@ import structlog
 from django.utils import timezone
 
 from simulate.models import (
+    AgentDefinition,
     CallExecution,
     RunTest,
     Scenarios,
     SimulatorAgent,
     TestExecution,
 )
+from simulate.models.chat_message import ChatMessageModel
 from simulate.models.test_execution import CallTranscript
+from simulate.pydantic_schemas.chat import ChatRole
 from simulate.semantics import SupportedProviders
 from simulate.services.test_executor import (
     TestExecutor,
@@ -156,6 +160,214 @@ def _extension_from_filename(filename: str | None) -> str:
     return tail if tail and 1 <= len(tail) <= 5 else "wav"
 
 
+def _provision_text_agent_definition(
+    organization, agent_definition_id, agent_name, description
+):
+    """Resolve the RunTest's agent definition for provisioning.
+
+    Explicit id must resolve to a non-VOICE agent (voice is entitlement-gated in
+    CreateRunTestView; provisioning must not bypass that gate). Otherwise a TEXT
+    agent is created — chat call type follows the agent definition's type.
+    """
+    if agent_definition_id:
+        try:
+            agent_definition = AgentDefinition.objects.get(
+                id=agent_definition_id, organization=organization, deleted=False
+            )
+        except AgentDefinition.DoesNotExist as exc:
+            raise ALKSimulateIngestionError(
+                f"agent definition {agent_definition_id} not found"
+            ) from exc
+        if agent_definition.agent_type == AgentDefinition.AgentTypeChoices.VOICE:
+            raise ALKSimulateIngestionError(
+                "voice agent definitions cannot be provisioned via ALK ingestion"
+            )
+        return agent_definition
+    return AgentDefinition.objects.create(
+        agent_name=agent_name or "alk-sdk-agent",
+        agent_type=AgentDefinition.AgentTypeChoices.TEXT,
+        inbound=True,  # NOT NULL; call-direction is a no-op for chat
+        description=description or "SDK-provisioned chat agent (ALK ingestion).",
+        organization=organization,
+    )
+
+
+def provision_alk_sim_run_test(
+    organization,
+    *,
+    name: str,
+    personas: list[dict] | None = None,
+    scenario_ids: list | None = None,
+    agent_definition_id: str | None = None,
+    agent_name: str | None = None,
+    description: str = "",
+) -> tuple[RunTest, list[Scenarios], AgentDefinition]:
+    """Stand up a chat RunTest for an SDK-first run, two ways (exactly one):
+
+    * ``scenario_ids`` — attach existing (natively generated) scenarios. Nothing
+      is fabricated or mutated; the scenarios keep their real datasets so they
+      render in the UI. A run-test-level ``simulator_agent`` is set from the
+      scenarios so the batch never writes ``simulator_agent`` back onto the
+      shared scenario. Preferred.
+    * ``personas`` — fabricate one COMPLETED persona-dataset scenario per persona
+      (see ``_build_persona_scenario_dataset``). Self-contained fallback; the
+      dataset lacks the generated ``column_config`` the scenarios UI reads.
+
+    One CallExecution is created per dataset row at batch time, so keep the row
+    count (== persona count, or the reused scenarios' rows) equal to the
+    conversations the run posts per execution; extras leave dangling PENDING rows.
+    """
+    from django.db import transaction
+
+    from model_hub.models.choices import StatusType
+
+    with transaction.atomic():
+        if scenario_ids:
+            scenarios = list(
+                Scenarios.objects.filter(
+                    id__in=scenario_ids, organization=organization, deleted=False
+                ).select_related("agent_definition", "simulator_agent")
+            )
+            found = {str(s.id) for s in scenarios}
+            missing = [str(sid) for sid in scenario_ids if str(sid) not in found]
+            if missing:
+                raise ALKSimulateIngestionError(
+                    f"scenario(s) not found: {', '.join(missing)}"
+                )
+            agent_definition = _provision_text_agent_definition(
+                organization, agent_definition_id, agent_name, description
+            )
+            simulator_agent = next(
+                (s.simulator_agent for s in scenarios if s.simulator_agent), None
+            )
+            if simulator_agent is None:
+                # None of the reused scenarios carries a simulator agent — give
+                # the run test its own so batch's _resolve_simulator_agent returns
+                # it instead of creating one and writing it onto the shared scenario.
+                simulator_agent = SimulatorAgent.objects.create(
+                    name=f"{name} · simulator",
+                    prompt=generate_simulator_agent_prompt(agent_version=None),
+                    organization=organization,
+                )
+            run_test = RunTest.objects.create(
+                name=name,
+                description=description,
+                agent_definition=agent_definition,
+                simulator_agent=simulator_agent,
+                organization=organization,
+            )
+            run_test.scenarios.set(scenarios)
+            return run_test, scenarios, agent_definition
+
+        agent_definition = _provision_text_agent_definition(
+            organization, agent_definition_id, agent_name, description
+        )
+
+        scenarios: list[Scenarios] = []
+        for idx, persona in enumerate(personas):
+            persona = dict(persona or {})
+            persona_name = (persona.get("name") or f"persona-{idx + 1}").strip()
+            situation = (persona.get("situation") or "").strip()
+            scenario_name = f"{name} · {persona_name}"[:255]
+            # A real 1-row dataset (persona/situation/outcome) makes the scenario
+            # render with persona rows AND lets the simulator prompt's
+            # {{persona}}/{{situation}} placeholders resolve — without it the
+            # placeholders ship to the model unsubstituted.
+            dataset = _build_persona_scenario_dataset(
+                organization, scenario_name, persona
+            )
+            scenarios.append(
+                Scenarios.objects.create(
+                    name=scenario_name,
+                    # ``clean()`` rejects blank source; fall back to the name.
+                    source=situation or persona_name,
+                    scenario_type=Scenarios.ScenarioTypes.DATASET,
+                    source_type=Scenarios.SourceTypes.AGENT_DEFINITION,
+                    agent_definition=agent_definition,
+                    organization=organization,
+                    dataset=dataset,
+                    status=StatusType.COMPLETED.value,
+                    metadata={"origin": "alk_sdk_ingestion", "persona": persona},
+                )
+            )
+
+        run_test = RunTest.objects.create(
+            name=name,
+            description=description,
+            agent_definition=agent_definition,
+            organization=organization,
+        )
+        run_test.scenarios.set(scenarios)
+
+    return run_test, scenarios, agent_definition
+
+
+def _build_persona_scenario_dataset(organization, scenario_name: str, persona: dict):
+    """Materialize one SDK persona as a 1-row scenario dataset.
+
+    Mirrors the native dataset-scenario grid (persona / situation / outcome
+    columns) minus the async LLM generation — the SDK already carries the
+    persona. Gives the scenario a real row (``row_count`` > 0, so it renders in
+    the scenarios tab) and lets ``_generate_dynamic_prompt`` resolve the
+    ``{{persona}}`` / ``{{situation}}`` placeholders against it.
+    """
+    import json
+
+    from model_hub.models.choices import (
+        DatasetSourceChoices,
+        DataTypeChoices,
+        SourceChoices,
+        StatusType,
+    )
+    from model_hub.models.develop_dataset import Cell, Column, Dataset, Row
+
+    persona = dict(persona or {})
+    identity = persona.get("persona")
+    if not isinstance(identity, dict):
+        identity = {
+            key: value
+            for key, value in (
+                ("name", persona.get("name")),
+                ("role", persona.get("role")),
+            )
+            if value
+        }
+
+    dataset = Dataset.objects.create(
+        name=f"{scenario_name} · personas"[:2000],
+        source=DatasetSourceChoices.SCENARIO.value,
+        organization=organization,
+    )
+    column_specs = (
+        ("persona", DataTypeChoices.PERSONA.value),
+        ("situation", DataTypeChoices.TEXT.value),
+        ("outcome", DataTypeChoices.TEXT.value),
+    )
+    columns = {
+        col_name: Column.objects.create(
+            name=col_name,
+            data_type=data_type,
+            source=SourceChoices.OTHERS.value,
+            dataset=dataset,
+            status=StatusType.COMPLETED.value,
+        )
+        for col_name, data_type in column_specs
+    }
+    row = Row.objects.create(dataset=dataset, order=0)
+    values = {
+        "persona": json.dumps(identity, ensure_ascii=False),
+        "situation": (persona.get("situation") or "").strip(),
+        "outcome": (persona.get("outcome") or "").strip(),
+    }
+    Cell.objects.bulk_create(
+        [
+            Cell(dataset=dataset, column=columns[key], row=row, value=value)
+            for key, value in values.items()
+        ]
+    )
+    return dataset
+
+
 def create_alk_sim_test_execution(
     run_test: RunTest,
     *,
@@ -214,6 +426,13 @@ def create_alk_sim_call_execution_batch(
     run_test = test_execution.run_test
     agent_definition = run_test.agent_definition
     selected_version = test_execution.agent_version or agent_definition.latest_version
+    # Call type follows the agent definition: a chat RunTest carries a TEXT
+    # agent definition, a voice RunTest a VOICE one. This keeps one ingestion
+    # contract for both modes instead of hardcoding VOICE.
+    call_type = (
+        getattr(agent_definition, "agent_type", None)
+        or CallExecution.SimulationCallType.VOICE
+    )
 
     processed_row_ids, processed_scenarios = _already_batched_ids(test_execution)
 
@@ -268,6 +487,7 @@ def create_alk_sim_call_execution_batch(
                         base_prompt=base_prompt,
                         row_id=row_id,
                         row_data_info=row_data_info,
+                        call_type=call_type,
                     )
                 )
                 batched_scenarios.add(scenario_id)
@@ -286,6 +506,7 @@ def create_alk_sim_call_execution_batch(
                     base_prompt=base_prompt,
                     row_id=None,
                     row_data_info=None,
+                    call_type=call_type,
                 )
             )
             batched_scenarios.add(scenario_id)
@@ -314,16 +535,25 @@ def ingest_alk_sim_result(
     Idempotent for evaluation dispatch: a second call updates fields but does
     not dispatch a second evaluation (guarded by `call_metadata['eval_started']`).
     """
-    if call_execution.simulation_call_type != CallExecution.SimulationCallType.VOICE:
+    if call_execution.simulation_call_type not in (
+        CallExecution.SimulationCallType.VOICE,
+        CallExecution.SimulationCallType.TEXT,
+    ):
         raise ALKSimulateInvalidCallTypeError(
-            "LiveKit result can only be submitted to VOICE call executions"
+            "ALK result can only be submitted to VOICE or TEXT call executions"
         )
 
     _apply_payload(call_execution, payload)
 
     eval_dispatched = False
     if call_execution.status == CallExecution.CallStatus.COMPLETED:
-        _dispatch_csat_once(call_execution)
+        # Chat CSAT is computed synchronously by _aggregate_chat_metrics during
+        # _apply_payload; only voice needs the async CSAT task.
+        if (
+            call_execution.simulation_call_type
+            == CallExecution.SimulationCallType.VOICE
+        ):
+            _dispatch_csat_once(call_execution)
         eval_dispatched = _dispatch_evaluations_once(call_execution)
 
     try:
@@ -428,19 +658,21 @@ def _build_call_execution(
     base_prompt: str,
     row_id: str | None,
     row_data_info: dict | None,
+    call_type: str = CallExecution.SimulationCallType.VOICE,
 ) -> CallExecution:
     row_data_info = row_data_info or {}
     system_prompt = row_data_info.get("dynamic_prompt", base_prompt)
+    is_text = call_type == CallExecution.SimulationCallType.TEXT
     return CallExecution(
         test_execution=test_execution,
         scenario=scenario,
         phone_number="",
         status=CallExecution.CallStatus.PENDING,
-        simulation_call_type=CallExecution.SimulationCallType.VOICE,
+        simulation_call_type=call_type,
         agent_version=selected_version,
         row_id=row_id,
         call_metadata={
-            "call_channel": "livekit",
+            "call_channel": "chat" if is_text else "livekit",
             "external_runner": "alk",
             "row_id": row_id,
             "row_data": row_data_info.get("row_data", {}),
@@ -514,6 +746,31 @@ def _apply_payload(call_execution: CallExecution, payload: dict[str, Any]) -> No
         call_execution.call_metadata = merged
 
     segments = payload.get("transcript") or []
+    is_text = (
+        call_execution.simulation_call_type == CallExecution.SimulationCallType.TEXT
+    )
+
+    if is_text:
+        # Chat runs render from ChatMessage rows (voice CallTranscript is ignored
+        # by the chat UI), and metrics/CSAT come from the chat aggregator — the
+        # same path native chat uses. See simulate/utils/chat_simulation.py.
+        if (
+            segments
+            and not ChatMessageModel.objects.filter(
+                call_execution=call_execution
+            ).exists()
+        ):
+            _store_alk_chat_messages(call_execution, segments)
+            call_execution.transcript_available = True
+            call_execution.message_count = len(segments)
+        call_execution.save()
+        from simulate.utils.chat_simulation import _aggregate_chat_metrics
+
+        _aggregate_chat_metrics(call_execution)
+        call_execution.save()
+        _deduct_alk_chat_cost_once(call_execution)
+        return
+
     if (
         segments
         and not CallTranscript.objects.filter(call_execution=call_execution).exists()
@@ -539,6 +796,126 @@ def _apply_payload(call_execution: CallExecution, payload: dict[str, Any]) -> No
 
     _apply_conversation_metrics(call_execution)
     call_execution.save()
+
+
+_ALK_CHAT_SESSION_PREFIX = "alk-chat"
+
+
+_CHAT_AGENT_SPEAKER_ROLES = {"assistant", "tool_calls", "tool_call_result", "system"}
+
+
+def _store_alk_chat_messages(
+    call_execution: CallExecution, segments: list[dict]
+) -> int:
+    """Persist a chat transcript as ChatMessage rows in the native shape.
+
+    Groups the transcript into exchanges — a new exchange begins at each USER
+    (simulator) turn, and every following agent-side segment (assistant text,
+    ``tool_calls``, ``tool_call_result``) folds into that exchange's single
+    ASSISTANT row. Folding keeps the agent's real tool activity visible while
+    ``turn_count`` (COUNT of ASSISTANT rows) still equals the exchange count, the
+    native chat semantic. The USER and ASSISTANT rows of one exchange **share a
+    created_at**: that is what the chat UI groups a turn by — staggering per row
+    made every message render as interrupted.
+
+    Mirrors ``simulate/tasks/chat_sim.py`` store_chat_messages (agent → ASSISTANT,
+    simulator → USER). ``latency_ms`` is carried from the last agent segment that
+    supplied one; transcripts without timing leave it null, as native does.
+    """
+    from simulate.utils.chat_simulation import estimate_tokens_text
+
+    run_test = call_execution.test_execution.run_test
+    base = call_execution.started_at or timezone.now()
+    session_id = f"{_ALK_CHAT_SESSION_PREFIX}-{call_execution.id}"
+
+    def _seg_latency(seg: dict) -> int | None:
+        value = seg.get("latency_ms")
+        return int(value) if isinstance(value, (int, float)) and value > 0 else None
+
+    exchanges: list[dict] = []
+    current: dict | None = None
+    for seg in segments:
+        role = (seg.get("speaker_role") or "").lower()
+        if not (seg.get("content") or "").strip():
+            continue
+        if role in {"user", "customer"}:
+            current = {"user": seg, "agent": []}
+            exchanges.append(current)
+        elif role in _CHAT_AGENT_SPEAKER_ROLES:
+            if current is None:
+                current = {"user": None, "agent": []}
+                exchanges.append(current)
+            current["agent"].append(seg)
+
+    def _row(role, role_str, segs, created_at, latency_ms=None) -> ChatMessageModel:
+        texts = [seg.get("content") or "" for seg in segs]
+        content_items: list[dict] = []
+        for seg in segs:
+            item = {"role": role_str, "content": seg.get("content") or ""}
+            if seg.get("tool_calls"):
+                item["tool_calls"] = seg["tool_calls"]
+            speaker = (seg.get("speaker_role") or "").lower()
+            if speaker in {"tool_calls", "tool_call_result"}:
+                item["kind"] = speaker
+            content_items.append(item)
+        joined = "\n".join(t for t in texts if t)
+        return ChatMessageModel(
+            id=uuid.uuid4(),
+            role=role,
+            call_execution=call_execution,
+            messages=texts,
+            content=content_items,
+            session_id=session_id,
+            created_at=created_at,
+            organization=run_test.organization,
+            workspace=run_test.workspace,
+            tokens=estimate_tokens_text(joined),
+            latency_ms=latency_ms,
+        )
+
+    rows: list[ChatMessageModel] = []
+    for index, exchange in enumerate(exchanges):
+        created_at = base + timedelta(seconds=index)
+        if exchange["user"] is not None:
+            rows.append(_row(ChatRole.USER, "user", [exchange["user"]], created_at))
+        agent_segs = exchange["agent"]
+        if agent_segs:
+            latency = next(
+                (
+                    lat
+                    for lat in (_seg_latency(s) for s in reversed(agent_segs))
+                    if lat is not None
+                ),
+                None,
+            )
+            rows.append(
+                _row(ChatRole.ASSISTANT, "assistant", agent_segs, created_at, latency)
+            )
+
+    if rows:
+        ChatMessageModel.objects.bulk_create(rows)
+    return len(rows)
+
+
+def _deduct_alk_chat_cost_once(call_execution: CallExecution) -> None:
+    """Charge a chat run the same way native chat does (TestExecutor._deduct_call_cost:
+    text_call by turns/tokens + TEXT_CALL usage event). Guarded so a re-ingest of
+    the same result does not double-charge."""
+    meta = call_execution.call_metadata or {}
+    if meta.get("cost_deducted"):
+        return
+    from simulate.services.test_executor import TestExecutor
+
+    try:
+        TestExecutor._deduct_call_cost(call_execution)
+    except Exception:
+        logger.exception(
+            "alk_chat_cost_deduct_failed", call_execution_id=str(call_execution.id)
+        )
+        return
+    meta["cost_deducted"] = True
+    call_execution.call_metadata = meta
+    call_execution.save(update_fields=["call_metadata"])
 
 
 def _apply_conversation_metrics(call_execution: CallExecution) -> None:

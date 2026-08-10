@@ -18,6 +18,15 @@ class ALKSimulateTranscriptSegmentSerializer(serializers.Serializer):
     confidence_score = serializers.FloatField(
         required=False, allow_null=True, min_value=0.0, max_value=1.0
     )
+    # Per-turn agent latency (chat runs) — without this field DRF drops it and
+    # avg_latency_ms stays null forever.
+    latency_ms = serializers.IntegerField(required=False, allow_null=True, min_value=0)
+    # Structured tool calls carried on a ``tool_calls`` segment so the agent's
+    # real tool activity survives ingestion (list of {id, name, arguments}).
+    tool_calls = serializers.JSONField(required=False)
+    tool_call_id = serializers.CharField(
+        required=False, allow_blank=True, max_length=255
+    )
 
 
 class ALKSimulateCostBreakdownSerializer(serializers.Serializer):
@@ -139,3 +148,59 @@ class ALKSimulateRecordingUploadResultSerializer(serializers.Serializer):
 class ALKSimulateRecordingUploadResponseSerializer(serializers.Serializer):
     status = serializers.BooleanField(default=True)
     result = ALKSimulateRecordingUploadResultSerializer()
+
+
+class ALKSimulateProvisionPersonaSerializer(serializers.Serializer):
+    name = serializers.CharField(required=False, allow_blank=True, max_length=255)
+    role = serializers.CharField(required=False, allow_blank=True, max_length=255)
+    situation = serializers.CharField(required=False, allow_blank=True)
+    outcome = serializers.CharField(required=False, allow_blank=True)
+    # Full persona identity dict (name/role/personality/…); when supplied it is
+    # stored verbatim in the scenario dataset's ``persona`` cell so the simulator
+    # prompt's {{persona}} placeholder resolves against the real persona.
+    persona = serializers.JSONField(required=False)
+
+
+class ALKSimulateProvisionRunTestRequestSerializer(serializers.Serializer):
+    """Provision a chat RunTest for an SDK-first run, two mutually exclusive ways:
+
+    * ``scenario_ids`` — attach existing (natively generated) scenarios to a new
+      RunTest. Nothing is fabricated or mutated; the scenarios render with their
+      real datasets. Preferred.
+    * ``personas`` — a hand-built fallback: one COMPLETED persona-dataset scenario
+      per persona (see ``_build_persona_scenario_dataset``). Kept for the offline
+      self-contained path; the resulting dataset lacks the generated
+      ``column_config`` the UI reads, so prefer ``scenario_ids``.
+
+    Exactly one of the two must be supplied.
+    """
+
+    name = serializers.CharField(max_length=255)
+    description = serializers.CharField(required=False, allow_blank=True)
+    personas = ALKSimulateProvisionPersonaSerializer(many=True, required=False)
+    scenario_ids = serializers.ListField(
+        child=serializers.UUIDField(), required=False, allow_empty=False
+    )
+    agent_definition_id = serializers.UUIDField(required=False, allow_null=True)
+    agent_name = serializers.CharField(required=False, allow_blank=True, max_length=255)
+
+    def validate(self, attrs):
+        has_personas = bool(attrs.get("personas"))
+        has_scenarios = bool(attrs.get("scenario_ids"))
+        if has_personas == has_scenarios:
+            raise serializers.ValidationError(
+                "provide exactly one of 'scenario_ids' (reuse existing scenarios) "
+                "or 'personas' (fabricate a scenario per persona)"
+            )
+        return attrs
+
+
+class ALKSimulateProvisionResultSerializer(serializers.Serializer):
+    run_test_id = serializers.UUIDField()
+    scenario_ids = serializers.ListField(child=serializers.UUIDField())
+    agent_definition_id = serializers.UUIDField()
+
+
+class ALKSimulateProvisionResponseSerializer(serializers.Serializer):
+    status = serializers.BooleanField(default=True)
+    result = ALKSimulateProvisionResultSerializer()
