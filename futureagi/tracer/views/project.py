@@ -1,11 +1,8 @@
 from datetime import datetime, timedelta
 
-import redis
 import structlog
-from django.conf import settings
-from django.db import models, transaction
+from django.db import models
 from django.db.models import Count
-from django.utils import timezone
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.viewsets import ModelViewSet
@@ -19,15 +16,12 @@ from tfc.utils.base_viewset import BaseModelViewSetMixinWithUserOrg
 from tfc.utils.error_codes import get_error_message
 from tfc.utils.general_methods import GeneralMethods
 from tracer.db_routing import DATABASE_FOR_PROJECT_LIST
-from tracer.models.custom_eval_config import CustomEvalConfig
-from tracer.models.eval_task import EvalTask
 from tracer.models.monitor import UserAlertMonitor
-from tracer.models.observation_span import EvalLogger, ObservationSpan
+from tracer.models.observation_span import ObservationSpan
 from tracer.models.project import Project
 from tracer.models.project_version import ProjectVersion
 from tracer.models.trace import Trace
 from tracer.models.trace_scan import TraceScanConfig
-from tracer.models.trace_session import TraceSession
 from tracer.queries.projects import apply_project_list_filters
 from tracer.serializers.project import (
     ProjectDetailResponseSerializer,
@@ -50,6 +44,7 @@ from tracer.services.clickhouse.query_builders import (
     UserListQueryBuilder,
 )
 from tracer.services.clickhouse.query_service import AnalyticsQueryService
+from tracer.services.project_deletion import soft_delete_projects
 from tracer.services.clickhouse.v2.query_builders.user_list import (
     UserListQueryBuilderV2,
 )
@@ -64,34 +59,6 @@ from tracer.utils.graphs_optimized import get_all_system_metrics
 from tracer.utils.helper import get_default_project_version_config, get_sort_query
 
 logger = structlog.get_logger(__name__)
-
-FI_PROJECT_INVALIDATE_CHANNEL = "fi:project:invalidate"
-
-
-def _publish_project_invalidation(project_ids: list[str]) -> None:
-    """Publish deleted project ids so fi-collector drops them from its auth
-    cache. Best-effort with short timeouts; never blocks or fails the delete
-    (the on_commit callback runs inline in autocommit mode)."""
-    if not project_ids:
-        return
-    r = None
-    try:
-        r = redis.Redis.from_url(
-            getattr(settings, "REDIS_URL", "redis://localhost:6379/0"),
-            decode_responses=True,
-            socket_connect_timeout=1,
-            socket_timeout=1,
-        )
-        for pid in project_ids:
-            r.publish(FI_PROJECT_INVALIDATE_CHANNEL, str(pid))
-    except Exception:
-        logger.warning("fi_project_invalidate_publish_failed", exc_info=True)
-    finally:
-        if r is not None:
-            try:
-                r.close()
-            except Exception:
-                pass
 
 
 class ProjectView(BaseModelViewSetMixinWithUserOrg, ModelViewSet):
@@ -131,35 +98,7 @@ class ProjectView(BaseModelViewSetMixinWithUserOrg, ModelViewSet):
         return self._project_scope_queryset().filter(id=project_id).first()
 
     def _soft_delete_projects(self, projects, project_type):
-        project_ids = [str(pid) for pid in projects.values_list("id", flat=True)]
-        with transaction.atomic():
-            now = timezone.now()
-            if project_type == "experiment":
-                ProjectVersion.objects.filter(project__in=projects).update(
-                    deleted=True, deleted_at=now
-                )
-            else:
-                TraceSession.objects.filter(project__in=projects).update(
-                    deleted=True, deleted_at=now
-                )
-            Trace.objects.filter(project__in=projects).update(deleted=True, deleted_at=now)
-            ObservationSpan.objects.filter(project__in=projects).update(
-                deleted=True, deleted_at=now
-            )
-            UserAlertMonitor.objects.filter(project__in=projects).update(
-                deleted=True, deleted_at=now
-            )
-            EvalTask.objects.filter(project__in=projects).update(
-                deleted=True, deleted_at=now
-            )
-            eval_configs = CustomEvalConfig.objects.filter(project__in=projects)
-            EvalLogger.objects.filter(custom_eval_config__in=eval_configs).update(
-                deleted=True, deleted_at=now
-            )
-            eval_configs.update(deleted=True, deleted_at=now)
-            projects.update(deleted=True, deleted_at=now)
-
-        transaction.on_commit(lambda: _publish_project_invalidation(project_ids))
+        soft_delete_projects(projects, project_type)
 
     def get_queryset(self):
         # Get base queryset with automatic filtering from mixin

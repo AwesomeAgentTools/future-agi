@@ -1346,6 +1346,20 @@ func TestWatchProjectInvalidationEvictsByID(t *testing.T) {
 	t.Fatal("project id P1 was not evicted after invalidation publish")
 }
 
+// TestInvalidationChannelWireContract pins the literal channel names shared
+// with the Django backend. The backend publishes to these exact strings
+// (futureagi/tracer/services/project_deletion.py and accounts/views/keys.py);
+// a rename on either side silently breaks invalidation, so assert the literals
+// rather than the constants.
+func TestInvalidationChannelWireContract(t *testing.T) {
+	if projectInvalidateChannel != "fi:project:invalidate" {
+		t.Errorf("projectInvalidateChannel drifted: got %q", projectInvalidateChannel)
+	}
+	if revocationChannel != "fi:auth:revoke" {
+		t.Errorf("revocationChannel drifted: got %q", revocationChannel)
+	}
+}
+
 func TestFormatIndicesLong(t *testing.T) {
 	got := formatIndices([]int{0, 1, 2, 3, 4, 5, 6, 7})
 	if got == "" {
