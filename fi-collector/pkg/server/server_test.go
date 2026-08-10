@@ -744,10 +744,9 @@ func TestDrainAggregatesCuratedAcrossPayloads(t *testing.T) {
 	}
 }
 
-// A single span larger than gRPC's 4 MiB default must be accepted — the
-// default GRPCMaxRecvMiB (16, HTTP-path parity) governs. Regression: ended
-// voice-call spans (full transcript + raw_log) were rejected with
-// RESOURCE_EXHAUSTED and silently lost, leaving traces stuck "In progress".
+// A single span larger than gRPC's 4 MiB default must be accepted under the
+// default GRPCMaxRecvMiB. Regression: ended voice-call spans (full transcript
+// + raw_log) were rejected and silently lost, leaving traces stuck "In progress".
 func TestGRPCAcceptsSpanLargerThanFourMiB(t *testing.T) {
 	chSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)

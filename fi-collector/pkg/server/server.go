@@ -42,7 +42,7 @@ type Config struct {
 	HTTPAddr       string        `yaml:"http_addr"`         // :4318 default; empty disables
 	BatchMaxRows   int           `yaml:"batch_max_rows"`    // flush after N rows
 	BatchMaxAge    time.Duration `yaml:"batch_max_age"`     // flush after X time
-	GRPCMaxRecvMiB int           `yaml:"grpc_max_recv_mib"` // max gRPC message size; 16 default (HTTP-path parity)
+	GRPCMaxRecvMiB int           `yaml:"grpc_max_recv_mib"` // max gRPC message size in MiB; default + rationale in New()
 }
 
 // Server owns the gRPC + HTTP OTLP listeners and the batch flusher goroutine.
@@ -267,10 +267,16 @@ type grpcErrLogger struct {
 
 type grpcMethodKey struct{}
 
-// grpc-go's message substring for a MaxRecvMsgSize rejection — Contains, not
-// prefix, so the "received message after decompression larger than max"
-// (gzip) variant is caught too.
-const grpcMsgTooLarge = "message larger than max"
+// grpc-go's MaxRecvMsgSize rejection message. Both recv variants
+// ("received message larger than max" and the gzip "received message after
+// decompression larger than max") share these two substrings; matching both
+// excludes the send-side "trying to send message larger than max", which
+// carries the same ResourceExhausted code but is the wrong story for a
+// "request rejected" log.
+const (
+	grpcMsgRecv     = "received message"
+	grpcMsgTooLarge = "larger than max"
+)
 
 func (h *grpcErrLogger) TagRPC(ctx context.Context, info *stats.RPCTagInfo) context.Context {
 	return context.WithValue(ctx, grpcMethodKey{}, info.FullMethodName)
@@ -282,7 +288,9 @@ func (h *grpcErrLogger) HandleRPC(ctx context.Context, s stats.RPCStats) {
 		return
 	}
 	st, _ := status.FromError(end.Error)
-	if st.Code() != codes.ResourceExhausted || !strings.Contains(st.Message(), grpcMsgTooLarge) {
+	if st.Code() != codes.ResourceExhausted ||
+		!strings.Contains(st.Message(), grpcMsgRecv) ||
+		!strings.Contains(st.Message(), grpcMsgTooLarge) {
 		return
 	}
 	method, _ := ctx.Value(grpcMethodKey{}).(string)
