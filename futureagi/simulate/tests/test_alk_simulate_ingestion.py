@@ -845,6 +845,76 @@ class TestBuildVoiceRunnerJob:
         assert keys["LIVEKIT_API_KEY"]["manager"] == "provider_credentials"
         assert keys["LIVEKIT_API_SECRET"]["field"] == "api_secret"
 
+    def test_dataset_rows_expand_to_one_voice_case_each(
+        self, organization, workspace, simulator_agent
+    ):
+        from model_hub.models.choices import DatasetSourceChoices, SourceChoices
+        from model_hub.models.develop_dataset import Cell, Column, Dataset, Row
+        from simulate.services.alk_simulate_ingestion import (
+            create_alk_sim_test_execution,
+        )
+        from simulate.services.hosted_runner import build_start_runner_job
+
+        agent = self._voice_agent(
+            organization, workspace, provider="vapi", assistant_id="asst_123"
+        )
+        dataset = Dataset.no_workspace_objects.create(
+            name="ten hosted cases",
+            organization=organization,
+            workspace=workspace,
+            source=DatasetSourceChoices.SCENARIO.value,
+        )
+        columns = {
+            name: Column.objects.create(
+                dataset=dataset,
+                name=name,
+                data_type="persona" if name == "persona" else "text",
+                source=SourceChoices.OTHERS.value,
+            )
+            for name in ("persona", "situation", "outcome", "branch_category")
+        }
+        for index in range(10):
+            row = Row.objects.create(dataset=dataset, order=index)
+            row_values = {
+                "persona": str({"name": f"Customer {index}", "age_group": "25-35"}),
+                "situation": f"Situation {index}",
+                "outcome": f"Outcome {index}",
+                "branch_category": f"Branch {index}",
+            }
+            for name, value in row_values.items():
+                Cell.objects.create(
+                    dataset=dataset, column=columns[name], row=row, value=value
+                )
+
+        scenario = self._scenario(organization, workspace, agent, simulator_agent)
+        scenario.dataset = dataset
+        scenario.save(update_fields=["dataset"])
+        run_test = self._run_test(
+            organization, workspace, agent, simulator_agent, scenario
+        )
+        execution = create_alk_sim_test_execution(run_test)
+
+        job = build_start_runner_job(
+            test_execution_id=str(execution.id),
+            run_test_id=str(run_test.id),
+            scenario_ids=[str(scenario.id)],
+            mode="voice_webrtc",
+        )
+
+        cases = job["voice"]["scenario"]["dataset"]
+        assert len(cases) == 10
+        assert [case["persona"]["name"] for case in cases] == [
+            f"Customer {index}" for index in range(10)
+        ]
+        assert cases[4]["situation"] == "Situation 4"
+        assert cases[4]["outcome"] == "Outcome 4"
+        assert cases[4]["persona"]["branch_category"] == "Branch 4"
+        # ALK 0.1 calculates its outer run deadline from these params. The
+        # allowance must cover all ten sequential voice cases, not one call.
+        params = job["voice"]["params"]
+        per_case_budget = 120.0 + 60.0 + 120.0 + 30.0
+        assert params["cleanup_timeout"] == 30.0 + 9 * per_case_budget
+
     def test_builds_sip_outbound_job(self, organization, workspace, simulator_agent):
         from django.test import override_settings
 
@@ -884,19 +954,33 @@ class TestBuildVoiceRunnerJob:
         assert t["kind"] == "sip_inbound"
         assert "dispatch_rule_name" not in t
         assert t["inbound_call_originator"] == "vapi"
+        assert job["voice"]["agent_definition"]["provider_evidence"] == {
+            "provider": "vapi",
+            "call_id_source": "originator_response",
+        }
 
 
 class TestHostedRunnerActivityHelpers:
     """The DID pool is touched only for sip_inbound (mirrors _needs_phone)."""
 
     def test_inject_did_slot_only_for_sip_inbound(self):
-        from simulate.temporal.activities.hosted_runner import _inject_did_slot
+        from simulate.temporal.activities.hosted_runner import (
+            _child_environment,
+            _inject_did_slot,
+        )
 
-        slot = {"did": "+15557654321", "dispatch_rule_name": "rule-1", "slot_id": "s1"}
+        slot = {
+            "did": "+15557654321",
+            "dispatch_rule_name": "rule-1",
+            "room_name": "sim-slot-01",
+            "slot_id": "s1",
+        }
         inbound = {
             "voice": {
                 "agent_definition": {"transport": {"kind": "sip_inbound"}},
+                "livekit_runtime": {"room_name": "hosted-{test_case_id}"},
                 "params": {},
+                "scenario": {"dataset": [{"persona": {"name": "Caller"}}]},
             },
             "metadata": {},
         }
@@ -904,6 +988,11 @@ class TestHostedRunnerActivityHelpers:
         t = inbound["voice"]["agent_definition"]["transport"]
         assert t["dispatch_rule_name"] == "rule-1"
         assert inbound["voice"]["params"]["inbound_did"] == "+15557654321"
+        assert _child_environment(inbound)["LIVEKIT_INBOUND_DID"] == "+15557654321"
+        assert inbound["voice"]["livekit_runtime"] == {
+            "room_name": "sim-slot-01",
+            "room_name_verbatim": True,
+        }
 
         outbound = {
             "voice": {
@@ -914,9 +1003,8 @@ class TestHostedRunnerActivityHelpers:
         }
         _inject_did_slot(outbound, slot)
         # sip_outbound dials the target directly; never consumes a leased DID.
-        assert (
-            "dispatch_rule_name"
-            not in (outbound["voice"]["agent_definition"]["transport"])
+        assert "dispatch_rule_name" not in (
+            outbound["voice"]["agent_definition"]["transport"]
         )
 
     def test_acquire_did_slot_none_without_script(self, monkeypatch):
@@ -926,6 +1014,46 @@ class TestHostedRunnerActivityHelpers:
 
         monkeypatch.delenv("ALK_SIM_SLOT_LEASE_SCRIPT", raising=False)
         assert asyncio.run(_acquire_did_slot("job-1")) is None
+
+    def test_acquire_did_slot_uses_livekit_infra_contract(self, monkeypatch):
+        import asyncio
+
+        from simulate.temporal.activities import hosted_runner as hr
+
+        calls = []
+
+        class LeaseProc:
+            returncode = 0
+
+            async def communicate(self):
+                return (
+                    b'{\n  "slot": "07",\n'
+                    b'  "phone_number": "+15557654321",\n'
+                    b'  "dispatch_rule_name": "sim-slot-07"\n}\n',
+                    b"",
+                )
+
+        async def fake_exec(*args, **kwargs):
+            calls.append(args)
+            return LeaseProc()
+
+        monkeypatch.setenv("ALK_SIM_SLOT_LEASE_SCRIPT", "/infra/lease_sim_slot.py")
+        monkeypatch.setenv("ALK_RUNNER_PYTHON", "/venv/bin/python")
+        monkeypatch.setattr(hr.asyncio, "create_subprocess_exec", fake_exec)
+
+        slot = asyncio.run(hr._acquire_did_slot("job-123"))
+
+        assert calls == [
+            (
+                "/venv/bin/python",
+                "/infra/lease_sim_slot.py",
+                "acquire",
+                "--run-id",
+                "job-123",
+            )
+        ]
+        assert slot["slot_id"] == "07"
+        assert slot["did"] == "+15557654321"
 
 
 class _FakeStdout:

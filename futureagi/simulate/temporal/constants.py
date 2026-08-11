@@ -66,6 +66,14 @@ DISPATCHER_CONTINUE_AS_NEW_THRESHOLD = 2000
 # Temporal recommends max ~1000 child workflows per parent
 MAX_CALLS_PER_ORCHESTRATOR = 500
 
+# Hosted SDK jobs execute dataset rows sequentially inside one child process.
+# Ten voice cases can legitimately consume almost an hour when each reaches its
+# readiness/conversation ceiling, so the supervising activity must not inherit
+# the single-call deadline.
+HOSTED_RUNNER_MAX_DURATION_SECONDS = int(
+    os.getenv("HOSTED_RUNNER_MAX_DURATION_SECONDS", str(65 * 60))
+)
+
 
 # =============================================================================
 # Rate Limits (Defaults)

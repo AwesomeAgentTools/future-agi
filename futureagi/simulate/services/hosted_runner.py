@@ -18,13 +18,17 @@ resolves them into the child's environment.
 
 from __future__ import annotations
 
+import ast
+import json
 import os
 import uuid
+from collections import defaultdict
 from typing import Any
 
 import structlog
 from django.conf import settings
 
+from model_hub.models.develop_dataset import Cell, Row
 from simulate.models import AgentDefinition, Scenarios, TestExecution
 
 logger = structlog.get_logger(__name__)
@@ -164,7 +168,7 @@ def build_start_runner_job(
         },
         "scenario": {
             "name": run_test.name or "hosted-run",
-            "dataset": [_persona_for_scenario(scenario) for scenario in scenarios],
+            "dataset": _personas_for_scenarios(scenarios),
         },
         "evidence": {"sources": [], "required_capabilities": []},
         "metadata": {
@@ -211,6 +215,78 @@ def _persona_for_scenario(scenario: Scenarios) -> dict[str, Any]:
         "situation": situation or f"Interact about: {scenario.name}",
         "outcome": "Get the request resolved.",
     }
+
+
+def _personas_for_scenarios(scenarios: list[Scenarios]) -> list[dict[str, Any]]:
+    """Expand dataset scenarios into one SDK test case per platform row.
+
+    The ALK sink allocates CallExecutions in scenario order and then dataset-row
+    order. The hosted job must use that same order: otherwise a ten-row scenario
+    allocates ten calls but the SDK submits only one report, leaving nine calls
+    permanently pending.
+    """
+    dataset_ids = [scenario.dataset_id for scenario in scenarios if scenario.dataset_id]
+    rows_by_dataset: dict[Any, list[Row]] = defaultdict(list)
+    rows = list(Row.objects.filter(dataset_id__in=dataset_ids).order_by("order"))
+    for row in rows:
+        rows_by_dataset[row.dataset_id].append(row)
+
+    values_by_row: dict[Any, dict[str, str | None]] = defaultdict(dict)
+    for cell in Cell.objects.filter(row_id__in=[row.id for row in rows]).select_related(
+        "column"
+    ):
+        values_by_row[cell.row_id][cell.column.name] = cell.value
+
+    personas: list[dict[str, Any]] = []
+    for scenario in scenarios:
+        if not scenario.dataset_id:
+            personas.append(_persona_for_scenario(scenario))
+            continue
+
+        scenario_rows = rows_by_dataset.get(scenario.dataset_id, [])
+        if not scenario_rows:
+            raise HostedRunnerBuildError(
+                f"scenario {scenario.id} has a dataset with no rows"
+            )
+        personas.extend(
+            _persona_for_dataset_row(scenario, values_by_row[row.id])
+            for row in scenario_rows
+        )
+    return personas
+
+
+def _persona_for_dataset_row(
+    scenario: Scenarios, row_values: dict[str, str | None]
+) -> dict[str, Any]:
+    values = dict(row_values)
+    raw_persona = values.pop("persona", None)
+    persona = _parse_persona(raw_persona)
+    persona.setdefault("name", scenario.name or "customer")
+
+    situation = str(values.pop("situation", "") or "").strip()
+    outcome = str(values.pop("outcome", "") or "").strip()
+    for key, value in values.items():
+        if value not in (None, ""):
+            persona.setdefault(key, value)
+
+    return {
+        "persona": persona,
+        "situation": situation or f"Interact about: {scenario.name}",
+        "outcome": outcome or "Get the request resolved.",
+    }
+
+
+def _parse_persona(value: str | None) -> dict[str, Any]:
+    if not value:
+        return {}
+    for parser in (json.loads, ast.literal_eval):
+        try:
+            parsed = parser(value)
+        except (SyntaxError, ValueError, TypeError, json.JSONDecodeError):
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return {"description": value}
 
 
 def _build_target(agent_definition) -> dict[str, Any]:
@@ -288,6 +364,7 @@ def _build_voice_job(
     credentials = _voice_credentials(agent_definition, agent_version)
     provider = _voice_provider(agent_definition, credentials)
     transport_kind = _voice_transport_kind(agent_definition, provider)
+    dataset = _personas_for_scenarios(scenarios)
 
     if (transport_kind in {"sip_inbound", "sip_outbound"}) != (mode == _VOICE_SIP_MODE):
         raise HostedRunnerBuildError(
@@ -313,11 +390,11 @@ def _build_voice_job(
             "agent_definition": agent_def,
             "scenario": {
                 "name": run_test.name or "hosted-voice-run",
-                "dataset": [_persona_for_scenario(s) for s in scenarios],
+                "dataset": dataset,
             },
             "livekit_runtime": livekit_runtime,
             "simulator": _voice_simulator_config(),
-            "params": _voice_params(transport_kind),
+            "params": _voice_params(transport_kind, case_count=len(dataset)),
         },
         "sink": {
             "api_url": _sink_api_url(),
@@ -451,6 +528,13 @@ def _voice_agent_definition(
             transport["inbound_call_originator"] = originator
             env_var = _PROVIDER_ENV[originator]["api_key"]
             secret_env.append(_credential_or_env(env_var, credentials, "api_key"))
+            # ALK requires provider evidence for an API-originated Vapi call so
+            # the originator response's call id is retained and reconciled.
+            if originator == "vapi":
+                agent_def["provider_evidence"] = {
+                    "provider": "vapi",
+                    "call_id_source": "originator_response",
+                }
         agent_def["transport"] = transport
     else:  # pragma: no cover - guarded upstream
         raise HostedRunnerBuildError(f"unknown transport: {transport_kind}")
@@ -510,9 +594,9 @@ def _voice_simulator_config() -> dict[str, Any]:
     }
 
 
-def _voice_params(transport_kind: str) -> dict[str, Any]:
+def _voice_params(transport_kind: str, *, case_count: int = 1) -> dict[str, Any]:
     is_telephony = transport_kind in {"sip_inbound", "sip_outbound"}
-    return {
+    params = {
         "record_audio": True,
         "recording_root": "recordings",
         "max_seconds": 150.0 if is_telephony else 120.0,
@@ -522,6 +606,23 @@ def _voice_params(transport_kind: str) -> dict[str, Any]:
         "readiness_timeout": 120.0,
         "cleanup_timeout": 30.0,
     }
+
+    # ALK 0.1 derives its outer SimulationSpec deadline from one case's voice
+    # budgets, while the LiveKit engine executes dataset cases sequentially.
+    # Preserve the real per-operation limits above, but contribute the remaining
+    # cases' budgets through cleanup_timeout (the only component that normally
+    # completes immediately). Without this compatibility allowance, every
+    # ten-row hosted simulation is cancelled after ~6.5 minutes with only four
+    # or five provider calls completed.
+    if case_count > 1:
+        per_case_budget = (
+            params["max_seconds"]
+            + params["connect_timeout"]
+            + params["readiness_timeout"]
+            + params["cleanup_timeout"]
+        )
+        params["cleanup_timeout"] += (case_count - 1) * per_case_budget
+    return params
 
 
 def _credential_or_env(env_var: str, credentials, field: str) -> dict[str, Any]:

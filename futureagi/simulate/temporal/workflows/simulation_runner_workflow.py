@@ -12,7 +12,10 @@ from datetime import timedelta
 
 from temporalio import workflow
 
-from simulate.temporal.constants import MAX_CALL_DURATION_SECONDS, QUEUE_RUNNER
+from simulate.temporal.constants import (
+    HOSTED_RUNNER_MAX_DURATION_SECONDS,
+    QUEUE_RUNNER,
+)
 from simulate.temporal.retry_policies import DB_RETRY_POLICY, NO_RETRY_POLICY
 from simulate.temporal.types.hosted_runner import (
     BuildRunnerJobInput,
@@ -54,7 +57,7 @@ class SimulationRunnerWorkflow:
                     job_json=job.job_json,
                 ),
                 start_to_close_timeout=timedelta(
-                    seconds=MAX_CALL_DURATION_SECONDS + 300
+                    seconds=HOSTED_RUNNER_MAX_DURATION_SECONDS
                 ),
                 heartbeat_timeout=timedelta(seconds=60),
                 retry_policy=NO_RETRY_POLICY,

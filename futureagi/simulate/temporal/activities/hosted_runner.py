@@ -200,6 +200,15 @@ def _child_environment(job: dict[str, Any]) -> dict[str, str]:
         value = _resolve_secret(ref)
         if value and ref.get("key"):
             env[str(ref["key"])] = value
+
+    # The DID is allocated after the job is built, so it cannot ride the
+    # normal metadata.secret_env path. The SDK's inbound originator reads this
+    # exact env var when it asks Vapi to dial the leased simulator number.
+    inbound_did = (
+        ((job.get("voice") or {}).get("params") or {}).get("inbound_did")
+    )
+    if inbound_did:
+        env["LIVEKIT_INBOUND_DID"] = str(inbound_did)
     return env
 
 
@@ -269,13 +278,14 @@ def _resolve_provider_credential(
 
 async def _acquire_did_slot(job_id: str) -> dict[str, Any] | None:
     """Lease one DID slot from the livekit-infra inbound-simulator pool
-    (tasks #115-119). Returns the slot dict (``did``, ``dispatch_rule_name``,
-    ``slot_id``) or None when no lease script is configured — the SDK then
+    (tasks #115-119). Returns a normalized slot dict (``did``,
+    ``dispatch_rule_name``, ``slot_id``) or None when no lease script is
+    configured — the SDK then
     provisions a per-run dispatch rule itself (sip_inbound default).
 
     The lease helper is a separate repo/script; we shell out to it so the
-    backend keeps no LiveKit-infra import. Not live-testable here (Twilio
-    suspended), so failures degrade to None rather than aborting the run.
+    backend keeps no LiveKit-infra import. Failures degrade to None rather than
+    aborting the run, allowing the SDK to provision its own inbound rule.
     """
     script = os.getenv("ALK_SIM_SLOT_LEASE_SCRIPT")
     if not script:
@@ -286,8 +296,7 @@ async def _acquire_did_slot(job_id: str) -> dict[str, Any] | None:
             python,
             script,
             "acquire",
-            "--json",
-            "--owner",
+            "--run-id",
             job_id,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
@@ -296,8 +305,18 @@ async def _acquire_did_slot(job_id: str) -> dict[str, Any] | None:
         if proc.returncode != 0:
             activity.logger.warning(f"DID lease acquire failed for {job_id}: {out!r}")
             return None
-        slot = json.loads(out.decode("utf-8", "replace").strip().splitlines()[-1])
-        return slot if isinstance(slot, dict) else None
+        # The livekit-infra CLI emits indented JSON, not JSONL. Parsing only
+        # its last line would see a bare ``}`` and silently disable leasing.
+        slot = json.loads(out.decode("utf-8", "replace").strip())
+        if not isinstance(slot, dict):
+            return None
+        # livekit-infra uses ``slot`` and ``phone_number``; keep the runner's
+        # internal names stable for the job contract.
+        if slot.get("slot") and not slot.get("slot_id"):
+            slot["slot_id"] = slot["slot"]
+        if slot.get("phone_number") and not slot.get("did"):
+            slot["did"] = slot["phone_number"]
+        return slot
     except Exception as exc:  # noqa: BLE001
         activity.logger.warning(f"DID lease acquire error for {job_id}: {exc}")
         return None
@@ -305,7 +324,7 @@ async def _acquire_did_slot(job_id: str) -> dict[str, Any] | None:
 
 async def _release_did_slot(slot: dict[str, Any]) -> None:
     script = os.getenv("ALK_SIM_SLOT_LEASE_SCRIPT")
-    slot_id = slot.get("slot_id") or slot.get("did")
+    slot_id = slot.get("slot_id") or slot.get("slot") or slot.get("did")
     if not script or not slot_id:
         return
     python = os.getenv("ALK_RUNNER_PYTHON", "python")
@@ -343,6 +362,19 @@ def _inject_did_slot(job: dict[str, Any], slot: dict[str, Any]) -> None:
     if did:
         job.setdefault("voice", {}).setdefault("params", {})["inbound_did"] = did
         (job.setdefault("metadata", {}))["leased_did"] = did
+
+    # A pool dispatch rule targets its slot's fixed room. ALK normally adds a
+    # per-invocation suffix to managed room names, so a single-case leased run
+    # must opt into the exact slot room or LiveKit rejects the rule as a
+    # different destination. Multi-case inbound runs require SDK support for
+    # sequential reuse of a leased room and intentionally keep the templated
+    # runtime here.
+    room_name = slot.get("room_name")
+    dataset = (job.get("voice") or {}).get("scenario", {}).get("dataset") or []
+    if room_name and len(dataset) == 1:
+        runtime = job.setdefault("voice", {}).setdefault("livekit_runtime", {})
+        runtime["room_name"] = str(room_name)
+        runtime["room_name_verbatim"] = True
 
 
 def _parse_status_line(line: str) -> dict[str, Any] | None:
