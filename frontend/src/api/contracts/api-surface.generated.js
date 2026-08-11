@@ -5,7 +5,7 @@
 export const API_SURFACE_CONTRACT = Object.freeze({
   "generatedFrom": "api_contracts/openapi/swagger.json",
   "swaggerVersion": "2.0",
-  "endpointCount": 973,
+  "endpointCount": 982,
   "groups": {
     "accounts": {
       "/accounts/2fa/recovery-codes/": [
@@ -716,6 +716,9 @@ export const API_SURFACE_CONTRACT = Object.freeze({
       ]
     },
     "api": {
+      "/api/capabilities/": [
+        "get"
+      ],
       "/api/deployment-info/": [
         "get"
       ],
@@ -729,6 +732,9 @@ export const API_SURFACE_CONTRACT = Object.freeze({
         "post"
       ],
       "/api/public/traces": [
+        "get"
+      ],
+      "/api/setup-checks/": [
         "get"
       ],
       "/api/traces/span-attribute-detail/": [
@@ -2517,6 +2523,14 @@ export const API_SURFACE_CONTRACT = Object.freeze({
         "get"
       ]
     },
+    "telemetry": {
+      "/telemetry/heartbeat/": [
+        "post"
+      ],
+      "/telemetry/register/": [
+        "post"
+      ]
+    },
     "tracer": {
       "/tracer/bulk-annotation/": [
         "post"
@@ -3091,13 +3105,6 @@ export const API_SURFACE_CONTRACT = Object.freeze({
       "/usage/download-invoice/": [
         "post"
       ],
-      "/usage/ee/licenses/": [
-        "get",
-        "post"
-      ],
-      "/usage/ee/licenses/{grant_id}/revoke/": [
-        "post"
-      ],
       "/usage/get-auto-reload-settings/": [
         "get"
       ],
@@ -3302,8 +3309,29 @@ export const API_SURFACE_CONTRACT = Object.freeze({
       ]
     },
     "v1": {
+      "/v1/enterprise/heartbeats": [
+        "post"
+      ],
       "/v1/health": [
         "get"
+      ],
+      "/v1/internal/licenses": [
+        "post"
+      ],
+      "/v1/internal/licenses/{grant_id}": [
+        "get"
+      ],
+      "/v1/internal/licenses/{grant_id}/approve": [
+        "post"
+      ],
+      "/v1/internal/licenses/{grant_id}/issue": [
+        "post"
+      ],
+      "/v1/internal/licenses/{grant_id}/status": [
+        "post"
+      ],
+      "/v1/self-hosted/activations": [
+        "post"
       ]
     }
   }
@@ -4010,6 +4038,9 @@ export const API_SURFACE_PATHS = Object.freeze({
   "/ai-tools/tools/": [
     "get"
   ],
+  "/api/capabilities/": [
+    "get"
+  ],
   "/api/deployment-info/": [
     "get"
   ],
@@ -4023,6 +4054,9 @@ export const API_SURFACE_PATHS = Object.freeze({
     "post"
   ],
   "/api/public/traces": [
+    "get"
+  ],
+  "/api/setup-checks/": [
     "get"
   ],
   "/api/traces/span-attribute-detail/": [
@@ -5792,6 +5826,12 @@ export const API_SURFACE_PATHS = Object.freeze({
   "/simulate/test-executions/{test_execution_id}/transcripts/": [
     "get"
   ],
+  "/telemetry/heartbeat/": [
+    "post"
+  ],
+  "/telemetry/register/": [
+    "post"
+  ],
   "/tracer/bulk-annotation/": [
     "post"
   ],
@@ -6363,13 +6403,6 @@ export const API_SURFACE_PATHS = Object.freeze({
   "/usage/download-invoice/": [
     "post"
   ],
-  "/usage/ee/licenses/": [
-    "get",
-    "post"
-  ],
-  "/usage/ee/licenses/{grant_id}/revoke/": [
-    "post"
-  ],
   "/usage/get-auto-reload-settings/": [
     "get"
   ],
@@ -6572,7 +6605,28 @@ export const API_SURFACE_PATHS = Object.freeze({
   "/usage/workspace-usage-summary/": [
     "get"
   ],
+  "/v1/enterprise/heartbeats": [
+    "post"
+  ],
   "/v1/health": [
     "get"
+  ],
+  "/v1/internal/licenses": [
+    "post"
+  ],
+  "/v1/internal/licenses/{grant_id}": [
+    "get"
+  ],
+  "/v1/internal/licenses/{grant_id}/approve": [
+    "post"
+  ],
+  "/v1/internal/licenses/{grant_id}/issue": [
+    "post"
+  ],
+  "/v1/internal/licenses/{grant_id}/status": [
+    "post"
+  ],
+  "/v1/self-hosted/activations": [
+    "post"
   ]
 });
