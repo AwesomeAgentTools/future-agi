@@ -97,8 +97,7 @@ export const VOICE_CHAT_PROVIDERS = [
   { label: "Vapi", value: "vapi" },
   { label: "Retell", value: "retell" },
   { label: "Bland.ai", value: "bland" },
-  // Hidden until LiveKit server stability is restored.
-  // { label: "LiveKit", value: "livekit_bridge" },
+  { label: "LiveKit", value: "livekit_bridge" },
   // { label: "ElevenLabs", value: "elevenlabs" },
   { label: "Others", value: "others" },
 ];
