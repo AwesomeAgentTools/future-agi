@@ -70,7 +70,10 @@ const CreateNewAgentDefinitionView = () => {
     const requiredFields = {
       0: ["agentType", "agentName", "languages"],
       1: ["provider"],
-      2: ["description", "countryCode", "contactNumber", "commitMessage"],
+      // Phone number is optional for all voice providers: empty ⇒ web
+      // (WebRTC), provided ⇒ telephony (PSTN). Partial/invalid input is still
+      // caught by the field-level zod validation.
+      2: ["description", "commitMessage"],
     };
 
     if (isLiveKitProvider(provider)) {
@@ -80,8 +83,6 @@ const CreateNewAgentDefinitionView = () => {
         "livekitApiSecret",
         "livekitAgentName",
       );
-      // LiveKit doesn't need contact number
-      requiredFields[2] = ["description", "commitMessage"];
     } else if (provider === "others") {
       if (authenticationMethod === "basicAuth") {
         requiredFields[1].push("username", "password");
@@ -159,8 +160,13 @@ const CreateNewAgentDefinitionView = () => {
       // Only process and include voice-specific fields for voice agents
       if (data.agentType === AGENT_TYPES.VOICE) {
         if (isLiveKitProvider(data.provider)) {
-          // LiveKit: no phone number needed, ensure config is a dict
-          payload.contact_number = "";
+          // LiveKit supports web (WebRTC, no number) and telephony (SIP, with
+          // number). Send the phone only when the user provided one.
+          payload.contact_number = data.contactNumber?.trim()
+            ? data.countryCode
+              ? `+${data.countryCode}${data.contactNumber.trim()}`
+              : data.contactNumber.trim()
+            : "";
           payload.livekit_max_concurrency =
             parseInt(data.livekitMaxConcurrency, 10) || 5;
           payload.livekit_config_json = data.livekitConfigJson || {};

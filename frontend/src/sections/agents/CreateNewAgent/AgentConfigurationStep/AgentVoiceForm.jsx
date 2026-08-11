@@ -709,11 +709,11 @@ export default function AgentVoiceForm() {
           <AddHeadersSection control={control} />
         </ShowComponent>
       </Box>
-      <ShowComponent condition={!isLiveKitProvider(selectedProvider)}>
+      <ShowComponent condition={true}>
         <CreateNewAgentCards
           title={"Contact Information"}
           subtitle={
-            "Calls will be routed to(inbound)/from(Outbound) this phone number. Ensure it is correct."
+            "Add a phone number to run a telephony (PSTN) simulation, or leave it empty to run a web (WebRTC) simulation."
           }
         >
           <Typography
@@ -721,7 +721,7 @@ export default function AgentVoiceForm() {
             fontWeight={"fontWeightMedium"}
             color={"text.primary"}
           >
-            Use a valid phone number capable of receiving calls
+            Phone number is optional — required only for telephony (PSTN) calls
           </Typography>
           <Box display="flex" flexDirection="column" gap={3}>
             <Grid container spacing={2} alignItems="flex-start">
@@ -904,68 +904,6 @@ export default function AgentVoiceForm() {
             )}
           </Box>
         </CreateNewAgentCards>
-      </ShowComponent>
-      {/* Inbound/Outbound toggle for LiveKit (no phone number needed) */}
-      <ShowComponent condition={isLiveKitProvider(selectedProvider)}>
-        <Box
-          display="flex"
-          justifyContent="space-between"
-          alignItems="center"
-          border={"1px solid"}
-          borderColor={"background.neutral"}
-          borderRadius={"8px !important"}
-          p={1.5}
-          mt={2}
-        >
-          <Box display={"flex"} flexDirection={"column"}>
-            <Typography
-              typography="s1"
-              fontWeight={"fontWeightMedium"}
-              color={"text.primary"}
-            >
-              {inbound
-                ? INBOUND_OUTBOUND_COPY.inbound.title
-                : INBOUND_OUTBOUND_COPY.outbound.title}
-            </Typography>
-            <Typography
-              typography="s2_1"
-              fontWeight={"fontWeightRegular"}
-              color={"text.primary"}
-            >
-              {inbound
-                ? INBOUND_OUTBOUND_COPY.inbound.description
-                : INBOUND_OUTBOUND_COPY.outbound.description}
-            </Typography>
-          </Box>
-          <CustomTooltip
-            show={true}
-            title={
-              inbound
-                ? INBOUND_OUTBOUND_COPY.inbound.tooltip
-                : INBOUND_OUTBOUND_COPY.outbound.tooltip
-            }
-            placement="bottom"
-            arrow
-            size="small"
-            type="black"
-            slotProps={{
-              tooltip: {
-                sx: {
-                  maxWidth: "200px !important",
-                },
-              },
-            }}
-          >
-            <Box>
-              <SwitchField
-                control={control}
-                fieldName="inbound"
-                label=""
-                labelPlacement="end"
-              />
-            </Box>
-          </CustomTooltip>
-        </Box>
       </ShowComponent>
     </>
   );
