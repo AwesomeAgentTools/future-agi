@@ -351,6 +351,47 @@ class TestBatchCreate:
         assert second.status_code == 400
         assert second.json()["status"] is False
 
+    def test_hosted_execute_precreates_rows_and_batch_adopts_them(
+        self, auth_client, run_test, scenario
+    ):
+        from simulate.views.run_test import RunTestExecutionView
+
+        view = RunTestExecutionView()
+
+        def assert_rows_visible_before_dispatch(**_kwargs):
+            execution = SimTestExecution.objects.get(run_test=run_test)
+            assert execution.calls.count() == 1
+            assert execution.calls.get().status == CallExecution.CallStatus.PENDING
+            return f"sim-runner-{execution.id}"
+
+        with (
+            patch.object(view, "_hosted_runner_mode", return_value="voice_webrtc"),
+            patch(
+                "simulate.temporal.client.start_simulation_runner_workflow",
+                side_effect=assert_rows_visible_before_dispatch,
+            ),
+        ):
+            result = view._execute_with_hosted_runner(
+                run_test=run_test,
+                scenario_ids=[str(scenario.id)],
+                simulator_id=None,
+            )
+
+        execution = SimTestExecution.objects.get(id=result["execution_id"])
+        precreated_id = str(execution.calls.get().id)
+        assert result["total_calls"] == 1
+        assert execution.total_calls == 1
+
+        batch = auth_client.post(
+            f"{ALK_BASE}/test-executions/{execution.id}/batch/", {}, format="json"
+        )
+
+        assert batch.status_code == 200, batch.content
+        assert batch.json()["result"]["call_execution_ids"] == [precreated_id]
+        assert execution.calls.count() == 1
+        adopted_call = execution.calls.get()
+        assert adopted_call.call_metadata["alk_batch_claimed"] is True
+
 
 @pytest.mark.integration
 @pytest.mark.api
@@ -420,6 +461,42 @@ class TestInternalServiceIngestion:
         )
 
         assert response.status_code == 403
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+class TestMixedResultRollup:
+    def test_failed_calls_do_not_block_completed_call_evaluations(
+        self, auth_client, run_test
+    ):
+        from simulate.services.test_executor import TestExecutor
+
+        test_execution_id, call_ids = _start_and_batch(auth_client, run_test)
+        test_execution = SimTestExecution.objects.get(id=test_execution_id)
+        completed_call = CallExecution.objects.get(id=call_ids[0])
+        completed_call.status = CallExecution.CallStatus.COMPLETED
+        completed_call.call_metadata = {"eval_started": True, "eval_completed": True}
+        completed_call.save(update_fields=["status", "call_metadata"])
+        CallExecution.objects.create(
+            test_execution=test_execution,
+            scenario=completed_call.scenario,
+            status=CallExecution.CallStatus.FAILED,
+            simulation_call_type=completed_call.simulation_call_type,
+            call_metadata={},
+        )
+        test_execution.status = SimTestExecution.ExecutionStatus.EVALUATING
+        test_execution.save(update_fields=["status"])
+
+        TestExecutor(
+            initialize_voice_service=False
+        )._check_and_update_test_execution_completion(test_execution.id)
+
+        test_execution.refresh_from_db()
+        assert test_execution.status == SimTestExecution.ExecutionStatus.COMPLETED
+        assert test_execution.completed_at is not None
+        assert test_execution.total_calls == 2
+        assert test_execution.completed_calls == 1
+        assert test_execution.failed_calls == 1
 
 
 # ---------------------------------------------------------------------------
@@ -926,7 +1003,9 @@ class TestBuildVoiceRunnerJob:
         from model_hub.models.choices import DatasetSourceChoices, SourceChoices
         from model_hub.models.develop_dataset import Cell, Column, Dataset, Row
         from simulate.services.alk_simulate_ingestion import (
+            create_alk_sim_call_execution_batch,
             create_alk_sim_test_execution,
+            precreate_alk_sim_call_executions,
         )
         from simulate.services.hosted_runner import build_start_runner_job
 
@@ -968,6 +1047,16 @@ class TestBuildVoiceRunnerJob:
             organization, workspace, agent, simulator_agent, scenario
         )
         execution = create_alk_sim_test_execution(run_test)
+        precreated_ids = precreate_alk_sim_call_executions(execution)
+        batch = create_alk_sim_call_execution_batch(execution)
+
+        assert len(precreated_ids) == 10
+        assert batch.call_execution_ids == precreated_ids
+        assert execution.calls.count() == 10
+        assert (
+            execution.calls.filter(status=CallExecution.CallStatus.PENDING).count()
+            == 10
+        )
 
         job = build_start_runner_job(
             test_execution_id=str(execution.id),
@@ -1051,9 +1140,7 @@ class TestHostedRunnerActivityHelpers:
             "model": "gpt-4.1",
         }
 
-    def test_voice_conversation_direction_is_configurable(
-        self, monkeypatch, settings
-    ):
+    def test_voice_conversation_direction_is_configurable(self, monkeypatch, settings):
         from simulate.services.hosted_runner import _voice_params
 
         settings.SIMULATOR_CONVERSATION_DIRECTION = ""

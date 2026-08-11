@@ -933,6 +933,9 @@ class RunTestExecutionView(APIView):
         Pre-creates the TestExecution (so the UI has an id immediately) and
         starts SimulationRunnerWorkflow; results stream back via ALK ingestion.
         """
+        from simulate.services.alk_simulate_ingestion import (
+            precreate_alk_sim_call_executions,
+        )
         from simulate.temporal.client import start_simulation_runner_workflow
 
         try:
@@ -956,6 +959,7 @@ class RunTestExecutionView(APIView):
                 agent_definition=run_test.agent_definition,
                 agent_version=run_test.agent_version,
             )
+            call_execution_ids = precreate_alk_sim_call_executions(test_execution)
 
             workflow_id = start_simulation_runner_workflow(
                 test_execution_id=str(test_execution.id),
@@ -978,7 +982,7 @@ class RunTestExecutionView(APIView):
                 "workflow_id": workflow_id,
                 "status": "started",
                 "total_scenarios": len(scenario_ids),
-                "total_calls": 0,
+                "total_calls": len(call_execution_ids),
             }
         except Exception as e:
             logger.exception(f"Failed to start hosted runner workflow: {str(e)}")
@@ -2699,9 +2703,9 @@ class PerformanceSummaryView(APIView):
 
                 # Get overall score if available
                 if call_execution.overall_score is not None:
-                    scenario_performance[scenario_id][
-                        "total_score"
-                    ] += call_execution.overall_score
+                    scenario_performance[scenario_id]["total_score"] += (
+                        call_execution.overall_score
+                    )
                     scenario_performance[scenario_id]["scores"].append(
                         call_execution.overall_score
                     )

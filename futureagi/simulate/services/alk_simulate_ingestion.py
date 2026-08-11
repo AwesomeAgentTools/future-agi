@@ -11,13 +11,13 @@ never uploads bytes (same pattern as the Vapi provider adapter).
 from __future__ import annotations
 
 import uuid
-from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import timedelta
 from io import BytesIO
 from typing import Any
 
 import structlog
+from django.db import transaction
 from django.utils import timezone
 
 from simulate.models import (
@@ -45,6 +45,7 @@ from tracer.models.observability_provider import ProviderChoices
 logger = structlog.get_logger(__name__)
 
 DEFAULT_BATCH_SIZE = 9
+_ALK_BATCH_CLAIMED_KEY = "alk_batch_claimed"
 
 _STATUS_MAP = {
     "completed": CallExecution.CallStatus.COMPLETED,
@@ -418,111 +419,106 @@ def create_alk_sim_call_execution_batch(
     *,
     batch_size: int = DEFAULT_BATCH_SIZE,
 ) -> BatchCreateResult:
-    """Create up to `batch_size + 1` PENDING VOICE CallExecution rows.
+    """Claim up to ``batch_size + 1`` rows for an ALK runner batch.
 
-    The `has_more` flag is set when the loop breaks because the current batch
-    is full — the caller iterates until `has_more == False`.
+    Hosted executions pre-create unclaimed PENDING rows so the UI can render
+    immediately. SDK-first executions have no rows yet. This function supports
+    both: it adopts unclaimed rows and creates only missing rows, preserving the
+    existing paginated ``call_execution_ids`` contract without duplicates.
     """
-    run_test = test_execution.run_test
-    agent_definition = run_test.agent_definition
-    selected_version = test_execution.agent_version or agent_definition.latest_version
-    # Call type follows the agent definition: a chat RunTest carries a TEXT
-    # agent definition, a voice RunTest a VOICE one. This keeps one ingestion
-    # contract for both modes instead of hardcoding VOICE.
-    call_type = (
-        getattr(agent_definition, "agent_type", None)
-        or CallExecution.SimulationCallType.VOICE
-    )
+    with transaction.atomic():
+        locked_execution = TestExecution.objects.select_for_update().get(
+            id=test_execution.id
+        )
+        expected_calls = _build_expected_call_executions(locked_execution)
+        existing_calls = list(
+            locked_execution.calls.select_for_update()
+            .filter(deleted=False)
+            .order_by("created_at", "id")
+        )
+        existing_by_key = {_call_execution_key(call): call for call in existing_calls}
 
-    processed_row_ids, processed_scenarios = _already_batched_ids(test_execution)
-
-    test_executor = TestExecutor(initialize_voice_service=False)
-    simulator_agent_cache: dict[str, SimulatorAgent] = {}
-
-    batched: list[CallExecution] = []
-    batched_scenarios: set[str] = set()
-    has_more = False
-
-    for scenario_id in test_execution.scenario_ids:
-        if len(batched) > batch_size:
-            has_more = True
-            break
-
-        try:
-            scenario = Scenarios.objects.select_related(
-                "simulator_agent", "dataset", "agent_definition"
-            ).get(id=scenario_id, deleted=False)
-        except Scenarios.DoesNotExist:
-            logger.warning(
-                "livekit_batch_scenario_missing", scenario_id=str(scenario_id)
-            )
-            continue
-
-        simulator_agent = simulator_agent_cache.get(
-            scenario_id
-        ) or _resolve_simulator_agent(scenario, run_test, selected_version)
-        simulator_agent_cache[scenario_id] = simulator_agent
-        base_prompt = simulator_agent.prompt
-
-        if scenario.dataset:
-            remaining = _remaining_dataset_rows(
-                scenario, test_executor, processed_row_ids.get(scenario_id, set())
-            )
-            for row_id in remaining:
-                if len(batched) > batch_size:
-                    has_more = True
-                    break
-                row_data_info = test_executor._get_row_data_and_generate_prompt(
-                    row_id=row_id,
-                    base_prompt=base_prompt,
-                    agent_version=selected_version,
-                )
-                batched.append(
-                    _build_call_execution(
-                        test_execution=test_execution,
-                        scenario=scenario,
-                        agent_definition=agent_definition,
-                        selected_version=selected_version,
-                        simulator_agent=simulator_agent,
-                        base_prompt=base_prompt,
-                        row_id=row_id,
-                        row_data_info=row_data_info,
-                        call_type=call_type,
-                    )
-                )
-                batched_scenarios.add(scenario_id)
-        else:
-            if scenario_id in processed_scenarios:
+        available: list[tuple[CallExecution, bool]] = []
+        for expected_call in expected_calls:
+            existing_call = existing_by_key.get(_call_execution_key(expected_call))
+            if existing_call is None:
+                available.append((expected_call, False))
                 continue
-            if len(batched) >= batch_size:
-                break
-            batched.append(
-                _build_call_execution(
-                    test_execution=test_execution,
-                    scenario=scenario,
-                    agent_definition=agent_definition,
-                    selected_version=selected_version,
-                    simulator_agent=simulator_agent,
-                    base_prompt=base_prompt,
-                    row_id=None,
-                    row_data_info=None,
-                    call_type=call_type,
-                )
-            )
-            batched_scenarios.add(scenario_id)
 
-    if not batched:
-        raise ALKSimulateNothingToCreateError(
-            "No remaining call executions to create. All scenarios and rows "
-            "have been processed."
+            is_unclaimed = (
+                existing_call.status == CallExecution.CallStatus.PENDING
+                and (existing_call.call_metadata or {}).get(_ALK_BATCH_CLAIMED_KEY)
+                is False
+            )
+            if is_unclaimed:
+                available.append((existing_call, True))
+
+        if not available:
+            raise ALKSimulateNothingToCreateError(
+                "No remaining call executions to create. All scenarios and rows "
+                "have been processed."
+            )
+
+        batch_limit = batch_size + 1
+        selected = available[:batch_limit]
+        adopted: list[CallExecution] = []
+        new_calls: list[CallExecution] = []
+        for call, already_exists in selected:
+            metadata = dict(call.call_metadata or {})
+            metadata[_ALK_BATCH_CLAIMED_KEY] = True
+            call.call_metadata = metadata
+            if already_exists:
+                adopted.append(call)
+            else:
+                new_calls.append(call)
+
+        if adopted:
+            CallExecution.objects.bulk_update(adopted, ["call_metadata"])
+        if new_calls:
+            CallExecution.objects.bulk_create(new_calls)
+            locked_execution.total_calls = len(existing_calls) + len(new_calls)
+            locked_execution.save(update_fields=["total_calls"])
+
+        return BatchCreateResult(
+            call_execution_ids=[str(call.id) for call, _ in selected],
+            has_more=len(available) > batch_limit,
+            batched_scenarios=sorted({str(call.scenario_id) for call, _ in selected}),
         )
 
-    created = CallExecution.objects.bulk_create(batched)
-    return BatchCreateResult(
-        call_execution_ids=[str(c.id) for c in created],
-        has_more=has_more,
-        batched_scenarios=sorted(batched_scenarios),
-    )
+
+def precreate_alk_sim_call_executions(
+    test_execution: TestExecution,
+) -> list[str]:
+    """Create the hosted execution's visible PENDING rows before dispatch."""
+    with transaction.atomic():
+        locked_execution = TestExecution.objects.select_for_update().get(
+            id=test_execution.id
+        )
+        expected_calls = _build_expected_call_executions(locked_execution)
+        existing_calls = list(
+            locked_execution.calls.filter(deleted=False).order_by("created_at", "id")
+        )
+        existing_by_key = {_call_execution_key(call): call for call in existing_calls}
+
+        ordered_calls: list[CallExecution] = []
+        missing_calls: list[CallExecution] = []
+        for expected_call in expected_calls:
+            existing_call = existing_by_key.get(_call_execution_key(expected_call))
+            if existing_call is not None:
+                ordered_calls.append(existing_call)
+                continue
+            metadata = dict(expected_call.call_metadata or {})
+            metadata[_ALK_BATCH_CLAIMED_KEY] = False
+            expected_call.call_metadata = metadata
+            missing_calls.append(expected_call)
+            ordered_calls.append(expected_call)
+
+        if missing_calls:
+            CallExecution.objects.bulk_create(missing_calls)
+
+        locked_execution.total_calls = len(ordered_calls)
+        locked_execution.save(update_fields=["total_calls"])
+        return [str(call.id) for call in ordered_calls]
 
 
 def ingest_alk_sim_result(
@@ -594,32 +590,75 @@ def ingest_alk_sim_result(
 # ---------------------------------------------------------------------------
 
 
-def _already_batched_ids(
+def _build_expected_call_executions(
     test_execution: TestExecution,
-) -> tuple[dict[str, set[str]], set[str]]:
-    processed_row_ids_by_scenario: dict[str, set[str]] = {}
-    processed_scenario_ids: set[str] = set()
-    voice_calls = test_execution.calls.filter(
-        simulation_call_type=CallExecution.SimulationCallType.VOICE
+) -> list[CallExecution]:
+    run_test = test_execution.run_test
+    agent_definition = run_test.agent_definition
+    selected_version = test_execution.agent_version or agent_definition.latest_version
+    call_type = (
+        getattr(agent_definition, "agent_type", None)
+        or CallExecution.SimulationCallType.VOICE
     )
-    for call in voice_calls:
-        scenario_id = str(call.scenario_id)
-        if call.row_id:
-            processed_row_ids_by_scenario.setdefault(scenario_id, set()).add(
-                str(call.row_id)
+    test_executor = TestExecutor(initialize_voice_service=False)
+    expected_calls: list[CallExecution] = []
+
+    for scenario_id in test_execution.scenario_ids:
+        try:
+            scenario = Scenarios.objects.select_related(
+                "simulator_agent", "dataset", "agent_definition"
+            ).get(id=scenario_id, deleted=False)
+        except Scenarios.DoesNotExist:
+            logger.warning(
+                "livekit_batch_scenario_missing", scenario_id=str(scenario_id)
             )
+            continue
+
+        simulator_agent = _resolve_simulator_agent(scenario, run_test, selected_version)
+        base_prompt = simulator_agent.prompt
+        if scenario.dataset:
+            for row_id in test_executor._parse_dataset_scenario(scenario):
+                row_data_info = test_executor._get_row_data_and_generate_prompt(
+                    row_id=row_id,
+                    base_prompt=base_prompt,
+                    agent_version=selected_version,
+                )
+                expected_calls.append(
+                    _build_call_execution(
+                        test_execution=test_execution,
+                        scenario=scenario,
+                        agent_definition=agent_definition,
+                        selected_version=selected_version,
+                        simulator_agent=simulator_agent,
+                        base_prompt=base_prompt,
+                        row_id=row_id,
+                        row_data_info=row_data_info,
+                        call_type=call_type,
+                    )
+                )
         else:
-            processed_scenario_ids.add(scenario_id)
-    return processed_row_ids_by_scenario, processed_scenario_ids
+            expected_calls.append(
+                _build_call_execution(
+                    test_execution=test_execution,
+                    scenario=scenario,
+                    agent_definition=agent_definition,
+                    selected_version=selected_version,
+                    simulator_agent=simulator_agent,
+                    base_prompt=base_prompt,
+                    row_id=None,
+                    row_data_info=None,
+                    call_type=call_type,
+                )
+            )
+
+    return expected_calls
 
 
-def _remaining_dataset_rows(
-    scenario: Scenarios,
-    test_executor: TestExecutor,
-    processed_rows: set[str],
-) -> Iterable[str]:
-    all_row_ids = test_executor._parse_dataset_scenario(scenario)
-    return [rid for rid in all_row_ids if str(rid) not in processed_rows]
+def _call_execution_key(call_execution: CallExecution) -> tuple[str, str | None]:
+    return (
+        str(call_execution.scenario_id),
+        str(call_execution.row_id) if call_execution.row_id else None,
+    )
 
 
 def _resolve_simulator_agent(scenario, run_test, selected_version) -> SimulatorAgent:

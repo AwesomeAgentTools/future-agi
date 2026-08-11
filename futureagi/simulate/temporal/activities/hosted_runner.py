@@ -20,6 +20,7 @@ from typing import Any
 from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.db import close_old_connections
+from django.utils import timezone
 from temporalio import activity
 
 from simulate.temporal.types.hosted_runner import (
@@ -174,7 +175,7 @@ async def finalize_hosted_execution(input: FinalizeRunnerInput) -> str:
     """
     close_old_connections()
 
-    from simulate.models.test_execution import TestExecution
+    from simulate.models.test_execution import CallExecution, TestExecution
 
     if input.job_phase == "completed":
         from simulate.tasks.chat_sim import monitor_test_execution_for_chat
@@ -189,6 +190,14 @@ async def finalize_hosted_execution(input: FinalizeRunnerInput) -> str:
         if input.job_phase == "cancelled":
             execution.status = TestExecution.ExecutionStatus.CANCELLED
             execution.save(update_fields=["status"])
+            CallExecution.objects.filter(
+                test_execution=execution,
+                status=CallExecution.CallStatus.PENDING,
+                deleted=False,
+            ).update(
+                status=CallExecution.CallStatus.CANCELLED,
+                completed_at=timezone.now(),
+            )
             return "cancelled"
         if execution.status not in (
             TestExecution.ExecutionStatus.COMPLETED,
@@ -196,6 +205,14 @@ async def finalize_hosted_execution(input: FinalizeRunnerInput) -> str:
         ):
             execution.status = TestExecution.ExecutionStatus.FAILED
             execution.save(update_fields=["status"])
+            CallExecution.objects.filter(
+                test_execution=execution,
+                status=CallExecution.CallStatus.PENDING,
+                deleted=False,
+            ).update(
+                status=CallExecution.CallStatus.FAILED,
+                completed_at=timezone.now(),
+            )
         return "failed"
 
     return await sync_to_async(_mark_terminal, thread_sensitive=True)()

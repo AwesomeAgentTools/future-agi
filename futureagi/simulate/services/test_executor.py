@@ -4077,29 +4077,51 @@ class TestExecutor:
 
     def _check_and_update_test_execution_completion(self, test_execution_id):
         """
-        Check if all call executions in a test_execution have eval_completed = True,
-        and update test_execution status to COMPLETED if so.
+        Mark an execution completed once all calls are terminal and every
+        successful call has finished evaluation.
+
+        Failed and cancelled calls do not run evaluations, so requiring an
+        ``eval_completed`` flag on them leaves mixed-result executions stuck in
+        EVALUATING forever.
 
         Args:
             test_execution_id: TestExecution ID to check
         """
         try:
-            all_calls_completed = (
-                not CallExecution.objects.filter(
-                    test_execution_id=test_execution_id, deleted=False
-                )
-                .filter(
-                    Q(call_metadata__isnull=True)
-                    | Q(call_metadata__eval_completed__isnull=True)
-                    | Q(call_metadata__eval_completed=False)
-                )
-                .exists()
+            calls = CallExecution.objects.filter(
+                test_execution_id=test_execution_id, deleted=False
             )
+            has_non_terminal_calls = calls.exclude(
+                status__in=[
+                    CallExecution.CallStatus.COMPLETED,
+                    CallExecution.CallStatus.FAILED,
+                    CallExecution.CallStatus.CANCELLED,
+                ]
+            ).exists()
+            completed_calls = calls.filter(status=CallExecution.CallStatus.COMPLETED)
+            has_completed_calls = completed_calls.exists()
+            has_incomplete_evaluations = completed_calls.filter(
+                Q(call_metadata__isnull=True)
+                | Q(call_metadata__eval_completed__isnull=True)
+                | Q(call_metadata__eval_completed=False)
+            ).exists()
 
-            if all_calls_completed:
-                # Update test_execution status
+            if (
+                not has_non_terminal_calls
+                and has_completed_calls
+                and not has_incomplete_evaluations
+            ):
+                total_call_count = calls.count()
+                completed_call_count = completed_calls.count()
+                failed_call_count = calls.filter(
+                    status=CallExecution.CallStatus.FAILED
+                ).count()
                 updated = TestExecution.objects.filter(id=test_execution_id).update(
-                    status=TestExecution.ExecutionStatus.COMPLETED
+                    status=TestExecution.ExecutionStatus.COMPLETED,
+                    completed_at=timezone.now(),
+                    total_calls=total_call_count,
+                    completed_calls=completed_call_count,
+                    failed_calls=failed_call_count,
                 )
                 if updated:
                     logger.info(
