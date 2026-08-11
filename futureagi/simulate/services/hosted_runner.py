@@ -416,7 +416,7 @@ def _build_voice_job(
                 "dataset": dataset,
             },
             "livekit_runtime": livekit_runtime,
-            "simulator": _voice_simulator_config(),
+            "simulator": _voice_simulator_config(dataset),
             "params": _voice_params(transport_kind, case_count=len(dataset)),
         },
         "sink": {
@@ -601,7 +601,16 @@ def _voice_livekit_runtime(
     return runtime, secret_env
 
 
-def _voice_simulator_config() -> dict[str, Any]:
+def _voice_simulator_config(
+    dataset: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    stt = {
+        "provider": _voice_setting("SIMULATOR_STT_PROVIDER") or "deepgram",
+        "model": _voice_setting("SIMULATOR_STT_MODEL") or "nova-3",
+    }
+    language = _voice_setting("SIMULATOR_STT_LANGUAGE") or _dataset_language(dataset)
+    if language:
+        stt["language"] = language
     return {
         "llm": {
             # Match ALK's supported default and the credential present in the
@@ -611,15 +620,29 @@ def _voice_simulator_config() -> dict[str, Any]:
             "provider": _voice_setting("SIMULATOR_LLM_PROVIDER") or "openai",
             "model": _voice_setting("SIMULATOR_LLM_MODEL") or "gpt-4.1",
         },
-        "stt": {
-            "provider": _voice_setting("SIMULATOR_STT_PROVIDER") or "deepgram",
-            "model": _voice_setting("SIMULATOR_STT_MODEL") or "nova-3",
-        },
+        "stt": stt,
         "tts": {
             "provider": _voice_setting("SIMULATOR_TTS_PROVIDER") or "deepgram",
             "model": _voice_setting("SIMULATOR_TTS_MODEL") or "aura-2-andromeda-en",
         },
     }
+
+
+def _dataset_language(dataset: list[dict[str, Any]] | None) -> str | None:
+    languages = {
+        str(persona["language"]).strip().lower()
+        for case in dataset or []
+        if isinstance((persona := case.get("persona")), dict)
+        and persona.get("language")
+    }
+    if not languages:
+        return None
+    if len(languages) > 1:
+        return "multi"
+    label_to_code = {
+        label.lower(): code for code, label in AgentDefinition.LanguageChoices.choices
+    }
+    return label_to_code.get(languages.pop())
 
 
 def _voice_params(transport_kind: str, *, case_count: int = 1) -> dict[str, Any]:

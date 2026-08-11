@@ -1141,6 +1141,15 @@ class TestHostedRunnerActivityHelpers:
             "model": "gpt-4.1",
         }
 
+    def test_voice_simulator_uses_single_dataset_language(self, settings):
+        from simulate.services.hosted_runner import _voice_simulator_config
+
+        settings.SIMULATOR_STT_LANGUAGE = ""
+
+        simulator = _voice_simulator_config([{"persona": {"language": "arabic"}}])
+
+        assert simulator["stt"]["language"] == "ar"
+
     def test_voice_conversation_direction_is_configurable(self, monkeypatch, settings):
         from simulate.services.hosted_runner import _voice_params
 
@@ -1617,3 +1626,25 @@ class TestHostedRerunDispatch:
         assert kwargs["run_test_id"] == str(run_test.id)
         assert kwargs["scenario_ids"] == scenario_ids
         assert kwargs["simulator_id"] == str(run_test.simulator_agent_id)
+
+
+def test_dataset_language_none_single_multi():
+    """Regression: multi-language datasets must map to Deepgram 'multi', not None
+    (None → English STT → non-English cases silence-fail)."""
+    from simulate.models import AgentDefinition
+    from simulate.services.hosted_runner import _dataset_language
+
+    code_by_label = {
+        label.lower(): code for code, label in AgentDefinition.LanguageChoices.choices
+    }
+    single_label = next(iter(AgentDefinition.LanguageChoices.labels))
+
+    assert _dataset_language([]) is None
+    assert _dataset_language([{"persona": {}}]) is None
+    assert (
+        _dataset_language([{"persona": {"language": single_label}}])
+        == code_by_label[single_label.lower()]
+    )
+    labels = list(AgentDefinition.LanguageChoices.labels)[:2]
+    mixed = [{"persona": {"language": labels[0]}}, {"persona": {"language": labels[1]}}]
+    assert _dataset_language(mixed) == "multi"
