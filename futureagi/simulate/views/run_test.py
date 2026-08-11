@@ -916,15 +916,7 @@ class RunTestExecutionView(APIView):
             return False
         if agent_definition.agent_type == AgentDefinition.AgentTypeChoices.TEXT:
             return True
-        if agent_definition.agent_type == AgentDefinition.AgentTypeChoices.VOICE:
-            if not bool(getattr(app_settings, "HOSTED_RUNNER_VOICE_ENABLED", False)):
-                return False
-            # Providers the released SDK can't drive (e.g. Bland) stay on the
-            # native runner.
-            from simulate.services.hosted_runner import hosted_runner_supports
-
-            return hosted_runner_supports(agent_definition)
-        return False
+        return _hosted_execution_eligible(run_test)
 
     def _hosted_runner_mode(self, run_test: RunTest) -> str:
         from simulate.services.hosted_runner import resolve_runner_mode
@@ -6340,6 +6332,49 @@ def _rerun_call_executions(call_executions, rerun_type):
     return successful_reruns, failed_reruns, has_pending_calls, has_pending_evals
 
 
+def _hosted_execution_eligible(run_test) -> bool:
+    """Whether a run's execution routes to the hosted simulation runner — the
+    same predicate the execute view uses. Rerun must mirror it so hosted
+    executions re-dispatch through the runner instead of the native
+    CallExecutionWorkflow (which would try to place a real provider call with no
+    phone number and fail with "activity task failed")."""
+    agent_definition = run_test.agent_definition
+    if agent_definition is None:
+        return False
+    if agent_definition.agent_type == AgentDefinition.AgentTypeChoices.TEXT:
+        return True
+    if agent_definition.agent_type == AgentDefinition.AgentTypeChoices.VOICE:
+        if not bool(getattr(app_settings, "HOSTED_RUNNER_VOICE_ENABLED", False)):
+            return False
+        from simulate.services.hosted_runner import hosted_runner_supports
+
+        return hosted_runner_supports(agent_definition)
+    return False
+
+
+def _dispatch_hosted_rerun(test_execution) -> str:
+    """Re-dispatch a hosted execution's rerun via the simulation runner, reusing
+    the existing TestExecution id. The reset CallExecution rows (PENDING, cleared
+    metadata) are adopted by the idempotent ALK ``/batch/`` ingestion."""
+    from simulate.services.hosted_runner import resolve_runner_mode
+    from simulate.temporal.client import start_simulation_runner_workflow
+
+    run_test = test_execution.run_test
+    scenario_ids = [str(sid) for sid in (test_execution.scenario_ids or [])]
+    return start_simulation_runner_workflow(
+        test_execution_id=str(test_execution.id),
+        run_test_id=str(run_test.id),
+        org_id=str(run_test.organization_id),
+        scenario_ids=scenario_ids,
+        mode=resolve_runner_mode(run_test.agent_definition),
+        simulator_id=(
+            str(test_execution.simulator_agent_id)
+            if test_execution.simulator_agent_id
+            else None
+        ),
+    )
+
+
 class CallExecutionRerunView(APIView):
     """
     API View to handle bulk call execution rerun requests
@@ -6400,6 +6435,11 @@ class CallExecutionRerunView(APIView):
             rerun_type = request.validated_data["rerun_type"]
             select_all = request.validated_data.get("select_all", False)
             call_execution_ids = request.validated_data.get("call_execution_ids", [])
+
+            # Hosted executions re-run through the simulation runner, not the
+            # native CallExecutionWorkflow (call_and_eval only; eval_only reruns
+            # just re-score existing transcripts).
+            is_hosted = _hosted_execution_eligible(test_execution.run_test)
 
             # Validate CHAT/TEXT agents can only use eval_only rerun type
             if rerun_type != "eval_only" and test_execution.run_test.agent_definition:
@@ -6463,13 +6503,16 @@ class CallExecutionRerunView(APIView):
                         )
 
                     else:  # call_and_eval
-                        # Rerun call + evaluations - clear call data
+                        # Rerun call + evaluations - clear call data (also resets
+                        # call_metadata, clearing the ALK batch-claim + CSAT
+                        # dispatch flags so the hosted re-run re-adopts + re-scores)
                         self._clear_call_execution_data(call_execution)
 
-                        # Create new CreateCallExecution record for the Temporal workflow.
-                        # prepare_call activity reads this to get system_prompt,
-                        # voice_settings, phone number, etc.
-                        _create_rerun_call_execution(call_execution)
+                        # Native path only: prepare_call reads CreateCallExecution
+                        # for system_prompt / voice_settings / phone. The hosted
+                        # runner ignores it and drives the released SDK instead.
+                        if not is_hosted:
+                            _create_rerun_call_execution(call_execution)
 
                         # Mark as pending - will be launched via Temporal below
                         call_execution.status = CallExecution.CallStatus.PENDING
@@ -6564,16 +6607,24 @@ class CallExecutionRerunView(APIView):
                     )
 
                 elif rerun_type == "call_and_eval" and has_pending_calls:
-                    # Launch or merge into RerunCoordinatorWorkflow for call reruns
+                    # Hosted → simulation runner (existing TestExecution id);
+                    # native → RerunCoordinatorWorkflow.
                     try:
-                        rerun_result = rerun_call_executions(
-                            test_execution_id=str(test_execution.id),
-                            call_execution_ids=successful_reruns,
-                            org_id=str(user_organization.id),
-                            workspace_id=workspace_id_str,
-                            eval_only=False,
-                            active_workflow_id=active_workflow_id,
-                        )
+                        if is_hosted:
+                            workflow_id = _dispatch_hosted_rerun(test_execution)
+                            rerun_result = {
+                                "merged": False,
+                                "workflow_id": workflow_id,
+                            }
+                        else:
+                            rerun_result = rerun_call_executions(
+                                test_execution_id=str(test_execution.id),
+                                call_execution_ids=successful_reruns,
+                                org_id=str(user_organization.id),
+                                workspace_id=workspace_id_str,
+                                eval_only=False,
+                                active_workflow_id=active_workflow_id,
+                            )
                     except Exception as dispatch_error:
                         dispatch_error_message = str(dispatch_error)
                         rerun_result = {"merged": False, "workflow_id": None}
@@ -6959,6 +7010,10 @@ class TestExecutionRerunView(APIView):
             select_all = request.validated_data.get("select_all", False)
             test_execution_ids = request.validated_data.get("test_execution_ids", [])
 
+            # Hosted executions re-run through the simulation runner (call_and_eval
+            # only); native ones keep the RerunCoordinatorWorkflow path.
+            is_hosted = _hosted_execution_eligible(run_test)
+
             # Validate CHAT/TEXT agents can only use eval_only rerun type
             if rerun_type != "eval_only" and run_test.agent_definition:
                 agent_type = run_test.agent_definition.agent_type
@@ -7021,12 +7076,29 @@ class TestExecutionRerunView(APIView):
                     )
                     continue
 
-                # Prepare call executions (DB snapshot + reset) using bulk operations
-                successful_reruns, failed_reruns = (
-                    self._prepare_call_executions_for_rerun_bulk(
-                        call_executions, rerun_type
+                if is_hosted and rerun_type == "call_and_eval":
+                    # Hosted call_and_eval: per-row clear (also resets
+                    # call_metadata, clearing the ALK batch-claim + CSAT flags) so
+                    # the simulation-runner re-dispatch re-adopts the PENDING rows.
+                    successful_reruns, failed_reruns = [], []
+                    for call_execution in call_executions:
+                        try:
+                            _clear_call_execution_data(call_execution)
+                            successful_reruns.append(str(call_execution.id))
+                        except Exception as e:
+                            failed_reruns.append(
+                                {
+                                    "call_execution_id": str(call_execution.id),
+                                    "error": str(e),
+                                }
+                            )
+                else:
+                    # Prepare call executions (DB snapshot + reset) using bulk operations
+                    successful_reruns, failed_reruns = (
+                        self._prepare_call_executions_for_rerun_bulk(
+                            call_executions, rerun_type
+                        )
                     )
-                )
                 dispatch_error_message = None
 
                 # Start Temporal RerunCoordinatorWorkflow for this test execution
@@ -7043,14 +7115,21 @@ class TestExecutionRerunView(APIView):
 
                     dispatch_error_message = None
                     try:
-                        rerun_result = rerun_call_executions(
-                            test_execution_id=str(test_execution.id),
-                            call_execution_ids=successful_reruns,
-                            org_id=str(user_organization.id),
-                            workspace_id=workspace_id_str,
-                            eval_only=eval_only,
-                            active_workflow_id=active_workflow_id,
-                        )
+                        if is_hosted and not eval_only:
+                            workflow_id = _dispatch_hosted_rerun(test_execution)
+                            rerun_result = {
+                                "merged": False,
+                                "workflow_id": workflow_id,
+                            }
+                        else:
+                            rerun_result = rerun_call_executions(
+                                test_execution_id=str(test_execution.id),
+                                call_execution_ids=successful_reruns,
+                                org_id=str(user_organization.id),
+                                workspace_id=workspace_id_str,
+                                eval_only=eval_only,
+                                active_workflow_id=active_workflow_id,
+                            )
                     except Exception as dispatch_error:
                         dispatch_error_message = str(dispatch_error)
                         dispatch_error_count += 1

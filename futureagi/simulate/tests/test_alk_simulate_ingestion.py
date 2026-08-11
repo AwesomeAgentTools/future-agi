@@ -1582,3 +1582,38 @@ class TestHostedRunnerProviderSupport:
         from simulate.services.hosted_runner import hosted_runner_supports
 
         assert not hosted_runner_supports(None)
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+class TestHostedRerunDispatch:
+    """A hosted execution's call_and_eval rerun must re-dispatch through the
+    simulation runner (reusing the TestExecution id), not the native
+    CallExecutionWorkflow that fails with an empty provider phone number."""
+
+    def test_dispatch_hosted_rerun_reuses_execution(self, run_test):
+        from simulate.views.run_test import _dispatch_hosted_rerun
+
+        scenario_ids = [
+            str(sid) for sid in run_test.scenarios.values_list("id", flat=True)
+        ]
+        te = SimTestExecution.objects.create(
+            run_test=run_test,
+            status=SimTestExecution.ExecutionStatus.COMPLETED,
+            total_scenarios=1,
+            scenario_ids=scenario_ids,
+            simulator_agent=run_test.simulator_agent,
+        )
+
+        with patch(
+            "simulate.temporal.client.start_simulation_runner_workflow",
+            return_value="wf-hosted-1",
+        ) as dispatch:
+            workflow_id = _dispatch_hosted_rerun(te)
+
+        assert workflow_id == "wf-hosted-1"
+        _, kwargs = dispatch.call_args
+        assert kwargs["test_execution_id"] == str(te.id)
+        assert kwargs["run_test_id"] == str(run_test.id)
+        assert kwargs["scenario_ids"] == scenario_ids
+        assert kwargs["simulator_id"] == str(run_test.simulator_agent_id)
