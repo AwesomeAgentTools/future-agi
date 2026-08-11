@@ -142,23 +142,9 @@ export const createAgentDefinitionSchema = (options) => {
         //   data.apiKey?.trim() && data.assistantId?.trim();
         const hasCountryCode = !!data.countryCode?.trim();
         const hasContactNumber = !!data.contactNumber?.trim();
-        // if (!hasWebBridgeCreds) {
-        if (!hasCountryCode) {
-          ctx.addIssue({
-            path: ["countryCode"],
-            message: "Country code is required",
-            code: z.ZodIssueCode.custom,
-          });
-        }
-        if (!hasContactNumber) {
-          ctx.addIssue({
-            path: ["contactNumber"],
-            message: "Contact number is required",
-            code: z.ZodIssueCode.custom,
-          });
-        }
-        // } else {
-        // Both are optional, but if one is provided the other is required
+        // Phone number is OPTIONAL: leaving it empty runs a web (WebRTC)
+        // simulation. If either country code or number is provided, the other
+        // is required so a telephony (PSTN) target is fully specified.
         if (hasContactNumber && !hasCountryCode) {
           ctx.addIssue({
             path: ["countryCode"],

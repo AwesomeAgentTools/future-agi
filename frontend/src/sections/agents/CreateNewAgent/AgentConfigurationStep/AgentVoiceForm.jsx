@@ -62,6 +62,11 @@ export default function AgentVoiceForm() {
     name: "assistantId",
     defaultValue: getValues("assistantId"),
   });
+  const contactNumber = useWatch({
+    control,
+    name: "contactNumber",
+    defaultValue: getValues("contactNumber"),
+  });
   const observabilityEnabled = useWatch({
     control,
     name: "observabilityEnabled",
@@ -726,7 +731,6 @@ export default function AgentVoiceForm() {
                   fullWidth
                   fieldName="countryCode"
                   label="Country Code"
-                  required
                   size="small"
                   placeholder="+1"
                   options={pinCodeOptions.map((pinCodeOption) => ({
@@ -782,11 +786,10 @@ export default function AgentVoiceForm() {
               <Grid item xs={8.5}>
                 <FormTextFieldV2
                   control={control}
-                  label="Contact Number"
-                  required
+                  label="Contact Number (optional)"
                   type="number"
                   fieldName="contactNumber"
-                  placeholder="Contact number"
+                  placeholder="Leave empty for a web (WebRTC) simulation"
                   size="small"
                   fullWidth
                   sx={{
@@ -797,6 +800,33 @@ export default function AgentVoiceForm() {
                 />
               </Grid>
             </Grid>
+
+            <Box
+              border={"1px solid"}
+              borderColor={"background.neutral"}
+              borderRadius={"8px !important"}
+              bgcolor={"background.neutral"}
+              p={1.5}
+            >
+              <Typography
+                typography="s1"
+                fontWeight={"fontWeightMedium"}
+                color={"text.primary"}
+              >
+                {contactNumber?.toString().trim()
+                  ? "Telephony simulation (PSTN)"
+                  : "Web simulation (WebRTC)"}
+              </Typography>
+              <Typography
+                typography="s2_1"
+                fontWeight={"fontWeightRegular"}
+                color={"text.secondary"}
+              >
+                {contactNumber?.toString().trim()
+                  ? "A real phone call is placed over PSTN — requires a configured telephony provider (phone number)."
+                  : "No phone number → runs a web (WebRTC) simulation. No phone call is placed and no telephony provider is needed."}
+              </Typography>
+            </Box>
 
             <Box
               display="flex"
