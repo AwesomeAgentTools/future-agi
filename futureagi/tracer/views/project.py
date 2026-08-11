@@ -19,8 +19,6 @@ from tracer.db_routing import DATABASE_FOR_PROJECT_LIST
 from tracer.models.monitor import UserAlertMonitor
 from tracer.models.observation_span import ObservationSpan
 from tracer.models.project import Project
-from tracer.models.project_version import ProjectVersion
-from tracer.models.trace import Trace
 from tracer.models.trace_scan import TraceScanConfig
 from tracer.queries.projects import apply_project_list_filters
 from tracer.serializers.project import (
@@ -41,13 +39,12 @@ from tracer.services.clickhouse.graph_dispatch import (
 from tracer.services.clickhouse.query_builders import (
     ClickHouseFilterBuilder,
     TimeSeriesQueryBuilder,
-    UserListQueryBuilder,
 )
 from tracer.services.clickhouse.query_service import AnalyticsQueryService
-from tracer.services.project_deletion import soft_delete_projects
 from tracer.services.clickhouse.v2.query_builders.user_list import (
     UserListQueryBuilderV2,
 )
+from tracer.services.project_deletion import soft_delete_projects
 from tracer.utils.constants import (
     INSTALLATION_GUIDE,
     INSTRUMENTORS,
