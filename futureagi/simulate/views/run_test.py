@@ -6468,6 +6468,14 @@ class CallExecutionRerunView(APIView):
                     id__in=call_execution_ids, test_execution=test_execution
                 )
 
+            # A hosted call_and_eval rerun re-runs the entire SDK job, so it must
+            # reset every row. Resetting only a selection would leave the runner's
+            # extra conversations to create duplicate rows during /batch adoption.
+            if is_hosted and rerun_type == "call_and_eval":
+                call_executions = CallExecution.objects.filter(
+                    test_execution=test_execution
+                )
+
             if not call_executions.exists():
                 return self._gm.bad_request(
                     "No call executions found that can be rerun."
