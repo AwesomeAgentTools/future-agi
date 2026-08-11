@@ -264,6 +264,19 @@ class TestTemporalClientAPI:
 
         assert result is False
 
+    @patch("simulate.temporal.client._cancel_simulation_runner_workflow_async")
+    def test_cancel_simulation_runner_workflow(
+        self, mock_cancel_async, db, test_execution
+    ):
+        from simulate.temporal.client import cancel_simulation_runner_workflow
+
+        mock_cancel_async.return_value = True
+
+        result = cancel_simulation_runner_workflow(str(test_execution.id))
+
+        assert result is True
+        mock_cancel_async.assert_called_once_with(str(test_execution.id))
+
     @patch("simulate.temporal.client._rerun_call_executions_async")
     def test_rerun_call_executions(
         self,
@@ -394,6 +407,29 @@ class TestTemporalClientAPIIntegration:
         result = await _cancel_test_execution_async(str(test_execution.id))
 
         assert result is True
+        mock_handle.cancel.assert_called_once()
+
+    @patch("tfc.temporal.common.client.get_client")
+    @pytest.mark.asyncio
+    async def test_cancel_simulation_runner_workflow_uses_hosted_id(
+        self, mock_get_client, db, test_execution
+    ):
+        from simulate.temporal.client import _cancel_simulation_runner_workflow_async
+
+        mock_handle = MagicMock()
+        mock_handle.cancel = AsyncMock()
+        mock_client = MagicMock()
+        mock_client.get_workflow_handle.return_value = mock_handle
+        mock_get_client.return_value = mock_client
+
+        result = await _cancel_simulation_runner_workflow_async(
+            str(test_execution.id)
+        )
+
+        assert result is True
+        mock_client.get_workflow_handle.assert_called_once_with(
+            f"sim-runner-{test_execution.id}"
+        )
         mock_handle.cancel.assert_called_once()
 
 

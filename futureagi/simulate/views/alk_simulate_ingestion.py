@@ -21,6 +21,8 @@ from rest_framework.parsers import MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.viewsets import ViewSet
 
+from accounts.authentication import APIKeyAuthentication
+from simulate.authentication import InternalServiceAuthentication
 from simulate.models import CallExecution, RunTest, SimulatorAgent, TestExecution
 from simulate.serializers.alk_simulate_ingestion import (
     ALKSimulateBatchCreateResponseSerializer,
@@ -57,6 +59,7 @@ class ALKSimulateIngestionViewSet(ViewSet):
     `simulate.services.alk_simulate_ingestion`, and format the response.
     """
 
+    authentication_classes = [InternalServiceAuthentication, APIKeyAuthentication]
     permission_classes = [IsAuthenticated]
 
     def __init__(self, **kwargs):
@@ -72,32 +75,44 @@ class ALKSimulateIngestionViewSet(ViewSet):
         user = getattr(request, "user", None)
         return getattr(user, "organization", None) if user is not None else None
 
+    def _is_internal_service(self, request):
+        return bool(getattr(request.user, "is_internal_service", False))
+
     def _test_execution_or_404(self, test_execution_id, request):
         try:
             test_execution = TestExecution.objects.select_related(
-                "run_test", "run_test__agent_definition", "agent_version"
+                "run_test",
+                "run_test__agent_definition",
+                "run_test__organization",
+                "agent_version",
             ).get(id=test_execution_id, deleted=False)
         except TestExecution.DoesNotExist as exc:
             raise Http404 from exc
+        execution_organization = test_execution.run_test.organization
+        if self._is_internal_service(request):
+            return test_execution, execution_organization
+
         organization = self._resolve_organization(request)
-        if organization is None or (
-            test_execution.run_test.organization_id != organization.id
-        ):
+        if organization is None or execution_organization.id != organization.id:
             raise Http404
         return test_execution, organization
 
     def _call_execution_or_404(self, call_execution_id, request):
         call_execution = get_object_or_404(
             CallExecution.objects.select_related(
-                "test_execution", "test_execution__run_test"
+                "test_execution",
+                "test_execution__run_test",
+                "test_execution__run_test__organization",
             ),
             id=call_execution_id,
             deleted=False,
         )
+        execution_organization = call_execution.test_execution.run_test.organization
+        if self._is_internal_service(request):
+            return call_execution, execution_organization
+
         organization = self._resolve_organization(request)
-        if organization is None or (
-            call_execution.test_execution.run_test.organization_id != organization.id
-        ):
+        if organization is None or execution_organization.id != organization.id:
             raise Http404
         return call_execution, organization
 

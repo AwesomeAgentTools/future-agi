@@ -11,6 +11,7 @@ All steps run on the ``simulation_runner`` queue.
 from datetime import timedelta
 
 from temporalio import workflow
+from temporalio.exceptions import CancelledError
 
 from simulate.temporal.constants import (
     HOSTED_RUNNER_MAX_DURATION_SECONDS,
@@ -93,7 +94,36 @@ class SimulationRunnerWorkflow:
                 report_hash=outcome.report_hash,
                 error=None if completed else outcome.detail,
             )
+        except CancelledError:
+            await workflow.execute_activity(
+                "finalize_hosted_execution",
+                FinalizeRunnerInput(
+                    test_execution_id=input.test_execution_id,
+                    job_phase="cancelled",
+                ),
+                start_to_close_timeout=timedelta(minutes=2),
+                retry_policy=DB_RETRY_POLICY,
+                task_queue=QUEUE_RUNNER,
+                result_type=str,
+            )
+            return SimulationRunnerOutput(status="CANCELLED", error="cancelled")
         except Exception as exc:  # noqa: BLE001
+            # Cancelling a running activity is surfaced by Temporal as an
+            # ActivityError whose cause is CancelledError, not always as a
+            # bare workflow CancelledError.
+            if isinstance(getattr(exc, "cause", None), CancelledError):
+                await workflow.execute_activity(
+                    "finalize_hosted_execution",
+                    FinalizeRunnerInput(
+                        test_execution_id=input.test_execution_id,
+                        job_phase="cancelled",
+                    ),
+                    start_to_close_timeout=timedelta(minutes=2),
+                    retry_policy=DB_RETRY_POLICY,
+                    task_queue=QUEUE_RUNNER,
+                    result_type=str,
+                )
+                return SimulationRunnerOutput(status="CANCELLED", error="cancelled")
             workflow.logger.error(f"SimulationRunnerWorkflow failed: {exc}")
             try:
                 await workflow.execute_activity(

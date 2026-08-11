@@ -15,6 +15,13 @@ services:
     environment:
       - HOSTED_RUNNER_ENABLED=${HOSTED_RUNNER_ENABLED:-false}
       - HOSTED_RUNNER_VOICE_ENABLED=${HOSTED_RUNNER_VOICE_ENABLED:-false}
+      - ALK_RUNNER_API_URL=${ALK_RUNNER_API_URL:-http://backend}
+
+  # The dev LiveKit target agent greets immediately on room dispatch. Let it
+  # speak before the simulator so the two agents do not interrupt each other.
+  worker-simulation-runner:
+    environment:
+      - SIMULATOR_CONVERSATION_DIRECTION=${SIMULATOR_CONVERSATION_DIRECTION:-agent_first}
 
   # Single Temporal worker for all queues (development only)
   temporal-worker-dev:

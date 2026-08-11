@@ -211,6 +211,20 @@ def cancel_test_execution(test_execution_id: str) -> bool:
     return async_to_sync(_cancel_test_execution_async)(test_execution_id)
 
 
+def cancel_simulation_runner_workflow(test_execution_id: str) -> bool:
+    """Cancel the hosted runner workflow for a test execution."""
+    return async_to_sync(_cancel_simulation_runner_workflow_async)(test_execution_id)
+
+
+async def _cancel_simulation_runner_workflow_async(test_execution_id: str) -> bool:
+    """Async implementation for cancelling a hosted runner workflow."""
+    from tfc.temporal.common.client import get_client
+
+    client = await get_client()
+    workflow_id = f"{SIMULATION_RUNNER_WORKFLOW_ID_PREFIX}-{test_execution_id}"
+    return await _cancel_with_retries(client, workflow_id)
+
+
 async def _cancel_test_execution_async(test_execution_id: str) -> bool:
     """Async implementation for cancelling workflow using Temporal's cancellation.
 

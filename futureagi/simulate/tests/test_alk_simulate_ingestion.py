@@ -352,6 +352,76 @@ class TestBatchCreate:
         assert second.json()["status"] is False
 
 
+@pytest.mark.integration
+@pytest.mark.api
+@pytest.mark.django_db
+class TestInternalServiceIngestion:
+    def test_internal_service_batches_and_ingests_precreated_execution(
+        self, auth_client, api_client, run_test
+    ):
+        from django.test import override_settings
+
+        start = auth_client.post(
+            f"{ALK_BASE}/run-tests/{run_test.id}/test-executions/",
+            {},
+            format="json",
+        )
+        test_execution_id = start.json()["result"]["test_execution_id"]
+        api_client.credentials(
+            HTTP_AUTHORIZATION="Bearer hosted-runner-internal-secret"
+        )
+
+        with override_settings(INTERNAL_API_SECRET="hosted-runner-internal-secret"):
+            batch = api_client.post(
+                f"{ALK_BASE}/test-executions/{test_execution_id}/batch/",
+                {},
+                format="json",
+            )
+            assert batch.status_code == 200, batch.content
+            call_id = batch.json()["result"]["call_execution_ids"][0]
+
+            result = api_client.patch(
+                f"{ALK_BASE}/call-executions/{call_id}/result/",
+                {"status": "completed", "transcript": _transcript_payload()},
+                format="json",
+            )
+
+        assert result.status_code == 200, result.content
+        call = CallExecution.objects.get(id=call_id)
+        assert call.status == CallExecution.CallStatus.COMPLETED
+        assert call.test_execution.run_test.organization_id == run_test.organization_id
+
+    def test_internal_service_cannot_create_execution(self, api_client, run_test):
+        from django.test import override_settings
+
+        api_client.credentials(
+            HTTP_AUTHORIZATION="Bearer hosted-runner-internal-secret"
+        )
+        with override_settings(INTERNAL_API_SECRET="hosted-runner-internal-secret"):
+            response = api_client.post(
+                f"{ALK_BASE}/run-tests/{run_test.id}/test-executions/",
+                {},
+                format="json",
+            )
+
+        assert response.status_code == 404
+
+    def test_wrong_internal_secret_is_rejected(self, api_client, run_test):
+        from simulate.services.alk_simulate_ingestion import (
+            create_alk_sim_test_execution,
+        )
+
+        test_execution = create_alk_sim_test_execution(run_test)
+        api_client.credentials(HTTP_AUTHORIZATION="Bearer wrong-secret")
+        response = api_client.post(
+            f"{ALK_BASE}/test-executions/{test_execution.id}/batch/",
+            {},
+            format="json",
+        )
+
+        assert response.status_code == 403
+
+
 # ---------------------------------------------------------------------------
 # result ingest — metrics, duration, tokens, csat
 # ---------------------------------------------------------------------------
@@ -682,7 +752,12 @@ class TestBuildRunnerJob:
         # Sink points at the pre-created execution + carries secret refs only.
         assert job["sink"]["test_execution_id"] == str(te.id)
         assert job["sink"]["run_test_id"] == str(text_run_test.id)
-        assert job["sink"]["secret_refs"]["api_key"]["manager"] == "env"
+        internal_ref = job["sink"]["secret_refs"]["internal_api_secret"]
+        assert internal_ref == {
+            "manager": "env",
+            "key": "INTERNAL_API_SECRET",
+            "purpose": "internal_api_secret",
+        }
 
 
 @pytest.mark.integration
@@ -961,6 +1036,31 @@ class TestBuildVoiceRunnerJob:
 
 
 class TestHostedRunnerActivityHelpers:
+    def test_default_voice_simulator_uses_openai(self, monkeypatch, settings):
+        from simulate.services.hosted_runner import _voice_simulator_config
+
+        settings.SIMULATOR_LLM_PROVIDER = ""
+        settings.SIMULATOR_LLM_MODEL = ""
+        monkeypatch.delenv("SIMULATOR_LLM_PROVIDER", raising=False)
+        monkeypatch.delenv("SIMULATOR_LLM_MODEL", raising=False)
+
+        simulator = _voice_simulator_config()
+
+        assert simulator["llm"] == {
+            "provider": "openai",
+            "model": "gpt-4.1",
+        }
+
+    def test_voice_conversation_direction_is_configurable(
+        self, monkeypatch, settings
+    ):
+        from simulate.services.hosted_runner import _voice_params
+
+        settings.SIMULATOR_CONVERSATION_DIRECTION = ""
+        monkeypatch.setenv("SIMULATOR_CONVERSATION_DIRECTION", "agent_first")
+
+        assert _voice_params("webrtc")["conversation_direction"] == "agent_first"
+
     """The DID pool is touched only for sip_inbound (mirrors _needs_phone)."""
 
     def test_inject_did_slot_only_for_sip_inbound(self):
@@ -1003,8 +1103,9 @@ class TestHostedRunnerActivityHelpers:
         }
         _inject_did_slot(outbound, slot)
         # sip_outbound dials the target directly; never consumes a leased DID.
-        assert "dispatch_rule_name" not in (
-            outbound["voice"]["agent_definition"]["transport"]
+        assert (
+            "dispatch_rule_name"
+            not in (outbound["voice"]["agent_definition"]["transport"])
         )
 
     def test_acquire_did_slot_none_without_script(self, monkeypatch):
@@ -1014,6 +1115,47 @@ class TestHostedRunnerActivityHelpers:
 
         monkeypatch.delenv("ALK_SIM_SLOT_LEASE_SCRIPT", raising=False)
         assert asyncio.run(_acquire_did_slot("job-1")) is None
+
+    def test_child_environment_maps_internal_sink_secret(self, monkeypatch):
+        from simulate.temporal.activities.hosted_runner import _child_environment
+
+        monkeypatch.setenv("INTERNAL_API_SECRET", "shared-service-secret")
+        job = {
+            "sink": {
+                "secret_refs": {
+                    "internal_api_secret": {
+                        "manager": "env",
+                        "key": "INTERNAL_API_SECRET",
+                        "purpose": "internal_api_secret",
+                    }
+                }
+            }
+        }
+
+        child_env = _child_environment(job)
+
+        assert child_env["FI_INTERNAL_API_SECRET"] == "shared-service-secret"
+
+    def test_waiting_for_child_slot_heartbeats(self, monkeypatch):
+        import asyncio
+
+        from simulate.temporal.activities import hosted_runner as hr
+
+        semaphore = asyncio.Semaphore(0)
+        heartbeats = []
+        monkeypatch.setattr(hr, "_child_semaphore", semaphore)
+        monkeypatch.setattr(hr, "_CHILD_SLOT_HEARTBEAT_SECONDS", 0.001)
+        monkeypatch.setattr(hr.activity, "heartbeat", heartbeats.append)
+
+        async def exercise():
+            acquire = asyncio.create_task(hr._acquire_child_slot())
+            await asyncio.sleep(0.01)
+            semaphore.release()
+            await acquire
+
+        asyncio.run(exercise())
+
+        assert "waiting_for_child_slot" in heartbeats
 
     def test_acquire_did_slot_uses_livekit_infra_contract(self, monkeypatch):
         import asyncio

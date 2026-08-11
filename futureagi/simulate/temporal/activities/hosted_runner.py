@@ -35,7 +35,14 @@ from simulate.temporal.types.hosted_runner import (
 _MAX_CONCURRENCY = int(os.getenv("ALK_RUNNER_MAX_CONCURRENCY", "4"))
 _child_semaphore = asyncio.Semaphore(_MAX_CONCURRENCY)
 
-_SINK_ENV_BY_PURPOSE = {"api_key": "FI_API_KEY", "secret_key": "FI_SECRET_KEY"}
+_SINK_ENV_BY_PURPOSE = {
+    "api_key": "FI_API_KEY",
+    "secret_key": "FI_SECRET_KEY",
+    "internal_api_secret": "FI_INTERNAL_API_SECRET",
+}
+_CHILD_SLOT_HEARTBEAT_SECONDS = float(
+    os.getenv("ALK_RUNNER_SLOT_HEARTBEAT_SECONDS", "20")
+)
 
 
 @activity.defn(name="build_runner_job")
@@ -62,6 +69,11 @@ async def build_runner_job(input: BuildRunnerJobInput) -> BuildRunnerJobOutput:
 async def run_hosted_sdk_job(input: RunHostedJobInput) -> RunHostedJobOutput:
     """Spawn the SDK child, stream its status lines as heartbeats, await exit."""
     job = json.loads(input.job_json)
+    # Wait for child capacity before creating scratch state or leasing a scarce
+    # DID. Heartbeats keep the Temporal activity alive while all local child
+    # slots are occupied.
+    await _acquire_child_slot()
+
     # Scratch holds only job.json + status.jsonl; the run artifacts
     # (report/events/submission) go to a durable, absolute run root OUTSIDE the
     # scratch so a failed run leaves evidence (§9.2 preserve crash artifacts).
@@ -75,61 +87,61 @@ async def run_hosted_sdk_job(input: RunHostedJobInput) -> RunHostedJobOutput:
     # _needs_phone gate). Lease before spawning, inject the slot into the job,
     # release in finally. Web/chat never lease.
     did_slot = None
-    if input.mode == "voice_sip":
-        did_slot = await _acquire_did_slot(input.job_id)
-        if did_slot:
-            _inject_did_slot(job, did_slot)
-
-    with open(job_path, "w", encoding="utf-8") as handle:
-        handle.write(json.dumps(job))
-
-    python = os.getenv("ALK_RUNNER_PYTHON", "python")
-    child_env = _child_environment(job)
-    child_env.update(await _resolve_voice_secret_env(job))
-    child_env["FI_RUN_ROOT"] = run_root
-    last: dict[str, Any] = {"phase": "pending"}
-    return_code = 1
-
     try:
-        async with _child_semaphore:
-            proc = await asyncio.create_subprocess_exec(
-                python,
-                "-m",
-                "fi.simulate.hosted.child_entrypoint",
-                job_path,
-                "--status-file",
-                status_path,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-                env=child_env,
-                cwd=work_dir,
-            )
-            try:
-                assert proc.stdout is not None
-                async for raw in proc.stdout:
-                    line = raw.decode("utf-8", "replace").strip()
-                    if not line:
-                        continue
-                    parsed = _parse_status_line(line)
-                    if parsed is not None:
-                        last = parsed
-                        activity.heartbeat(parsed.get("phase"))
-                return_code = await proc.wait()
-            except asyncio.CancelledError:
-                _terminate(proc)
-                raise
-            finally:
-                # Keep the scratch on failure for debugging; the run root is durable.
-                if return_code == 0:
-                    shutil.rmtree(work_dir, ignore_errors=True)
-                else:
-                    activity.logger.warning(
-                        f"hosted job {input.job_id} exited {return_code}; "
-                        f"artifacts preserved at {run_root} (scratch {work_dir})"
-                    )
+        if input.mode == "voice_sip":
+            did_slot = await _acquire_did_slot(input.job_id)
+            if did_slot:
+                _inject_did_slot(job, did_slot)
+
+        with open(job_path, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(job))
+
+        python = os.getenv("ALK_RUNNER_PYTHON", "python")
+        child_env = _child_environment(job)
+        child_env.update(await _resolve_voice_secret_env(job))
+        child_env["FI_RUN_ROOT"] = run_root
+        last: dict[str, Any] = {"phase": "pending"}
+        return_code = 1
+
+        proc = await asyncio.create_subprocess_exec(
+            python,
+            "-m",
+            "fi.simulate.hosted.child_entrypoint",
+            job_path,
+            "--status-file",
+            status_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            env=child_env,
+            cwd=work_dir,
+        )
+        try:
+            assert proc.stdout is not None
+            async for raw in proc.stdout:
+                line = raw.decode("utf-8", "replace").strip()
+                if not line:
+                    continue
+                parsed = _parse_status_line(line)
+                if parsed is not None:
+                    last = parsed
+                    activity.heartbeat(parsed.get("phase"))
+            return_code = await proc.wait()
+        except asyncio.CancelledError:
+            _terminate(proc)
+            raise
+        finally:
+            # Keep the scratch on failure for debugging; the run root is durable.
+            if return_code == 0:
+                shutil.rmtree(work_dir, ignore_errors=True)
+            else:
+                activity.logger.warning(
+                    f"hosted job {input.job_id} exited {return_code}; "
+                    f"artifacts preserved at {run_root} (scratch {work_dir})"
+                )
     finally:
         if did_slot is not None:
             await _release_did_slot(did_slot)
+        _child_semaphore.release()
 
     return RunHostedJobOutput(
         phase=last.get("phase", "failed"),
@@ -138,6 +150,18 @@ async def run_hosted_sdk_job(input: RunHostedJobInput) -> RunHostedJobOutput:
         submission_status=last.get("submission_status"),
         detail=last.get("detail"),
     )
+
+
+async def _acquire_child_slot() -> None:
+    while True:
+        try:
+            await asyncio.wait_for(
+                _child_semaphore.acquire(),
+                timeout=_CHILD_SLOT_HEARTBEAT_SECONDS,
+            )
+            return
+        except TimeoutError:
+            activity.heartbeat("waiting_for_child_slot")
 
 
 @activity.defn(name="finalize_hosted_execution")
@@ -160,8 +184,12 @@ async def finalize_hosted_execution(input: FinalizeRunnerInput) -> str:
         )
         return "rolled_up"
 
-    def _mark_failed() -> str:
+    def _mark_terminal() -> str:
         execution = TestExecution.objects.get(id=input.test_execution_id)
+        if input.job_phase == "cancelled":
+            execution.status = TestExecution.ExecutionStatus.CANCELLED
+            execution.save(update_fields=["status"])
+            return "cancelled"
         if execution.status not in (
             TestExecution.ExecutionStatus.COMPLETED,
             TestExecution.ExecutionStatus.CANCELLED,
@@ -170,7 +198,7 @@ async def finalize_hosted_execution(input: FinalizeRunnerInput) -> str:
             execution.save(update_fields=["status"])
         return "failed"
 
-    return await sync_to_async(_mark_failed, thread_sensitive=True)()
+    return await sync_to_async(_mark_terminal, thread_sensitive=True)()
 
 
 def _runs_base() -> str:
@@ -204,9 +232,7 @@ def _child_environment(job: dict[str, Any]) -> dict[str, str]:
     # The DID is allocated after the job is built, so it cannot ride the
     # normal metadata.secret_env path. The SDK's inbound originator reads this
     # exact env var when it asks Vapi to dial the leased simulator number.
-    inbound_did = (
-        ((job.get("voice") or {}).get("params") or {}).get("inbound_did")
-    )
+    inbound_did = ((job.get("voice") or {}).get("params") or {}).get("inbound_did")
     if inbound_did:
         env["LIVEKIT_INBOUND_DID"] = str(inbound_did)
     return env

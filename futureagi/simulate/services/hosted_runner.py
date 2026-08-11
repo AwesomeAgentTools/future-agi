@@ -188,8 +188,9 @@ def build_start_runner_job(
             "run_test_id": str(run_test.id),
             "test_execution_id": run_id,
             "secret_refs": {
-                "api_key": _env_secret_ref("ALK_RUNNER_FI_API_KEY", "api_key"),
-                "secret_key": _env_secret_ref("ALK_RUNNER_FI_SECRET_KEY", "secret_key"),
+                "internal_api_secret": _env_secret_ref(
+                    "INTERNAL_API_SECRET", "internal_api_secret"
+                ),
             },
         },
         "metadata": {
@@ -401,8 +402,9 @@ def _build_voice_job(
             "run_test_id": str(run_test.id),
             "test_execution_id": run_id,
             "secret_refs": {
-                "api_key": _env_secret_ref("ALK_RUNNER_FI_API_KEY", "api_key"),
-                "secret_key": _env_secret_ref("ALK_RUNNER_FI_SECRET_KEY", "secret_key"),
+                "internal_api_secret": _env_secret_ref(
+                    "INTERNAL_API_SECRET", "internal_api_secret"
+                ),
             },
         },
         "metadata": {
@@ -580,8 +582,12 @@ def _voice_livekit_runtime(
 def _voice_simulator_config() -> dict[str, Any]:
     return {
         "llm": {
-            "provider": _voice_setting("SIMULATOR_LLM_PROVIDER") or "google",
-            "model": _voice_setting("SIMULATOR_LLM_MODEL") or "gemini-2.5-flash-lite",
+            # Match ALK's supported default and the credential present in the
+            # hosted worker. The previous Google default selected Vertex from
+            # a configured-but-unmounted credentials path, so the simulator
+            # never spoke and otherwise-connected calls timed out.
+            "provider": _voice_setting("SIMULATOR_LLM_PROVIDER") or "openai",
+            "model": _voice_setting("SIMULATOR_LLM_MODEL") or "gpt-4.1",
         },
         "stt": {
             "provider": _voice_setting("SIMULATOR_STT_PROVIDER") or "deepgram",
@@ -596,12 +602,19 @@ def _voice_simulator_config() -> dict[str, Any]:
 
 def _voice_params(transport_kind: str, *, case_count: int = 1) -> dict[str, Any]:
     is_telephony = transport_kind in {"sip_inbound", "sip_outbound"}
+    conversation_direction = (
+        _voice_setting("SIMULATOR_CONVERSATION_DIRECTION") or "simulator_first"
+    )
+    if conversation_direction not in {"agent_first", "simulator_first"}:
+        raise HostedRunnerBuildError(
+            "SIMULATOR_CONVERSATION_DIRECTION must be agent_first or simulator_first"
+        )
     params = {
         "record_audio": True,
         "recording_root": "recordings",
         "max_seconds": 150.0 if is_telephony else 120.0,
         "min_turn_messages": 6,
-        "conversation_direction": "simulator_first",
+        "conversation_direction": conversation_direction,
         "connect_timeout": 60.0,
         "readiness_timeout": 120.0,
         "cleanup_timeout": 30.0,

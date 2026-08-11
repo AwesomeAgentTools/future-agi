@@ -1135,10 +1135,11 @@ class TestExecutionCancelView(APIView):
     def _cancel_with_temporal(self, test_execution) -> dict:
         """Cancel test execution via Temporal workflow, with DB fallback.
 
-        Tries to cancel both the original TestExecutionWorkflow (fresh runs)
-        and any active RerunCoordinatorWorkflow (reruns).
+        Tries the native TestExecutionWorkflow, hosted
+        SimulationRunnerWorkflow, and any active RerunCoordinatorWorkflow.
         """
         from simulate.temporal.client import (
+            cancel_simulation_runner_workflow,
             cancel_test_execution,
             cancel_workflow,
         )
@@ -1149,6 +1150,12 @@ class TestExecutionCancelView(APIView):
         try:
             # Try cancelling the original TestExecutionWorkflow (fresh run)
             if cancel_test_execution(test_execution_id):
+                any_cancelled = True
+
+            # Hosted SDK runs use SimulationRunnerWorkflow rather than the
+            # native TestExecutionWorkflow. Cancel both IDs because the view
+            # is shared by both execution paths.
+            if cancel_simulation_runner_workflow(test_execution_id):
                 any_cancelled = True
 
             # Try cancelling the active RerunCoordinatorWorkflow (rerun)
