@@ -447,8 +447,7 @@ def create_alk_sim_call_execution_batch(
 
             is_unclaimed = (
                 existing_call.status == CallExecution.CallStatus.PENDING
-                and (existing_call.call_metadata or {}).get(_ALK_BATCH_CLAIMED_KEY)
-                is False
+                and not (existing_call.call_metadata or {}).get(_ALK_BATCH_CLAIMED_KEY)
             )
             if is_unclaimed:
                 available.append((existing_call, True))

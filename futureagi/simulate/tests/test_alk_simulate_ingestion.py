@@ -393,6 +393,21 @@ class TestBatchCreate:
         adopted_call = execution.calls.get()
         assert adopted_call.call_metadata["alk_batch_claimed"] is True
 
+    def test_batch_readopts_reset_row_after_rerun(self, auth_client, run_test):
+        """A hosted rerun clears call_metadata to {}; the batch must re-adopt the
+        PENDING row (absent claimed-flag == unclaimed), not 400."""
+        te_id, call_ids = _start_and_batch(auth_client, run_test)
+        call = CallExecution.objects.get(id=call_ids[0])
+        call.status = CallExecution.CallStatus.PENDING
+        call.call_metadata = {}
+        call.save(update_fields=["status", "call_metadata"])
+
+        second = auth_client.post(
+            f"{ALK_BASE}/test-executions/{te_id}/batch/", {}, format="json"
+        )
+        assert second.status_code == 200, second.content
+        assert second.json()["result"]["call_execution_ids"] == [str(call.id)]
+
 
 @pytest.mark.integration
 @pytest.mark.api
