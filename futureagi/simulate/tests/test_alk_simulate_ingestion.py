@@ -12,6 +12,7 @@ the API envelope — runs for real.
 """
 
 import json
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -1461,3 +1462,123 @@ class TestVoiceSecretResolution:
         }
         resolved = asyncio.run(_resolve_voice_secret_env(job))
         assert resolved["VAPI_API_KEY"] == "plain-vapi-key"
+
+
+# ---------------------------------------------------------------------------
+# CSAT task — write path + idempotency (regression: registration + guard bug)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+@pytest.mark.api
+@pytest.mark.django_db
+class TestAlkVoiceCsatScoring:
+    """The dedicated CSAT task must write conversation_metrics_data['csat_score']
+    even when the eval path already set overall_score, and must be idempotent on
+    its own output — not on overall_score."""
+
+    def _completed_voice_call(self, auth_client, run_test):
+        _, call_ids = _start_and_batch(auth_client, run_test)
+        call = CallExecution.objects.get(id=call_ids[0])
+        call.status = CallExecution.CallStatus.COMPLETED
+        # A recording_url routes scoring through _score_from_recording so the
+        # patched _run_agent_csat is exercised.
+        call.recording_url = "https://example.com/rec.wav"
+        call.save(update_fields=["status", "recording_url"])
+        return call
+
+    def test_writes_csat_when_eval_already_set_overall_score(
+        self, auth_client, run_test
+    ):
+        from simulate.tasks import alk_sim
+
+        call = self._completed_voice_call(auth_client, run_test)
+        # Eval path won the race and wrote overall_score; csat_score still absent.
+        call.overall_score = 3.0
+        call.conversation_metrics_data = {"foo": "bar"}
+        call.save(update_fields=["overall_score", "conversation_metrics_data"])
+
+        with (
+            patch("simulate.tasks.alk_sim.close_old_connections"),
+            patch.object(alk_sim, "_run_agent_csat", return_value=8.0),
+        ):
+            alk_sim.calculate_alk_voice_csat_score._original_func(str(call.id))
+
+        call.refresh_from_db()
+        assert call.conversation_metrics_data["csat_score"] == 8.0
+        # eval-derived overall_score must not be clobbered
+        assert call.overall_score == 3.0
+
+    def test_idempotent_on_existing_csat_score(self, auth_client, run_test):
+        from simulate.tasks import alk_sim
+
+        call = self._completed_voice_call(auth_client, run_test)
+        call.conversation_metrics_data = {"csat_score": 6.0}
+        call.save(update_fields=["conversation_metrics_data"])
+
+        with (
+            patch("simulate.tasks.alk_sim.close_old_connections"),
+            patch.object(alk_sim, "_run_agent_csat", return_value=9.0) as scorer,
+        ):
+            alk_sim.calculate_alk_voice_csat_score._original_func(str(call.id))
+
+        scorer.assert_not_called()
+        call.refresh_from_db()
+        assert call.conversation_metrics_data["csat_score"] == 6.0
+
+    def test_seeds_overall_score_when_unset(self, auth_client, run_test):
+        from simulate.tasks import alk_sim
+
+        call = self._completed_voice_call(auth_client, run_test)
+        assert call.overall_score is None
+
+        with (
+            patch("simulate.tasks.alk_sim.close_old_connections"),
+            patch.object(alk_sim, "_run_agent_csat", return_value=7.0),
+        ):
+            alk_sim.calculate_alk_voice_csat_score._original_func(str(call.id))
+
+        call.refresh_from_db()
+        assert call.conversation_metrics_data["csat_score"] == 7.0
+        assert call.overall_score == 7.0
+
+
+def test_alk_sim_task_module_registered_for_worker():
+    """The CSAT activity must be import-registered at worker startup, else
+    apply_async dispatches to an activity no worker has registered and it never
+    runs (csat_dispatched=True, csat_score=None, silent)."""
+    from tfc.temporal.common.registry import TEMPORAL_ACTIVITY_MODULES
+
+    assert "simulate.tasks.alk_sim" in TEMPORAL_ACTIVITY_MODULES
+
+
+class TestHostedRunnerProviderSupport:
+    """Bland targets are unsupported by the released SDK and route native."""
+
+    def test_bland_provider_unsupported(self):
+        from simulate.services.hosted_runner import hosted_runner_supports
+
+        assert not hosted_runner_supports(
+            SimpleNamespace(provider="bland", provider_credentials=None)
+        )
+
+    def test_supported_providers(self):
+        from simulate.services.hosted_runner import hosted_runner_supports
+
+        for prov in ("vapi", "retell", "livekit"):
+            assert hosted_runner_supports(
+                SimpleNamespace(provider=prov, provider_credentials=None)
+            )
+
+    def test_credentials_provider_type_takes_precedence(self):
+        from simulate.services.hosted_runner import hosted_runner_supports
+
+        creds = SimpleNamespace(provider_type="vapi")
+        assert hosted_runner_supports(
+            SimpleNamespace(provider="bland", provider_credentials=creds)
+        )
+
+    def test_none_agent_definition(self):
+        from simulate.services.hosted_runner import hosted_runner_supports
+
+        assert not hosted_runner_supports(None)

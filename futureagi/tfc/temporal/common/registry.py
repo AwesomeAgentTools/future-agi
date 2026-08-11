@@ -66,6 +66,7 @@ TEMPORAL_ACTIVITY_MODULES = [
     "simulate.tasks.scenario_tasks",
     "simulate.services.test_executor",
     "simulate.tasks.chat_sim",
+    "simulate.tasks.alk_sim",
     # voice tasks
     "ee.voice.tasks.call_log_tasks",
     # integration tasks

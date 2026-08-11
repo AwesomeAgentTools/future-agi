@@ -112,6 +112,28 @@ def resolve_runner_mode(agent_definition) -> str:
     return _VOICE_WEBRTC_MODE
 
 
+# Voice providers the released SDK cannot drive yet — runs targeting these fall
+# back to the native (legacy) simulation runner instead of the hosted path.
+_HOSTED_UNSUPPORTED_PROVIDERS = {"bland"}
+
+
+def hosted_runner_supports(agent_definition) -> bool:
+    """False when the target's provider isn't supported by the released SDK
+    (e.g. Bland) so the caller can route the run to the native runner."""
+    if agent_definition is None:
+        return False
+    provider = (
+        getattr(
+            getattr(agent_definition, "provider_credentials", None),
+            "provider_type",
+            None,
+        )
+        or getattr(agent_definition, "provider", None)
+        or ""
+    )
+    return str(provider).strip().lower() not in _HOSTED_UNSUPPORTED_PROVIDERS
+
+
 def build_start_runner_job(
     *,
     test_execution_id: str,

@@ -43,7 +43,11 @@ def calculate_alk_voice_csat_score(call_execution_id: str) -> None:
         logger.warning("alk_csat_call_missing", call_execution_id=call_execution_id)
         return
 
-    if call.overall_score is not None:
+    # Idempotency keys on CSAT's own output, not overall_score — the eval path
+    # (test_executor) also writes overall_score, so guarding on it would let
+    # evals permanently suppress CSAT whenever they win the race.
+    existing_csat = (call.conversation_metrics_data or {}).get("csat_score")
+    if existing_csat is not None:
         return
 
     csat_score = _score_from_recording(call)
@@ -53,11 +57,16 @@ def calculate_alk_voice_csat_score(call_execution_id: str) -> None:
         logger.info("alk_csat_unavailable", call_execution_id=str(call.id))
         return
 
-    call.overall_score = csat_score
     metrics = dict(call.conversation_metrics_data or {})
     metrics["csat_score"] = csat_score
     call.conversation_metrics_data = metrics
-    call.save(update_fields=["overall_score", "conversation_metrics_data"])
+    update_fields = ["conversation_metrics_data"]
+    # Only seed overall_score when the eval path hasn't already set it — CSAT is
+    # its own metric and must not clobber an eval-derived overall score.
+    if call.overall_score is None:
+        call.overall_score = csat_score
+        update_fields.append("overall_score")
+    call.save(update_fields=update_fields)
     logger.info(
         "alk_csat_scored",
         call_execution_id=str(call.id),

@@ -917,7 +917,13 @@ class RunTestExecutionView(APIView):
         if agent_definition.agent_type == AgentDefinition.AgentTypeChoices.TEXT:
             return True
         if agent_definition.agent_type == AgentDefinition.AgentTypeChoices.VOICE:
-            return bool(getattr(app_settings, "HOSTED_RUNNER_VOICE_ENABLED", False))
+            if not bool(getattr(app_settings, "HOSTED_RUNNER_VOICE_ENABLED", False)):
+                return False
+            # Providers the released SDK can't drive (e.g. Bland) stay on the
+            # native runner.
+            from simulate.services.hosted_runner import hosted_runner_supports
+
+            return hosted_runner_supports(agent_definition)
         return False
 
     def _hosted_runner_mode(self, run_test: RunTest) -> str:
