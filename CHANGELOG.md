@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.27.3](https://github.com/future-agi/future-agi/compare/v1.27.2...v1.27.3) (2026-08-12)
+
+
+### Bug Fixes
+
+* **temporal:** repoint usage/billing lookups to ee.cloud.temporal ([4f7aaf5](https://github.com/future-agi/future-agi/commit/4f7aaf5817c345c6f9db0de86c66952c7993ddfe))
+* **temporal:** repoint usage/billing lookups to ee.cloud.temporal ([#2094](https://github.com/future-agi/future-agi/issues/2094)) ([34d97ac](https://github.com/future-agi/future-agi/commit/34d97ac304ee268a6e1fe62ba3dd7503c2f8aa75))
+
 ## [1.27.2](https://github.com/future-agi/future-agi/compare/v1.27.1...v1.27.2) (2026-08-12)
 
 
