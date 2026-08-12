@@ -17,10 +17,12 @@ Covered:
 - SimulationQueryBuilder integration (system metrics, breakdowns, filters)
 - DatasetQueryBuilder integration (system metrics, breakdowns)
 - usage_apicalllog eval-score materialization per eval-output shape
+- an opt-in eval-score backfill benchmark, see TestEvalScoreBackfillAtScale
 """
 
 import json
 import os
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -60,6 +62,211 @@ EVAL_OUTPUT_SHAPES: tuple[tuple[str, dict, float, bool], ...] = (
 
 EVAL_SCORED_SHAPES = tuple(s for s in EVAL_OUTPUT_SHAPES if s[3])
 EVAL_SCORED_AVERAGE = 0.625
+
+EVAL_SHAPE_PAYLOADS = {label: payload for label, payload, _s, _h in EVAL_OUTPUT_SHAPES}
+EVAL_SHAPE_SCORES = {label: score for label, _p, score, _h in EVAL_OUTPUT_SHAPES}
+
+# ---------------------------------------------------------------------------
+# Backfill benchmark seeding (opt-in, see TestEvalScoreBackfillAtScale)
+# ---------------------------------------------------------------------------
+
+# Unqualified: the benchmark client sets _TEST_DATABASE as its default, so the
+# command's own currentDatabase()-scoped partition query works verbatim.
+_BENCH_TABLE = "usage_apicalllog_bench"
+
+# Upper bounds per 100k rows, so the production mix is expressible exactly:
+# structured outputs are a 1.56% slice, split 76 / 18 / 6 inside that slice.
+BENCH_BUCKET_SCALE = 100_000
+BENCH_MIX: tuple[tuple[int, str], ...] = (
+    (1_186, "structured_complete"),
+    (1_467, "structured_incomplete"),
+    (1_560, "structured_partial"),
+    (41_560, "scalar_score"),
+    (81_560, "text_output"),
+    (BENCH_BUCKET_SCALE, "no_output"),
+)
+
+# Repeated prose plus a random tail, so a seeded row weighs about what a
+# production row weighs on disk rather than compressing away to nothing.
+BENCH_REASON_REPEATS = 20
+BENCH_REASON_RANDOM_BYTES = 600
+BENCH_REASON_SENTENCES: tuple[str, ...] = (
+    "The response addresses every requirement stated in the user prompt.",
+    "Key steps in the reasoning chain are present and ordered correctly.",
+    "The assistant restated the constraint before applying it to the answer.",
+    "No unsupported factual claims were introduced beyond the given context.",
+    "The final paragraph summarises the outcome without adding new content.",
+    "Tone stays consistent with the system instruction throughout the turn.",
+    "One requested field is missing from the structured portion of the reply.",
+    "The answer stops short of covering the third sub question that was asked.",
+    "Formatting follows the requested schema and parses without modification.",
+    "Citations map to passages that actually appear in the retrieved context.",
+    "The model hedged where the context was genuinely ambiguous, which is fine.",
+    "A minor arithmetic slip appears in the intermediate calculation step.",
+    "Latency stayed inside the budget configured for this evaluation template.",
+    "The refusal was appropriate given the policy category that was triggered.",
+    "Coverage of the source document is partial but the omissions are minor.",
+    "The reply repeats the question back before answering, which is redundant.",
+    "Instructions about output length were respected within a small margin.",
+    "The completion resolves the ambiguity by asking a clarifying question.",
+    "Nothing in the transcript indicates the tool call result was ignored.",
+    "The grader found the response complete against all listed criteria.",
+)
+
+# Small blocks: a seeded row carries kilobytes of config, so the default block
+# size builds multi-GB buffers and a modest box runs out of memory mid-seed.
+BENCH_SEED_SETTINGS = (
+    "max_insert_threads = 1, max_threads = 1, max_memory_usage = 1400000000, "
+    "max_block_size = 1024, max_insert_block_size = 32768, "
+    "min_insert_block_size_rows = 32768, min_insert_block_size_bytes = 0"
+)
+BENCH_READ_SETTINGS = "max_memory_usage = 1400000000, max_threads = 3"
+BENCH_SETTLED_PARTS = 16
+
+
+def _bench_sql_literal(value: str) -> str:
+    return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+def _bench_multi_if(column: str, value_for_label) -> str:
+    """Render BENCH_MIX as a multiIf over a per-row bucket column."""
+    branches = [
+        f"{column} < {upper}, {_bench_sql_literal(value_for_label(label))}"
+        for upper, label in BENCH_MIX[:-1]
+    ]
+    branches.append(_bench_sql_literal(value_for_label(BENCH_MIX[-1][1])))
+    return "multiIf(" + ", ".join(branches) + ")"
+
+
+def _bench_output_fragment(label: str) -> str:
+    """The opening of one row's config, carrying that shape's eval output."""
+    output = EVAL_SHAPE_PAYLOADS[label]["output"]
+    if "output" not in output:
+        return '"output":{'
+    return '"output":{"output":' + json.dumps(output["output"]) + ","
+
+
+def _bench_reason_sql() -> str:
+    pool = "multiIf(" + ", ".join(
+        f"modulo(number, {len(BENCH_REASON_SENTENCES)}) = {i}, "
+        f"{_bench_sql_literal(sentence)}"
+        for i, sentence in enumerate(BENCH_REASON_SENTENCES[:-1])
+    ) + f", {_bench_sql_literal(BENCH_REASON_SENTENCES[-1])})"
+    return (
+        f"concat(repeat(concat({pool}, ' '), {BENCH_REASON_REPEATS}), "
+        f"hex(randomString({BENCH_REASON_RANDOM_BYTES})))"
+    )
+
+
+def _bench_ddl(table: str, shape: str) -> str:
+    """Canonical DDL, optionally wound to the shape PeerDB built in production."""
+    from tracer.services.clickhouse.schema import (
+        CDC_USAGE_APICALLLOG,
+        _to_single_node_engine,
+    )
+
+    ddl = _to_single_node_engine(CDC_USAGE_APICALLLOG).replace(
+        "CREATE TABLE IF NOT EXISTS usage_apicalllog",
+        f"CREATE TABLE IF NOT EXISTS {table}",
+    )
+    if shape != "prod":
+        return ddl
+
+    ddl = ddl.replace("PARTITION BY toYYYYMM(created_at)\n", "").replace(
+        "ORDER BY (organization_id, source_id, created_at, id)", "ORDER BY id"
+    )
+    assert "PARTITION BY" not in ddl and "ORDER BY id" in ddl, (
+        "the production table shape could not be derived from the canonical DDL"
+    )
+    return ddl
+
+
+def _bench_seed(client, table: str, rows: int, shape: str) -> None:
+    from tracer.services.clickhouse.schema import EVAL_OUTPUT_JSON_ARGS
+
+    client.command(f"DROP TABLE IF EXISTS {table}")
+    client.command(_bench_ddl(table, shape))
+    # Wind the expression back to the one a deployed cluster still carries, so
+    # every seeded row lands genuinely stale.
+    client.command(
+        f"ALTER TABLE {table} MODIFY COLUMN eval_score Float64 "
+        f"MATERIALIZED JSONExtractFloat({EVAL_OUTPUT_JSON_ARGS})"
+    )
+
+    label_expr = _bench_multi_if("bucket", lambda label: label)
+    output_expr = _bench_multi_if("bucket", _bench_output_fragment)
+    if shape == "prod":
+        created_expr = "now64(6) - toIntervalSecond(modulo(number, 15552000))"
+    else:
+        created_expr = (
+            "toDateTime64('2026-01-01 00:00:00', 6) + "
+            f"toIntervalSecond(intDiv(number * 15552000, {rows}))"
+        )
+
+    # One tenant, as a single customer's table looks, and merges held off until
+    # the seed is in so they do not compete with it for memory.
+    org = "toUUID('11111111-1111-1111-1111-111111111111')"
+    client.command(f"SYSTEM STOP MERGES {table}")
+
+    written = 0
+    while written < rows:
+        take = min(500_000, rows - written)
+        client.command(
+            f"""
+            INSERT INTO {table}
+                (id, log_id, organization_id, workspace_id, status, reference_id,
+                 config, source, source_id, created_at, updated_at,
+                 _peerdb_synced_at, _peerdb_is_deleted, _peerdb_version)
+            SELECT toInt64(number), generateUUIDv4(), {org}, {org}, 'success', label,
+                   toJSONString(concat('{{', output, '"reason":"', reason,
+                       '"}},"trace_id":"', toString(generateUUIDv4()),
+                       '","model":"gpt-4o-mini","latency_ms":',
+                       toString(modulo(number, 5000) + 120), '}}')),
+                   'tracer', 'bench-template', created, created, created, 0, 1
+            FROM (
+                SELECT number, modulo(number, {BENCH_BUCKET_SCALE}) AS bucket,
+                       {label_expr} AS label,
+                       {output_expr} AS output,
+                       {_bench_reason_sql()} AS reason,
+                       {created_expr} AS created
+                FROM numbers({written}, {take})
+            )
+            SETTINGS {BENCH_SEED_SETTINGS}
+            """
+        )
+        written += take
+
+    client.command(f"SYSTEM START MERGES {table}")
+    _bench_settle(client, table)
+
+
+def _bench_settle(client, table: str, timeout: int = 600) -> None:
+    """Let merges consolidate the seed so timings are not merge noise.
+
+    Bounded: a fully merged table takes far longer than the timings are worth,
+    and a part count in the low tens already matches a real table's layout.
+    """
+    deadline = time.time() + timeout
+    last, stable = None, 0
+    while time.time() < deadline:
+        merging = client.query(
+            "SELECT count() FROM system.merges "
+            f"WHERE database = '{_TEST_DATABASE}' AND table = '{table}'"
+        ).result_rows[0][0]
+        parts = client.query(
+            "SELECT count() FROM system.parts WHERE active "
+            f"AND database = '{_TEST_DATABASE}' AND table = '{table}'"
+        ).result_rows[0][0]
+        if parts <= BENCH_SETTLED_PARTS:
+            return
+        if merging == 0 and parts == last:
+            stable += 1
+            if stable >= 3:
+                return
+        else:
+            stable = 0
+        last = parts
+        time.sleep(5)
 
 
 @pytest.fixture(scope="session")
@@ -651,3 +858,189 @@ class TestEvalScoreMaterialization:
             "the eval_score minmax index disagrees with the stored rows after "
             f"the backfill, so filters prune real rows away: {counts}"
         )
+
+
+# ===========================================================================
+# F. TestEvalScoreBackfillAtScale
+# ===========================================================================
+
+
+@pytest.fixture
+def ch_backfill_bench_table(ch_schema):
+    """Seed a large usage_apicalllog copy, or skip when the run is not opted in."""
+    rows = int(os.environ.get("EVAL_SCORE_BENCH_ROWS", "0"))
+    if rows <= 0:
+        pytest.skip(
+            "set EVAL_SCORE_BENCH_ROWS to run the eval_score backfill benchmark"
+        )
+
+    import clickhouse_connect
+
+    shape = os.environ.get("EVAL_SCORE_BENCH_SHAPE", "prod")
+    client = clickhouse_connect.get_client(
+        host=os.environ.get("CH_TEST_HOST", "localhost"),
+        port=int(os.environ.get("CH_TEST_PORT", "18123")),
+        database=_TEST_DATABASE,
+        send_receive_timeout=14400,
+        settings={"max_execution_time": 14400},
+    )
+
+    started = time.perf_counter()
+    _bench_seed(client, _BENCH_TABLE, rows, shape)
+
+    yield {
+        "client": client,
+        "table": _BENCH_TABLE,
+        "rows": rows,
+        "shape": shape,
+        "seed_seconds": time.perf_counter() - started,
+    }
+
+    client.command(f"DROP TABLE IF EXISTS {_BENCH_TABLE}")
+    client.close()
+
+
+@pytest.mark.benchmark
+@pytest.mark.skipif(
+    not os.environ.get("EVAL_SCORE_BENCH_ROWS"),
+    reason="set EVAL_SCORE_BENCH_ROWS to run the eval_score backfill benchmark",
+)
+class TestEvalScoreBackfillAtScale:
+    """Time the eval_score backfill on a large table and prove it stays correct.
+
+    Opt-in twice over: the ``benchmark`` marker is deselected by the default
+    addopts, and the fixture skips unless ``EVAL_SCORE_BENCH_ROWS`` is set. A
+    ten million row seed must never run in an ordinary suite invocation.
+
+        EVAL_SCORE_BENCH_ROWS=10000000 pytest
+            tracer/tests/test_clickhouse_integration.py -m benchmark -k AtScale -s
+
+    ``EVAL_SCORE_BENCH_SHAPE`` picks the table shape: ``prod`` (default,
+    unpartitioned and ordered by id, which is what PeerDB built) or
+    ``canonical`` (the schema.py DDL, partitioned by month).
+    """
+
+    @staticmethod
+    def _timed(call):
+        started = time.perf_counter()
+        result = call()
+        return time.perf_counter() - started, result
+
+    def _stale_count(self, client, table):
+        from tracer.management.commands.backfill_eval_score import _AFFECTED_COUNT
+        from tracer.services.clickhouse.eval_expressions import (
+            eval_has_structured_score,
+        )
+        from tracer.services.clickhouse.schema import (
+            CH_EVAL_SCORE_EXPR,
+            EVAL_OUTPUT_JSON_ARGS,
+        )
+
+        sql = _AFFECTED_COUNT.format(
+            table=table,
+            column="eval_score",
+            expr=CH_EVAL_SCORE_EXPR,
+            predicate=eval_has_structured_score(EVAL_OUTPUT_JSON_ARGS),
+        )
+        seconds, result = self._timed(
+            lambda: client.query(f"{sql}\nSETTINGS {BENCH_READ_SETTINGS}")
+        )
+        return seconds, int(result.result_rows[0][0])
+
+    def test_backfill_scales_and_leaves_every_shape_correct(
+        self, ch_backfill_bench_table
+    ):
+        """The real backfill statements, timed, against a table of real size."""
+        from tracer.management.commands.backfill_eval_score import (
+            _PARTITIONS,
+            materialize_statements,
+            rebuild_statements,
+        )
+
+        client = ch_backfill_bench_table["client"]
+        table = ch_backfill_bench_table["table"]
+        rows = ch_backfill_bench_table["rows"]
+
+        size = client.query(
+            "SELECT sum(rows), sum(bytes_on_disk), count() FROM system.parts "
+            f"WHERE database = '{_TEST_DATABASE}' AND table = '{table}' AND active"
+        ).result_rows[0]
+
+        dry_run_cold, stale_before = self._stale_count(client, table)
+        assert stale_before > 0, (
+            "the seed is not stale, so this run would time a no-op backfill"
+        )
+
+        rebuild_seconds = 0.0
+        for statement in rebuild_statements(table):
+            seconds, _ = self._timed(lambda s=statement: client.command(s))
+            rebuild_seconds += seconds
+
+        partitions = [
+            row[0] for row in client.query(_PARTITIONS.format(table=table)).result_rows
+        ]
+        assert partitions, "the backfill found no partitions to materialize"
+
+        column_seconds = index_seconds = 0.0
+        for partition in partitions:
+            column_sql, index_sql = materialize_statements(table, partition)
+            # mutations_sync = 2 so the wall time is completion, not submission.
+            seconds, _ = self._timed(
+                lambda s=column_sql: client.command(f"{s} SETTINGS mutations_sync = 2")
+            )
+            column_seconds += seconds
+            seconds, _ = self._timed(
+                lambda s=index_sql: client.command(f"{s} SETTINGS mutations_sync = 2")
+            )
+            index_seconds += seconds
+
+        dry_run_after, stale_after = self._stale_count(client, table)
+
+        parity = {
+            use_skip_indexes: int(
+                client.query(
+                    f"SELECT count() FROM {table} WHERE eval_score >= 1.0 "
+                    f"SETTINGS use_skip_indexes = {use_skip_indexes}, "
+                    f"{BENCH_READ_SETTINGS}"
+                ).result_rows[0][0]
+            )
+            for use_skip_indexes in (0, 1)
+        }
+        scores = dict(
+            client.query(
+                f"SELECT reference_id, eval_score FROM {table} "
+                f"GROUP BY reference_id, eval_score SETTINGS {BENCH_READ_SETTINGS}"
+            ).result_rows
+        )
+
+        print(
+            "\n".join(
+                [
+                    "",
+                    f"eval_score backfill, {rows:,} rows, "
+                    f"{ch_backfill_bench_table['shape']} table shape",
+                    f"  rows on disk           {size[0]:,} in {size[2]} active parts",
+                    f"  bytes on disk          {size[1]:,} "
+                    f"({size[1] / max(size[0], 1):.0f} per row)",
+                    f"  seed                   {ch_backfill_bench_table['seed_seconds']:8.2f}s",
+                    f"  dry-run scan           {dry_run_cold:8.2f}s  ({stale_before:,} stale)",
+                    f"  rebuild DDL, 3 stmts   {rebuild_seconds:8.2f}s",
+                    f"  MATERIALIZE COLUMN     {column_seconds:8.2f}s  "
+                    f"over {len(partitions)} partition(s)",
+                    f"  MATERIALIZE INDEX      {index_seconds:8.2f}s",
+                    f"  dry-run scan after     {dry_run_after:8.2f}s  ({stale_after:,} stale)",
+                    "",
+                ]
+            )
+        )
+
+        assert stale_after == 0, (
+            f"{stale_after} rows are still stale after the backfill"
+        )
+        assert parity[1] == parity[0], (
+            "the eval_score minmax index disagrees with the stored rows after "
+            f"the backfill, so filters prune real rows away: {parity}"
+        )
+        assert scores == {
+            label: EVAL_SHAPE_SCORES[label] for _bound, label in BENCH_MIX
+        }, f"a seeded output shape resolved to the wrong score: {scores}"
