@@ -18,6 +18,13 @@ import re
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
+from tracer.services.clickhouse.eval_expressions import (
+    EVAL_FALSY_OUTPUTS,
+    EVAL_NUMERIC_OUTPUT_PATTERN,
+    EVAL_TRUTHY_OUTPUTS,
+    eval_has_structured_score,
+    sql_str_set,
+)
 from tracer.services.clickhouse.query_builders.expressions import (
     annotation_numeric_value_expr,
 )
@@ -709,14 +716,10 @@ class DashboardQueryBuilder:
         params["workspace_id"] = self.workspace_id
 
         _output_str_lower = "lower(e.eval_output_str)"
-        _is_pass = (
-            f"(e.eval_score >= 1.0 OR {_output_str_lower} IN "
-            "('passed', 'pass', 'true', '1'))"
-        )
-        _is_fail = (
-            f"(e.eval_score < 1.0 AND {_output_str_lower} NOT IN "
-            "('passed', 'pass', 'true', '1'))"
-        )
+        _truthy = sql_str_set(EVAL_TRUTHY_OUTPUTS)
+        _falsy = sql_str_set(EVAL_FALSY_OUTPUTS)
+        _is_pass = f"(e.eval_score >= 1.0 OR {_output_str_lower} IN {_truthy})"
+        _is_fail = f"(e.eval_score < 1.0 AND {_output_str_lower} NOT IN {_truthy})"
         _unified_score = f"if({_is_pass}, 1.0, e.eval_score)"
 
         _EVAL_AGGREGATIONS: dict[str, str] = {
@@ -735,13 +738,17 @@ class DashboardQueryBuilder:
             if output_type == "PASS_FAIL":
                 col_expr = _unified_score
             else:
-                # Some templates with missing output_type still emit pass/fail strings.
+                # Some templates with missing output_type still emit pass/fail
+                # strings; structured evals emit {"score": …, "choice": …}.
+                _has_number = (
+                    f"match(e.eval_output_str, '{EVAL_NUMERIC_OUTPUT_PATTERN}') "
+                    f"OR {eval_has_structured_score('e.eval_output_str')}"
+                )
                 col_expr = (
                     "if(e.eval_output_str = '', NULL, "
-                    f"if({_output_str_lower} IN ('passed', 'pass', 'true', '1'), 1.0, "
-                    f"if({_output_str_lower} IN ('failed', 'fail', 'false', '0'), 0.0, "
-                    "if(match(e.eval_output_str, '^-?[0-9]+\\.?[0-9]*$'), "
-                    "e.eval_score, NULL))))"
+                    f"if({_output_str_lower} IN {_truthy}, 1.0, "
+                    f"if({_output_str_lower} IN {_falsy}, 0.0, "
+                    f"if({_has_number}, e.eval_score, NULL))))"
                 )
             agg_expr = AGGREGATIONS.get(aggregation, "avg({col})").format(col=col_expr)
 

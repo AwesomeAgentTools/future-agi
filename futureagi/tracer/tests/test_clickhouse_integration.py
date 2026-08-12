@@ -16,8 +16,10 @@ Covered:
 - Connection and schema lifecycle
 - SimulationQueryBuilder integration (system metrics, breakdowns, filters)
 - DatasetQueryBuilder integration (system metrics, breakdowns)
+- usage_apicalllog eval-score materialization per eval-output shape
 """
 
+import json
 import os
 import uuid
 from datetime import datetime, timezone
@@ -29,6 +31,36 @@ import pytest
 # ---------------------------------------------------------------------------
 
 _TEST_DATABASE = "test_futureagi"
+_EVAL_TABLE = f"{_TEST_DATABASE}.usage_apicalllog"
+
+# (label, config payload, the eval_score it must materialize, carries a number)
+EVAL_OUTPUT_SHAPES: tuple[tuple[str, dict, float, bool], ...] = (
+    (
+        "structured_complete",
+        {"output": {"output": {"score": 1, "choice": "Complete"}}},
+        1.0,
+        True,
+    ),
+    (
+        "structured_partial",
+        {"output": {"output": {"score": 0.5, "choice": "Partial"}}},
+        0.5,
+        True,
+    ),
+    (
+        "structured_incomplete",
+        {"output": {"output": {"score": 0.2, "choice": "Incomplete"}}},
+        0.2,
+        True,
+    ),
+    ("scalar_score", {"output": {"output": 0.8}}, 0.8, True),
+    ("text_output", {"output": {"output": "Passed"}}, 0.0, False),
+    ("no_output", {"output": {}}, 0.0, False),
+)
+
+# The number-carrying shapes and the mean a dashboard average returns over them.
+EVAL_SCORED_SHAPES = tuple(s for s in EVAL_OUTPUT_SHAPES if s[3])
+EVAL_SCORED_AVERAGE = 0.625
 
 
 @pytest.fixture(scope="session")
@@ -186,6 +218,75 @@ def ch_dataset_data(ch_schema):
 
     try:
         client.command(f"TRUNCATE TABLE {_TEST_DATABASE}.model_hub_cell")
+    except Exception:
+        pass
+
+
+@pytest.fixture
+def ch_eval_output_rows(ch_schema):
+    """Recreate usage_apicalllog from the canonical DDL and seed every shape.
+
+    The table is dropped first because ``CREATE TABLE IF NOT EXISTS`` keeps a
+    stale MATERIALIZED expression from an earlier run — the exact drift the
+    POST_DDL_ALTERS ``MODIFY COLUMN`` exists to repair on deployed clusters.
+
+    Rows land twice: once under ``all_shapes_source_id`` (one per shape) and
+    once under ``scored_shapes_source_id`` (number-carrying shapes only), so a
+    dashboard average can be read back without the pass/fail row skewing it.
+    """
+    from tracer.services.clickhouse.schema import (
+        CDC_USAGE_APICALLLOG,
+        _to_single_node_engine,
+    )
+
+    client = ch_schema
+    organization_id = str(uuid.uuid4())
+    workspace_id = str(uuid.uuid4())
+    all_shapes_source_id = str(uuid.uuid4())
+    scored_shapes_source_id = str(uuid.uuid4())
+
+    ddl = _to_single_node_engine(CDC_USAGE_APICALLLOG).replace(
+        "CREATE TABLE IF NOT EXISTS usage_apicalllog",
+        f"CREATE TABLE IF NOT EXISTS {_EVAL_TABLE}",
+    )
+    client.command(f"DROP TABLE IF EXISTS {_EVAL_TABLE}")
+    client.command(ddl)
+
+    # Backdated so clock skew against the CH container can't push rows past "now".
+    seeded_at = "now64(6) - toIntervalHour(1)"
+
+    def _seed(source_id, shapes, first_id):
+        for offset, (label, payload, _score, _has_number) in enumerate(shapes):
+            # config is double-encoded (a JSON string holding JSON) in CH.
+            literal = json.dumps(payload).replace("\\", "\\\\").replace("'", "\\'")
+            client.command(
+                f"""
+                INSERT INTO {_EVAL_TABLE}
+                    (id, log_id, organization_id, workspace_id, status,
+                     reference_id, config, source, source_id,
+                     created_at, updated_at,
+                     _peerdb_synced_at, _peerdb_is_deleted, _peerdb_version)
+                SELECT {first_id + offset}, generateUUIDv4(),
+                       toUUID('{organization_id}'), toUUID('{workspace_id}'),
+                       'success', '{label}', toJSONString('{literal}'),
+                       'tracer', '{source_id}',
+                       {seeded_at}, {seeded_at}, {seeded_at}, 0, 1
+                """
+            )
+
+    _seed(all_shapes_source_id, EVAL_OUTPUT_SHAPES, 1)
+    _seed(scored_shapes_source_id, EVAL_SCORED_SHAPES, 101)
+
+    yield {
+        "client": client,
+        "organization_id": organization_id,
+        "workspace_id": workspace_id,
+        "all_shapes_source_id": all_shapes_source_id,
+        "scored_shapes_source_id": scored_shapes_source_id,
+    }
+
+    try:
+        client.command(f"TRUNCATE TABLE {_EVAL_TABLE}")
     except Exception:
         pass
 
@@ -433,3 +534,138 @@ class TestDatasetQueryBuilderIntegration:
         queries = builder.build_all_queries()
         sql, _, _ = queries[0]
         assert "breakdown_value" in sql
+
+
+# ===========================================================================
+# F. TestEvalScoreMaterialization
+# ===========================================================================
+
+
+@pytest.mark.integration
+class TestEvalScoreMaterialization:
+    """Eval scores read back out of a real ClickHouse instance."""
+
+    def test_every_eval_output_shape_materializes_its_score(self, ch_eval_output_rows):
+        """Structured outputs resolve to their nested score; scalar and text
+        outputs keep the value they always had.
+        """
+        result = ch_eval_output_rows["client"].query(
+            f"SELECT reference_id, eval_score FROM {_EVAL_TABLE} "
+            f"WHERE source_id = '{ch_eval_output_rows['all_shapes_source_id']}'"
+        )
+
+        assert dict(result.result_rows) == {
+            label: score for label, _payload, score, _has_number in EVAL_OUTPUT_SHAPES
+        }
+
+    def test_structured_eval_output_str_holds_the_nested_object(
+        self, ch_eval_output_rows
+    ):
+        """Readers branch on eval_output_str, so a structured row must carry
+        the serialized object there rather than an empty string.
+        """
+        label, payload, _score, _has_number = EVAL_OUTPUT_SHAPES[0]
+        result = ch_eval_output_rows["client"].query(
+            f"SELECT eval_output_str FROM {_EVAL_TABLE} "
+            f"WHERE source_id = '{ch_eval_output_rows['all_shapes_source_id']}' "
+            f"AND reference_id = '{label}'"
+        )
+
+        assert json.loads(result.result_rows[0][0]) == payload["output"]["output"]
+
+    def test_dashboard_average_counts_structured_eval_scores(self, ch_eval_output_rows):
+        """The widget SQL, executed for real, averages structured outputs
+        alongside scalar ones instead of dropping the structured rows.
+        """
+        from tracer.services.clickhouse.query_builders.dashboard import (
+            DashboardQueryBuilder,
+        )
+
+        config = {
+            "organization_id": ch_eval_output_rows["organization_id"],
+            "workspace_id": ch_eval_output_rows["workspace_id"],
+            "granularity": "day",
+            "time_range": {"preset": "7D"},
+            "metrics": [
+                {
+                    "id": "structured_eval",
+                    "name": "structured_eval",
+                    "type": "eval_metric",
+                    "config_id": ch_eval_output_rows["scored_shapes_source_id"],
+                    "aggregation": "avg",
+                }
+            ],
+        }
+        sql, params, _ = DashboardQueryBuilder(config).build_all_queries()[0]
+        sql_test = sql.replace("usage_apicalllog", _EVAL_TABLE)
+
+        result = ch_eval_output_rows["client"].query(sql_test, parameters=params)
+
+        assert [row[1] for row in result.result_rows] == [
+            pytest.approx(EVAL_SCORED_AVERAGE)
+        ]
+
+    def test_backfill_leaves_the_score_index_agreeing_with_the_rows(
+        self, ch_eval_output_rows
+    ):
+        """A backfilled row has to stay visible to a filter on eval_score.
+
+        The minmax index keeps the pre-backfill bounds unless it is dropped and
+        re-added, and a stale one prunes whole granules — the filter then
+        returns nothing at all rather than something obviously wrong.
+        """
+        from tracer.management.commands.backfill_eval_score import (
+            materialize_statements,
+            rebuild_statements,
+        )
+        from tracer.services.clickhouse.schema import (
+            CDC_USAGE_APICALLLOG,
+            EVAL_OUTPUT_JSON_ARGS,
+            _to_single_node_engine,
+        )
+
+        client = ch_eval_output_rows["client"]
+        table = f"{_EVAL_TABLE}_deployed"
+        client.command(f"DROP TABLE IF EXISTS {table}")
+        client.command(
+            _to_single_node_engine(CDC_USAGE_APICALLLOG).replace(
+                "CREATE TABLE IF NOT EXISTS usage_apicalllog",
+                f"CREATE TABLE IF NOT EXISTS {table}",
+            )
+        )
+        # Wind the table back to the expression a deployed cluster still has,
+        # so the rows below store the values it would have produced.
+        client.command(
+            f"ALTER TABLE {table} MODIFY COLUMN eval_score Float64 "
+            f"MATERIALIZED JSONExtractFloat({EVAL_OUTPUT_JSON_ARGS})"
+        )
+        for offset, (_label, payload, _score, _has_number) in enumerate(
+            EVAL_SCORED_SHAPES
+        ):
+            literal = json.dumps(payload).replace("\\", "\\\\").replace("'", "\\'")
+            client.command(
+                f"INSERT INTO {table} (id, log_id, organization_id, status, config, "
+                "source, source_id, created_at, updated_at, _peerdb_synced_at, "
+                "_peerdb_is_deleted, _peerdb_version) SELECT "
+                f"{201 + offset}, generateUUIDv4(), generateUUIDv4(), 'success', "
+                f"toJSONString('{literal}'), 'tracer', 'deployed', "
+                "now64(6), now64(6), now64(6), 0, 1"
+            )
+
+        for statement in rebuild_statements(table) + materialize_statements(table):
+            client.command(f"{statement} SETTINGS mutations_sync = 2")
+
+        expected = sum(1 for _l, _p, score, _h in EVAL_SCORED_SHAPES if score >= 1.0)
+        counts = {
+            skip_indexes: client.query(
+                f"SELECT count() FROM {table} WHERE eval_score >= 1.0 "
+                f"SETTINGS use_skip_indexes = {skip_indexes}"
+            ).result_rows[0][0]
+            for skip_indexes in (0, 1)
+        }
+
+        client.command(f"DROP TABLE IF EXISTS {table}")
+        assert counts[1] == counts[0] == expected, (
+            "the eval_score minmax index disagrees with the stored rows after "
+            f"the backfill — filters prune real rows away: {counts}"
+        )

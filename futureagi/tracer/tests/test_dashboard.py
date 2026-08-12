@@ -1603,6 +1603,30 @@ class TestDashboardQueryBuilder:
         assert "lower(e.eval_output_str) IN ('passed', 'pass', 'true', '1')" in sql
         assert "sum(e.eval_score)" not in sql
 
+    def test_eval_metric_avg_keeps_structured_score_rows(self):
+        """A ``{"score": …, "choice": …}`` output is not numeric text, so the
+        numeric-detection branch must also accept the nested score — otherwise
+        every structured row is NULLed out of the aggregate.
+        """
+        config = {
+            "project_ids": ["proj1"],
+            "granularity": "day",
+            "time_range": {"preset": "7D"},
+            "metrics": [
+                {
+                    "id": "e2",
+                    "name": "conversation_hallucination",
+                    "type": "eval_metric",
+                    "config_id": str(uuid.uuid4()),
+                    "aggregation": "avg",
+                }
+            ],
+        }
+        builder = DashboardQueryBuilder(config)
+        queries = builder.build_all_queries()
+        sql, _, _ = queries[0]
+        assert "JSONHas(e.eval_output_str, 'score')" in sql
+
     def test_eval_metric_combines_project_and_dataset_breakdowns(self):
         config = {
             "project_ids": ["proj1"],
