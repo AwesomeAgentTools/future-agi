@@ -1178,13 +1178,19 @@ class TestHostedRunnerActivityHelpers:
 
         assert simulator["stt"]["language"] == "ar"
 
-    def test_voice_conversation_direction_is_configurable(self, monkeypatch, settings):
+    def test_voice_conversation_direction_follows_agent_call_direction(self):
         from simulate.services.hosted_runner import _voice_params
 
-        settings.SIMULATOR_CONVERSATION_DIRECTION = ""
-        monkeypatch.setenv("SIMULATOR_CONVERSATION_DIRECTION", "agent_first")
-
-        assert _voice_params("webrtc")["conversation_direction"] == "agent_first"
+        # Inbound agent receives the call → it greets first.
+        assert (
+            _voice_params("webrtc", inbound=True)["conversation_direction"]
+            == "agent_first"
+        )
+        # Outbound agent places the call → the simulator/callee answers first.
+        assert (
+            _voice_params("webrtc", inbound=False)["conversation_direction"]
+            == "simulator_first"
+        )
 
     """The DID pool is touched only for sip_inbound (mirrors _needs_phone)."""
 

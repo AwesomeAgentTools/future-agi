@@ -431,6 +431,7 @@ def _build_voice_job(
             "simulator": _voice_simulator_config(dataset),
             "params": _voice_params(
                 transport_kind,
+                inbound=bool(agent_definition.inbound),
                 case_count=len(dataset),
                 max_concurrency=_livekit_max_concurrency(credentials),
                 max_call_minutes=_max_call_minutes(simulator_agent),
@@ -686,6 +687,7 @@ def _livekit_max_concurrency(credentials) -> int:
 def _voice_params(
     transport_kind: str,
     *,
+    inbound: bool,
     case_count: int = 1,
     max_concurrency: int = 1,
     max_call_minutes: int = _DEFAULT_MAX_CALL_MINUTES,
@@ -693,13 +695,10 @@ def _voice_params(
     from simulate.temporal.constants import HOSTED_RUNNER_MAX_DURATION_SECONDS
 
     is_telephony = transport_kind in {"sip_inbound", "sip_outbound"}
-    conversation_direction = (
-        _voice_setting("SIMULATOR_CONVERSATION_DIRECTION") or "simulator_first"
-    )
-    if conversation_direction not in {"agent_first", "simulator_first"}:
-        raise HostedRunnerBuildError(
-            "SIMULATOR_CONVERSATION_DIRECTION must be agent_first or simulator_first"
-        )
+    # Who opens the conversation follows the target agent's call direction: an
+    # inbound agent receives the call and greets first (agent_first); an outbound
+    # agent places the call so the simulator/callee answers first.
+    conversation_direction = "agent_first" if inbound else "simulator_first"
     # Telephone leases a single DID, so the engine keeps those cases serial
     # regardless of the requested ceiling; mirror that here for the deadline.
     effective_concurrency = (
