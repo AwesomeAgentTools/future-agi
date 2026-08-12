@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.27.2](https://github.com/future-agi/future-agi/compare/v1.27.1...v1.27.2) (2026-08-12)
+
+
+### Bug Fixes
+
+* **eval-tasks:** scope runtime target loads by the task's project (hotfix) ([564181e](https://github.com/future-agi/future-agi/commit/564181e0f3c612e0b433fc622710bcc17a675c0a))
+
 ## [1.27.1](https://github.com/future-agi/future-agi/compare/v1.27.0...v1.27.1) (2026-08-12)
 
 
