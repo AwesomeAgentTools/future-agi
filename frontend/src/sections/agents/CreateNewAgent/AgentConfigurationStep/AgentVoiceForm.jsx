@@ -549,6 +549,7 @@ export default function AgentVoiceForm() {
             required
             fullWidth
             size="small"
+            autoComplete="off"
           />
           <FormTextFieldV2
             control={control}
@@ -559,6 +560,7 @@ export default function AgentVoiceForm() {
             required
             fullWidth
             size="small"
+            autoComplete="new-password"
           />
           <Stack direction="row" spacing={1.5} alignItems="flex-start">
             <FormTextFieldV2

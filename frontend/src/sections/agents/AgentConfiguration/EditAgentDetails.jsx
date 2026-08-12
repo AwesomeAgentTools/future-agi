@@ -632,6 +632,7 @@ const EditAgentDetails = ({
               required
               fullWidth
               size="small"
+              autoComplete="off"
               error={errors && !!errors.livekitApiKey?.message}
               helperText={errors && errors.livekitApiKey?.message}
             />
@@ -644,6 +645,7 @@ const EditAgentDetails = ({
               required
               fullWidth
               size="small"
+              autoComplete="new-password"
               error={errors && !!errors.livekitApiSecret?.message}
               helperText={errors && errors.livekitApiSecret?.message}
             />
