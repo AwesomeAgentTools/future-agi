@@ -417,7 +417,11 @@ def _build_voice_job(
             },
             "livekit_runtime": livekit_runtime,
             "simulator": _voice_simulator_config(dataset),
-            "params": _voice_params(transport_kind, case_count=len(dataset)),
+            "params": _voice_params(
+                transport_kind,
+                case_count=len(dataset),
+                max_concurrency=_livekit_max_concurrency(credentials),
+            ),
         },
         "sink": {
             "api_url": _sink_api_url(),
@@ -645,7 +649,20 @@ def _dataset_language(dataset: list[dict[str, Any]] | None) -> str | None:
     return label_to_code.get(languages.pop())
 
 
-def _voice_params(transport_kind: str, *, case_count: int = 1) -> dict[str, Any]:
+def _livekit_max_concurrency(credentials) -> int:
+    """Per-agent LiveKit session ceiling that bounds concurrent cases within a
+    run. Non-LiveKit targets (or missing creds) fall back to serial execution."""
+    if credentials is None or getattr(credentials, "provider_type", None) != "livekit":
+        return 1
+    try:
+        return max(1, int(getattr(credentials, "max_concurrency", 1) or 1))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _voice_params(
+    transport_kind: str, *, case_count: int = 1, max_concurrency: int = 1
+) -> dict[str, Any]:
     is_telephony = transport_kind in {"sip_inbound", "sip_outbound"}
     conversation_direction = (
         _voice_setting("SIMULATOR_CONVERSATION_DIRECTION") or "simulator_first"
@@ -654,6 +671,11 @@ def _voice_params(transport_kind: str, *, case_count: int = 1) -> dict[str, Any]
         raise HostedRunnerBuildError(
             "SIMULATOR_CONVERSATION_DIRECTION must be agent_first or simulator_first"
         )
+    # Telephone leases a single DID, so the engine keeps those cases serial
+    # regardless of the requested ceiling; mirror that here for the deadline.
+    effective_concurrency = (
+        1 if is_telephony else max(1, min(int(max_concurrency or 1), case_count))
+    )
     params = {
         "record_audio": True,
         "recording_root": "recordings",
@@ -663,15 +685,15 @@ def _voice_params(transport_kind: str, *, case_count: int = 1) -> dict[str, Any]
         "connect_timeout": 60.0,
         "readiness_timeout": 120.0,
         "cleanup_timeout": 30.0,
+        "max_concurrency": effective_concurrency,
     }
 
-    # ALK 0.1 derives its outer SimulationSpec deadline from one case's voice
-    # budgets, while the LiveKit engine executes dataset cases sequentially.
-    # Preserve the real per-operation limits above, but contribute the remaining
-    # cases' budgets through cleanup_timeout (the only component that normally
-    # completes immediately). Without this compatibility allowance, every
-    # ten-row hosted simulation is cancelled after ~6.5 minutes with only four
-    # or five provider calls completed.
+    # ALK derives its outer SimulationSpec deadline from one case's voice
+    # budgets. The engine now runs cases in parallel up to
+    # ``effective_concurrency``, so the run's wall-clock is ``ceil(N/C)`` case
+    # budgets, not ``N``. Contribute that many extra budgets through
+    # cleanup_timeout (the component that normally completes immediately) so a
+    # multi-case run is not cancelled before its batches finish.
     if case_count > 1:
         per_case_budget = (
             params["max_seconds"]
@@ -679,7 +701,8 @@ def _voice_params(transport_kind: str, *, case_count: int = 1) -> dict[str, Any]
             + params["readiness_timeout"]
             + params["cleanup_timeout"]
         )
-        params["cleanup_timeout"] += (case_count - 1) * per_case_budget
+        batches = -(-case_count // effective_concurrency)  # ceil division
+        params["cleanup_timeout"] += (batches - 1) * per_case_budget
     return params
 
 
