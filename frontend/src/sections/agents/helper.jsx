@@ -84,14 +84,11 @@ export const createAgentDefinitionSchema = (options) => {
 
       // Configuration
       provider: z.string().optional(),
-      assistantId: keysRequired
-        ? z.string().min(1, "Assistant ID is required")
-        : z.string().optional(),
+      // Required-ness lives in the superRefine below, which can see the provider.
+      assistantId: z.string().optional(),
       // apiEndpoint: z.string().optional(),
       authenticationMethod: z.string().optional(),
-      apiKey: keysRequired
-        ? z.string().min(1, "API key is required")
-        : z.string().optional(),
+      apiKey: z.string().optional(),
       observabilityEnabled: z.boolean().default(false),
       username: z.string().optional(),
       password: z.string().optional(),
@@ -133,6 +130,25 @@ export const createAgentDefinitionSchema = (options) => {
         .nullable(),
     })
     .superRefine(async (data, ctx) => {
+      // LiveKit authenticates with livekit_api_key/secret and has no Assistant
+      // ID, so it is exempt from the provider-key requirement.
+      if (keysRequired && !isLiveKitProvider(data.provider)) {
+        if (!data.assistantId) {
+          ctx.addIssue({
+            path: ["assistantId"],
+            message: "Assistant ID is required",
+            code: z.ZodIssueCode.custom,
+          });
+        }
+        if (!data.apiKey) {
+          ctx.addIssue({
+            path: ["apiKey"],
+            message: "API key is required",
+            code: z.ZodIssueCode.custom,
+          });
+        }
+      }
+
       if (
         data.agentType === AGENT_TYPES.VOICE &&
         !isLiveKitProvider(data.provider)
