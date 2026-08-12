@@ -135,7 +135,7 @@ class FalconLLMClient:
                 yield chunk
 
     async def _stream_managed(self, messages, tools=None):
-        from ee.licensing.managed_ai import chat_completion, response_content
+        from ee.licensing.managed_ai import stream_chat_completion
 
         payload = {
             "model": self.model,
@@ -143,16 +143,21 @@ class FalconLLMClient:
             "tools": tools or [],
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
-            "stream": False,
+            "stream": True,
+            "stream_options": {"include_usage": True},
         }
         if self.response_format:
             payload["response_format"] = self.response_format
 
-        response = await asyncio.to_thread(chat_completion, payload)
-        content = response_content(response)
-        if content:
-            yield {"choices": [{"delta": {"content": content}, "finish_reason": None}]}
-        yield {"choices": [{"delta": {}, "finish_reason": "stop"}]}
+        async for chunk in stream_chat_completion(payload):
+            metadata = chunk.get("agentcc_metadata")
+            if metadata:
+                self._gateway_cost += metadata.get("cost", 0)
+
+            for choice in chunk.get("choices") or []:
+                if choice.get("finish_reason") == "length":
+                    choice["finish_reason"] = "max_tokens"
+            yield chunk
 
     async def _stream_bedrock(self, messages, tools=None):
         """Stream from AWS Bedrock using boto3, yielding OpenAI-compatible chunks."""
