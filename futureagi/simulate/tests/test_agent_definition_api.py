@@ -10,6 +10,7 @@ Tests cover:
 - AgentDefinitionOperationsViewSet: POST fetch_assistant_from_provider
 """
 
+import json
 import uuid
 from unittest.mock import MagicMock, patch
 
@@ -771,6 +772,74 @@ class TestFetchAssistantFromProvider:
             "/v1/pathway/2fdd4db9-5e81-4422-b11c-168f0182d4fc"
         )
         assert mock_get.call_args[1]["headers"]["authorization"] == "org_key"
+
+    def test_valid_retell_llm_agent(self, auth_client):
+        agent_obj = MagicMock()
+        agent_obj.model_dump_json.return_value = json.dumps(
+            {
+                "agent_name": "LLM Bot",
+                "response_engine": {"type": "retell-llm", "llm_id": "llm_9"},
+            }
+        )
+        llm_obj = MagicMock()
+        llm_obj.model_dump_json.return_value = json.dumps(
+            {"general_prompt": "You are an LLM-engine agent."}
+        )
+        with patch("simulate.views.agent_definition.Retell") as MockRetell:
+            client = MagicMock()
+            client.agent.retrieve.return_value = agent_obj
+            client.llm.retrieve.return_value = llm_obj
+            MockRetell.return_value = client
+
+            response = auth_client.post(
+                self.URL,
+                {"assistant_id": "agent_abc", "api_key": "key_1", "provider": "retell"},
+                format="json",
+            )
+
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        assert data["result"]["name"] == "LLM Bot"
+        assert data["result"]["prompt"] == "You are an LLM-engine agent."
+        client.llm.retrieve.assert_called_once_with(llm_id="llm_9")
+
+    def test_valid_retell_conversation_flow_agent(self, auth_client):
+        # Conversation-flow agents carry no llm_id; the prompt lives on the
+        # flow's global_prompt, fetched via conversation_flow.retrieve.
+        agent_obj = MagicMock()
+        agent_obj.model_dump_json.return_value = json.dumps(
+            {
+                "agent_name": "Flow Bot",
+                "response_engine": {
+                    "type": "conversation-flow",
+                    "conversation_flow_id": "flow_123",
+                },
+            }
+        )
+        flow_obj = MagicMock()
+        flow_obj.model_dump_json.return_value = json.dumps(
+            {"global_prompt": "You are a conversation-flow agent."}
+        )
+        with patch("simulate.views.agent_definition.Retell") as MockRetell:
+            client = MagicMock()
+            client.agent.retrieve.return_value = agent_obj
+            client.conversation_flow.retrieve.return_value = flow_obj
+            MockRetell.return_value = client
+
+            response = auth_client.post(
+                self.URL,
+                {"assistant_id": "agent_abc", "api_key": "key_1", "provider": "retell"},
+                format="json",
+            )
+
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        assert data["result"]["name"] == "Flow Bot"
+        assert data["result"]["prompt"] == "You are a conversation-flow agent."
+        client.conversation_flow.retrieve.assert_called_once_with(
+            conversation_flow_id="flow_123"
+        )
+        client.llm.retrieve.assert_not_called()
 
     def test_invalid_credentials(self, auth_client):
         with (
