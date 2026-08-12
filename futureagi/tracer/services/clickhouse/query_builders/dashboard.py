@@ -738,8 +738,8 @@ class DashboardQueryBuilder:
             if output_type == "PASS_FAIL":
                 col_expr = _unified_score
             else:
-                # Some templates with missing output_type still emit pass/fail
-                # strings; structured evals emit {"score": …, "choice": …}.
+                # Templates with no output_type still emit pass/fail strings,
+                # bare numbers, or a structured object carrying a score.
                 _has_number = (
                     f"match(e.eval_output_str, '{EVAL_NUMERIC_OUTPUT_PATTERN}') "
                     f"OR {eval_has_structured_score('e.eval_output_str')}"

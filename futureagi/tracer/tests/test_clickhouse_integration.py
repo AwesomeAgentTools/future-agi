@@ -58,7 +58,6 @@ EVAL_OUTPUT_SHAPES: tuple[tuple[str, dict, float, bool], ...] = (
     ("no_output", {"output": {}}, 0.0, False),
 )
 
-# The number-carrying shapes and the mean a dashboard average returns over them.
 EVAL_SCORED_SHAPES = tuple(s for s in EVAL_OUTPUT_SHAPES if s[3])
 EVAL_SCORED_AVERAGE = 0.625
 
@@ -226,13 +225,8 @@ def ch_dataset_data(ch_schema):
 def ch_eval_output_rows(ch_schema):
     """Recreate usage_apicalllog from the canonical DDL and seed every shape.
 
-    The table is dropped first because ``CREATE TABLE IF NOT EXISTS`` keeps a
-    stale MATERIALIZED expression from an earlier run — the exact drift the
-    POST_DDL_ALTERS ``MODIFY COLUMN`` exists to repair on deployed clusters.
-
-    Rows land twice: once under ``all_shapes_source_id`` (one per shape) and
-    once under ``scored_shapes_source_id`` (number-carrying shapes only), so a
-    dashboard average can be read back without the pass/fail row skewing it.
+    Dropped first because ``CREATE TABLE IF NOT EXISTS`` would keep a stale
+    MATERIALIZED expression from an earlier run.
     """
     from tracer.services.clickhouse.schema import (
         CDC_USAGE_APICALLLOG,
@@ -546,9 +540,7 @@ class TestEvalScoreMaterialization:
     """Eval scores read back out of a real ClickHouse instance."""
 
     def test_every_eval_output_shape_materializes_its_score(self, ch_eval_output_rows):
-        """Structured outputs resolve to their nested score; scalar and text
-        outputs keep the value they always had.
-        """
+        """Structured outputs resolve to their nested score; the rest hold."""
         result = ch_eval_output_rows["client"].query(
             f"SELECT reference_id, eval_score FROM {_EVAL_TABLE} "
             f"WHERE source_id = '{ch_eval_output_rows['all_shapes_source_id']}'"
@@ -561,9 +553,7 @@ class TestEvalScoreMaterialization:
     def test_structured_eval_output_str_holds_the_nested_object(
         self, ch_eval_output_rows
     ):
-        """Readers branch on eval_output_str, so a structured row must carry
-        the serialized object there rather than an empty string.
-        """
+        """Readers branch on eval_output_str, so it must not be empty here."""
         label, payload, _score, _has_number = EVAL_OUTPUT_SHAPES[0]
         result = ch_eval_output_rows["client"].query(
             f"SELECT eval_output_str FROM {_EVAL_TABLE} "
@@ -574,9 +564,7 @@ class TestEvalScoreMaterialization:
         assert json.loads(result.result_rows[0][0]) == payload["output"]["output"]
 
     def test_dashboard_average_counts_structured_eval_scores(self, ch_eval_output_rows):
-        """The widget SQL, executed for real, averages structured outputs
-        alongside scalar ones instead of dropping the structured rows.
-        """
+        """The real widget SQL averages structured rows instead of dropping them."""
         from tracer.services.clickhouse.query_builders.dashboard import (
             DashboardQueryBuilder,
         )
@@ -608,12 +596,7 @@ class TestEvalScoreMaterialization:
     def test_backfill_leaves_the_score_index_agreeing_with_the_rows(
         self, ch_eval_output_rows
     ):
-        """A backfilled row has to stay visible to a filter on eval_score.
-
-        The minmax index keeps the pre-backfill bounds unless it is dropped and
-        re-added, and a stale one prunes whole granules — the filter then
-        returns nothing at all rather than something obviously wrong.
-        """
+        """A backfilled row has to stay visible to a filter on eval_score."""
         from tracer.management.commands.backfill_eval_score import (
             materialize_statements,
             rebuild_statements,
@@ -633,8 +616,7 @@ class TestEvalScoreMaterialization:
                 f"CREATE TABLE IF NOT EXISTS {table}",
             )
         )
-        # Wind the table back to the expression a deployed cluster still has,
-        # so the rows below store the values it would have produced.
+        # Wind the table back to the expression a deployed cluster still has.
         client.command(
             f"ALTER TABLE {table} MODIFY COLUMN eval_score Float64 "
             f"MATERIALIZED JSONExtractFloat({EVAL_OUTPUT_JSON_ARGS})"
@@ -667,5 +649,5 @@ class TestEvalScoreMaterialization:
         client.command(f"DROP TABLE IF EXISTS {table}")
         assert counts[1] == counts[0] == expected, (
             "the eval_score minmax index disagrees with the stored rows after "
-            f"the backfill — filters prune real rows away: {counts}"
+            f"the backfill, so filters prune real rows away: {counts}"
         )

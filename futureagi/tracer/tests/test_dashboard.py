@@ -1604,9 +1604,8 @@ class TestDashboardQueryBuilder:
         assert "sum(e.eval_score)" not in sql
 
     def test_eval_metric_avg_keeps_structured_score_rows(self):
-        """A ``{"score": …, "choice": …}`` output is not numeric text, so the
-        numeric-detection branch must also accept the nested score — otherwise
-        every structured row is NULLed out of the aggregate.
+        """A structured output is not numeric text, so the numeric-detection
+        branch must accept the nested score or every such row is NULLed out.
         """
         config = {
             "project_ids": ["proj1"],

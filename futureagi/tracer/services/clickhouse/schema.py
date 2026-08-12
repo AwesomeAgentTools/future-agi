@@ -1916,11 +1916,15 @@ SCHEMA_DDL_STATEMENTS: list[tuple[str, str]] = [
 POST_DDL_ALTERS: list[str] = [
     "ALTER TABLE usage_apicalllog ADD COLUMN IF NOT EXISTS "
     f"eval_score Float64 MATERIALIZED {CH_EVAL_SCORE_EXPR}",
-    # ADD COLUMN IF NOT EXISTS no-ops once the column exists, so an already-
-    # deployed table keeps its old expression until MODIFYed. Metadata-only;
-    # existing rows are backfilled by the backfill_eval_score command.
+    # ADD COLUMN IF NOT EXISTS no-ops once the column exists, so a deployed
+    # table keeps its old expression until MODIFYed. No DROP/ADD index
+    # sandwich here: Code 524 fires on a TYPE change, and the type is restated
+    # unchanged. Existing rows are backfilled by backfill_eval_score.
     "ALTER TABLE usage_apicalllog MODIFY COLUMN "
     f"eval_score Float64 MATERIALIZED {CH_EVAL_SCORE_EXPR}",
+    # Restores idx_eval_score if a backfill run died between its DROP and ADD.
+    "ALTER TABLE usage_apicalllog ADD INDEX IF NOT EXISTS "
+    "idx_eval_score eval_score TYPE minmax GRANULARITY 1",
     "ALTER TABLE usage_apicalllog ADD COLUMN IF NOT EXISTS "
     f"eval_output_str String MATERIALIZED {CH_EVAL_OUTPUT_STR_EXPR}",
     "ALTER TABLE usage_apicalllog ADD COLUMN IF NOT EXISTS "

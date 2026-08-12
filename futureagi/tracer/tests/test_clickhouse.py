@@ -242,11 +242,7 @@ class TestClickHouseSchema:
         )
 
     def test_eval_score_expression_reads_structured_and_scalar_outputs(self):
-        """One expression covers ``{"score": …}`` objects and bare numbers.
-
-        Choice-based evals nest their number under ``score``; score evals emit
-        a bare scalar. Dropping either branch blanks one family of widgets.
-        """
+        """Dropping either branch blanks one family of eval widgets."""
         from tracer.services.clickhouse.schema import (
             CDC_USAGE_APICALLLOG,
             CH_EVAL_SCORE_EXPR,
@@ -255,10 +251,7 @@ class TestClickHouseSchema:
         assert (
             "JSONHas(JSONExtractString(config), 'output', 'output', 'score')"
             in CH_EVAL_SCORE_EXPR
-        ), (
-            "eval_score must branch on the nested score key; without it a "
-            "structured output extracts as 0."
-        )
+        ), "without the nested-score branch a structured output extracts as 0."
         assert (
             "JSONExtractFloat(JSONExtractString(config), 'output', 'output'))"
             in CH_EVAL_SCORE_EXPR
@@ -280,10 +273,7 @@ class TestClickHouseSchema:
         assert (
             "usage_apicalllog MODIFY COLUMN eval_score Float64 "
             f"MATERIALIZED {CH_EVAL_SCORE_EXPR}" in joined
-        ), (
-            "POST_DDL_ALTERS must MODIFY eval_score; ADD COLUMN IF NOT EXISTS "
-            "no-ops on a deployed table and leaves the old expression in place."
-        )
+        ), "ADD COLUMN IF NOT EXISTS no-ops on a deployed table; MODIFY does not."
         assert (
             "usage_apicalllog ADD COLUMN IF NOT EXISTS eval_score Float64 "
             f"MATERIALIZED {CH_EVAL_SCORE_EXPR}" in joined
@@ -292,11 +282,13 @@ class TestClickHouseSchema:
             "usage_apicalllog ADD COLUMN IF NOT EXISTS eval_output_str String "
             f"MATERIALIZED {CH_EVAL_OUTPUT_STR_EXPR}" in joined
         )
+        assert (
+            "usage_apicalllog ADD INDEX IF NOT EXISTS idx_eval_score "
+            "eval_score TYPE minmax GRANULARITY 1" in joined
+        ), "a backfill dying between its DROP and ADD otherwise loses the index."
 
     def test_backfill_queries_survive_driver_parameter_substitution(self):
-        """The driver runs ``query % params`` on everything it executes, so a
-        literal ``%`` in one of these templates raises before it reaches CH.
-        """
+        """A literal ``%`` in a template raises before it reaches CH."""
         from tracer.management.commands import backfill_eval_score as cmd
         from tracer.services.clickhouse.eval_expressions import (
             eval_has_structured_score,
@@ -325,9 +317,7 @@ class TestClickHouseSchema:
                 pytest.fail(f"{name} is not substitution-safe: {exc}")
 
     def test_backfill_partition_scan_is_scoped_to_this_database(self):
-        """system.parts spans every database; an unscoped scan would pick up
-        the same table name in test_futureagi and materialize the wrong parts.
-        """
+        """An unscoped system.parts scan materializes another database's parts."""
         from tracer.management.commands import backfill_eval_score as cmd
 
         assert "database = currentDatabase()" in cmd._PARTITIONS
@@ -365,9 +355,7 @@ class TestClickHouseSchema:
         assert not any("ALTER TABLE" in q for q in ch.executed)
 
     def test_backfill_force_rebuilds_when_no_row_is_stale(self):
-        """A current column can still carry a stale index, so --force has to
-        run the rebuild that the "nothing to do" early return would skip.
-        """
+        """--force runs the rebuild the "nothing to do" early return skips."""
         from io import StringIO
 
         from django.core.management import call_command
