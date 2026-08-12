@@ -36,6 +36,7 @@ from simulate.services.test_executor import (
     TestExecutor,
     _run_simulate_evaluations_task,
 )
+from simulate.utils.ended_reason import to_canonical_ended_reason
 from simulate.utils.test_execution_utils import generate_simulator_agent_prompt
 from simulate.utils.websocket_notifications import notify_simulation_update
 from tfc.settings.settings import UPLOAD_BUCKET_NAME
@@ -753,6 +754,8 @@ def _apply_payload(call_execution: CallExecution, payload: dict[str, Any]) -> No
     for field in ("ended_reason", "error_message", "call_summary"):
         value = payload.get(field)
         if value:
+            if field == "ended_reason":
+                value = to_canonical_ended_reason(value)
             setattr(call_execution, field, value)
 
     recording_url = payload.get("recording_url")
