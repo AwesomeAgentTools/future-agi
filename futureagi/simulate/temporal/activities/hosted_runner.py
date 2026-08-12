@@ -4,8 +4,12 @@ Run on the ``simulation_runner`` queue, polled by the dedicated simulation-runne
 worker. ``run_hosted_sdk_job`` spawns the released SDK as a child process — the
 runner orchestrates the SDK, it does not run simulation logic itself.
 
-IMPORTANT: each DB-touching activity calls ``close_old_connections()`` first, to
-match the rest of the simulate activities (PgBouncer pool safety).
+IMPORTANT: DB-touching activities recycle the ORM connection via ``_run_db``,
+which calls ``close_old_connections()`` INSIDE the ``thread_sensitive`` executor
+thread — the same thread that issues the query. Django connections are
+thread-local, so recycling from the async activity body heals the wrong thread
+and leaves the executor's stale (server-closed) handle in place (PgBouncer pool
+safety).
 """
 
 from __future__ import annotations
@@ -46,13 +50,28 @@ _CHILD_SLOT_HEARTBEAT_SECONDS = float(
 )
 
 
+async def _run_db(fn, /, *args, **kwargs):
+    """Recycle the ORM connection and run ``fn`` on the query's own thread.
+
+    ``close_old_connections()`` must fire INSIDE the ``thread_sensitive``
+    executor thread that issues the query: Django connections are thread-local,
+    so recycling from the async activity body heals the wrong thread and leaves
+    the executor's stale (server-closed) handle in place.
+    """
+
+    def _call():
+        close_old_connections()
+        return fn(*args, **kwargs)
+
+    return await sync_to_async(_call, thread_sensitive=True)()
+
+
 @activity.defn(name="build_runner_job")
 async def build_runner_job(input: BuildRunnerJobInput) -> BuildRunnerJobOutput:
-    close_old_connections()
-
     from simulate.services.hosted_runner import build_start_runner_job
 
-    job = await sync_to_async(build_start_runner_job, thread_sensitive=True)(
+    job = await _run_db(
+        build_start_runner_job,
         test_execution_id=input.test_execution_id,
         run_test_id=input.run_test_id,
         scenario_ids=input.scenario_ids,
@@ -173,16 +192,12 @@ async def finalize_hosted_execution(input: FinalizeRunnerInput) -> str:
     status is driven by the ingestion + eval rollup (``monitor_test_execution_for_chat``),
     which we trigger here so it settles even if the last PATCH already fired.
     """
-    close_old_connections()
-
     from simulate.models.test_execution import CallExecution, TestExecution
 
     if input.job_phase == "completed":
         from simulate.tasks.chat_sim import monitor_test_execution_for_chat
 
-        await sync_to_async(monitor_test_execution_for_chat, thread_sensitive=True)(
-            input.test_execution_id
-        )
+        await _run_db(monitor_test_execution_for_chat, input.test_execution_id)
         return "rolled_up"
 
     def _mark_terminal() -> str:
@@ -215,7 +230,7 @@ async def finalize_hosted_execution(input: FinalizeRunnerInput) -> str:
             )
         return "failed"
 
-    return await sync_to_async(_mark_terminal, thread_sensitive=True)()
+    return await _run_db(_mark_terminal)
 
 
 def _runs_base() -> str:
