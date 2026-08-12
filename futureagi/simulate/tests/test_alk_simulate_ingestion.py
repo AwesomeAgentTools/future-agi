@@ -1089,11 +1089,24 @@ class TestBuildVoiceRunnerJob:
         assert cases[4]["situation"] == "Situation 4"
         assert cases[4]["outcome"] == "Outcome 4"
         assert cases[4]["persona"]["branch_category"] == "Branch 4"
-        # ALK 0.1 calculates its outer run deadline from these params. The
-        # allowance must cover all ten sequential voice cases, not one call.
+        # max_seconds now derives from the simulator's call-duration ceiling
+        # (>=120s), not the old flat 120s that cut real calls at ~2 minutes.
         params = job["voice"]["params"]
-        per_case_budget = 120.0 + 60.0 + 120.0 + 30.0
-        assert params["cleanup_timeout"] == 30.0 + 9 * per_case_budget
+        assert params["max_seconds"] >= 120.0
+        # The child sums these into its outer run deadline; it must stay under
+        # the activity's start_to_close so the SDK's graceful timeout (which
+        # still submits a partial report) beats the activity SIGTERM (which
+        # submits nothing -> "activity task failed").
+        from simulate.temporal.constants import HOSTED_RUNNER_MAX_DURATION_SECONDS
+
+        deadline = (
+            params["max_seconds"]
+            + params["connect_timeout"]
+            + params["readiness_timeout"]
+            + params["cleanup_timeout"]
+            + 60.0
+        )
+        assert deadline <= 0.9 * HOSTED_RUNNER_MAX_DURATION_SECONDS
 
     def test_builds_sip_outbound_job(self, organization, workspace, simulator_agent):
         from django.test import override_settings

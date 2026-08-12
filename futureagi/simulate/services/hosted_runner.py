@@ -36,6 +36,11 @@ logger = structlog.get_logger(__name__)
 _SPEC_SCHEMA_VERSION = "futureagi.simulation-spec.v1"
 _JOB_SCHEMA_VERSION = "futureagi.runner-job.v1"
 
+# The simulator's per-call ceiling (native ``SimulatorAgent`` default). Used as
+# the voice ``max_seconds`` so hosted calls end naturally rather than being cut
+# at the previous hard 120s.
+_DEFAULT_MAX_CALL_MINUTES = 30
+
 _MODE_TO_ENVIRONMENT = {
     "chat": ("chat", "conversation"),
 }
@@ -145,7 +150,11 @@ def build_start_runner_job(
         raise HostedRunnerBuildError(f"unsupported runner mode: {mode}")
 
     test_execution = TestExecution.objects.select_related(
-        "run_test", "run_test__agent_definition", "agent_version"
+        "run_test",
+        "run_test__agent_definition",
+        "run_test__simulator_agent",
+        "agent_version",
+        "simulator_agent",
     ).get(id=test_execution_id, deleted=False)
     run_test = test_execution.run_test
     agent_definition = run_test.agent_definition
@@ -160,6 +169,7 @@ def build_start_runner_job(
     run_id = str(test_execution.id)
 
     if mode in _VOICE_MODES:
+        simulator_agent = test_execution.simulator_agent or run_test.simulator_agent
         return _build_voice_job(
             mode=mode,
             run_id=run_id,
@@ -167,6 +177,7 @@ def build_start_runner_job(
             agent_definition=agent_definition,
             agent_version=test_execution.agent_version,
             scenarios=scenarios,
+            simulator_agent=simulator_agent,
         )
 
     adapter, world_kind = _MODE_TO_ENVIRONMENT[mode]
@@ -383,6 +394,7 @@ def _build_voice_job(
     agent_definition,
     agent_version,
     scenarios: list[Scenarios],
+    simulator_agent=None,
 ) -> dict[str, Any]:
     credentials = _voice_credentials(agent_definition, agent_version)
     provider = _voice_provider(agent_definition, credentials)
@@ -421,6 +433,7 @@ def _build_voice_job(
                 transport_kind,
                 case_count=len(dataset),
                 max_concurrency=_livekit_max_concurrency(credentials),
+                max_call_minutes=_max_call_minutes(simulator_agent),
             ),
         },
         "sink": {
@@ -649,6 +662,16 @@ def _dataset_language(dataset: list[dict[str, Any]] | None) -> str | None:
     return label_to_code.get(languages.pop())
 
 
+def _max_call_minutes(simulator_agent) -> int:
+    """Per-call conversation ceiling in minutes from the simulator agent (the
+    native ``max_call_duration_in_minutes``), defaulting to 30."""
+    value = getattr(simulator_agent, "max_call_duration_in_minutes", None)
+    try:
+        return max(1, int(value)) if value else _DEFAULT_MAX_CALL_MINUTES
+    except (TypeError, ValueError):
+        return _DEFAULT_MAX_CALL_MINUTES
+
+
 def _livekit_max_concurrency(credentials) -> int:
     """Per-agent LiveKit session ceiling that bounds concurrent cases within a
     run. Non-LiveKit targets (or missing creds) fall back to serial execution."""
@@ -661,8 +684,14 @@ def _livekit_max_concurrency(credentials) -> int:
 
 
 def _voice_params(
-    transport_kind: str, *, case_count: int = 1, max_concurrency: int = 1
+    transport_kind: str,
+    *,
+    case_count: int = 1,
+    max_concurrency: int = 1,
+    max_call_minutes: int = _DEFAULT_MAX_CALL_MINUTES,
 ) -> dict[str, Any]:
+    from simulate.temporal.constants import HOSTED_RUNNER_MAX_DURATION_SECONDS
+
     is_telephony = transport_kind in {"sip_inbound", "sip_outbound"}
     conversation_direction = (
         _voice_setting("SIMULATOR_CONVERSATION_DIRECTION") or "simulator_first"
@@ -676,34 +705,50 @@ def _voice_params(
     effective_concurrency = (
         1 if is_telephony else max(1, min(int(max_concurrency or 1), case_count))
     )
-    params = {
+
+    connect_timeout = 60.0
+    readiness_timeout = 120.0
+    base_cleanup = 30.0
+    # A conversation runs until it ends naturally (min turns + quiet, provider
+    # disconnect); ``max_seconds`` is only the hard ceiling. Use the simulator's
+    # configured call duration (native default 30 min) — the old flat 120s
+    # ceiling cut real calls off at ~2 minutes.
+    max_seconds = float(
+        max(120, int(max_call_minutes or _DEFAULT_MAX_CALL_MINUTES) * 60)
+    )
+
+    # The child sums ``max_seconds + connect + readiness + cleanup + 60`` into
+    # its outer run deadline. Keep that strictly under the activity's
+    # start_to_close: the SDK's own timeout is graceful (still submits a partial
+    # report), but the Temporal activity timeout SIGTERMs the child, which
+    # aborts WITHOUT submitting — zero rows + "activity task failed".
+    deadline_cap = 0.9 * HOSTED_RUNNER_MAX_DURATION_SECONDS
+    fixed_overhead = connect_timeout + readiness_timeout + 60.0
+    # A single call must fit under the cap on its own.
+    max_seconds = min(max_seconds, deadline_cap - fixed_overhead - base_cleanup)
+
+    cleanup_timeout = base_cleanup
+    # Cases run in parallel up to ``effective_concurrency``, so the run's
+    # wall-clock is ``ceil(N/C)`` case budgets; contribute those extra budgets
+    # through cleanup_timeout, then clamp the whole deadline under the cap.
+    if case_count > 1:
+        per_case_budget = max_seconds + fixed_overhead + base_cleanup
+        batches = -(-case_count // effective_concurrency)  # ceil division
+        cleanup_timeout = base_cleanup + (batches - 1) * per_case_budget
+        max_cleanup = deadline_cap - max_seconds - fixed_overhead
+        cleanup_timeout = max(base_cleanup, min(cleanup_timeout, max_cleanup))
+
+    return {
         "record_audio": True,
         "recording_root": "recordings",
-        "max_seconds": 150.0 if is_telephony else 120.0,
+        "max_seconds": max_seconds,
         "min_turn_messages": 6,
         "conversation_direction": conversation_direction,
-        "connect_timeout": 60.0,
-        "readiness_timeout": 120.0,
-        "cleanup_timeout": 30.0,
+        "connect_timeout": connect_timeout,
+        "readiness_timeout": readiness_timeout,
+        "cleanup_timeout": cleanup_timeout,
         "max_concurrency": effective_concurrency,
     }
-
-    # ALK derives its outer SimulationSpec deadline from one case's voice
-    # budgets. The engine now runs cases in parallel up to
-    # ``effective_concurrency``, so the run's wall-clock is ``ceil(N/C)`` case
-    # budgets, not ``N``. Contribute that many extra budgets through
-    # cleanup_timeout (the component that normally completes immediately) so a
-    # multi-case run is not cancelled before its batches finish.
-    if case_count > 1:
-        per_case_budget = (
-            params["max_seconds"]
-            + params["connect_timeout"]
-            + params["readiness_timeout"]
-            + params["cleanup_timeout"]
-        )
-        batches = -(-case_count // effective_concurrency)  # ceil division
-        params["cleanup_timeout"] += (batches - 1) * per_case_budget
-    return params
 
 
 def _credential_or_env(env_var: str, credentials, field: str) -> dict[str, Any]:

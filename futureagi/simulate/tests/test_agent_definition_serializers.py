@@ -180,6 +180,23 @@ class TestAgentDefinitionCreateRequestSerializer:
         assert not serializer.is_valid()
         assert "assistant_id" in serializer.errors
 
+    def test_outbound_livekit_does_not_require_api_key_or_assistant_id(self):
+        # Outbound WebRTC via LiveKit reaches the target by managed dispatch —
+        # no Bearer api_key/assistant_id and no phone number. The provider-blind
+        # outbound check must not reject it.
+        serializer = AgentDefinitionCreateRequestSerializer(
+            data=_voice_agent_payload(
+                provider="livekit_bridge",
+                inbound=False,
+                contact_number="",
+                livekit_url="wss://example.livekit.cloud",
+                livekit_api_key="APIexamplekey",
+                livekit_api_secret="example-secret",
+                livekit_agent_name="test-agent",
+            )
+        )
+        assert serializer.is_valid(), serializer.errors
+
     def test_observability_requires_api_key(self):
         serializer = AgentDefinitionCreateRequestSerializer(
             data=_voice_agent_payload(
@@ -526,7 +543,7 @@ class TestAgentVersionResponseSerializer:
     """Tests for AgentVersionResponseSerializer output shape."""
 
     def test_serializes_all_fields(self, db, organization, workspace):
-        from simulate.models import AgentDefinition, AgentVersion
+        from simulate.models import AgentDefinition
         from simulate.serializers.response.agent_version import (
             AgentVersionResponseSerializer,
         )
@@ -595,9 +612,9 @@ class TestAgentVersionResponseSerializer:
         assert isinstance(snapshot, dict)
         # No raw UUID objects — all values should be JSON-serializable primitives
         for key, value in snapshot.items():
-            assert not hasattr(
-                value, "hex"
-            ), f"Snapshot key '{key}' contains a UUID object instead of a string"
+            assert not hasattr(value, "hex"), (
+                f"Snapshot key '{key}' contains a UUID object instead of a string"
+            )
 
     def test_version_name_display(self, db, organization, workspace):
         from simulate.models import AgentDefinition

@@ -219,6 +219,17 @@ class AgentDefinitionSerializer(serializers.ModelSerializer):
         if value:  # inbound True → no extra checks
             return value
 
+        # LiveKit reaches an outbound target over WebRTC (managed dispatch) with
+        # no Bearer api_key/assistant_id — its credentials are livekit_api_key/
+        # secret. The provider-aware object-level ``validate`` owns LiveKit's
+        # requirements; this field-level check would otherwise wrongly demand
+        # api_key/assistant_id for an outbound WebRTC agent.
+        provider = (self.initial_data or {}).get("provider") or getattr(
+            self.instance, "provider", None
+        )
+        if str(provider or "").strip().lower() in ("livekit", "livekit_bridge"):
+            return value
+
         # outbound: require api_key and assistant_id from incoming data or existing instance
         api_key = (self.initial_data or {}).get("api_key") or getattr(
             self.instance, "api_key", None
