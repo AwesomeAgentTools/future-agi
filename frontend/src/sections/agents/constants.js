@@ -50,6 +50,37 @@ export const INBOUND_OUTBOUND_COPY = {
   },
 };
 
+/** How a voice test call reaches the agent. */
+export const VOICE_TRANSPORT = {
+  WEBRTC: "webrtc",
+  TELEPHONY: "telephony",
+};
+
+/**
+ * Canonical copy for the WebRTC/Telephony toggle, read by both the create and
+ * edit forms so the two cannot drift apart.
+ */
+export const VOICE_TRANSPORT_COPY = {
+  [VOICE_TRANSPORT.WEBRTC]: {
+    label: "Web",
+    title: "Web simulation (WebRTC)",
+    description:
+      "No phone call is placed and no telephony provider is needed.",
+  },
+  [VOICE_TRANSPORT.TELEPHONY]: {
+    label: "Phone",
+    title: "Telephony simulation (PSTN)",
+    description:
+      "A real phone call is placed over PSTN — requires a configured telephony provider.",
+  },
+};
+
+/** The transport a saved agent was using, inferred from its stored number. */
+export const transportFromContactNumber = (contactNumber) =>
+  String(contactNumber ?? "").trim()
+    ? VOICE_TRANSPORT.TELEPHONY
+    : VOICE_TRANSPORT.WEBRTC;
+
 export const callStatusCellStyle = {
   "in-progress": {
     sx: {

@@ -1,4 +1,5 @@
 import { pinCodeOptions } from "src/components/agent-definitions/helper";
+import { transportFromContactNumber } from "./constants";
 
 export const getAgentFormValues = (agentDetails) => {
   const snapshot = agentDetails?.configuration_snapshot || {};
@@ -45,6 +46,7 @@ export const getAgentFormValues = (agentDetails) => {
     knowledgeBase: snapshot.knowledge_base || "",
     countryCode: matchedPin || "",
     contactNumber: localNumber,
+    voiceTransport: transportFromContactNumber(rawContactNumber),
     inbound: snapshot.inbound ?? true,
     commitMessage: snapshot.commit_message || "",
 

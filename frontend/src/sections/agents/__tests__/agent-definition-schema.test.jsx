@@ -123,4 +123,94 @@ describe("createAgentDefinitionSchema — outbound LiveKit (TH-7507)", () => {
   });
 });
 
+describe("createAgentDefinitionSchema — voice transport", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    axiosMocks.post.mockResolvedValue({ data: {} });
+  });
+
+  // inbound: true keeps the provider-key rules out of the way so these
+  // assertions are about the contact number alone.
+  const voiceAgent = {
+    ...baseAgent,
+    inbound: true,
+    provider: "vapi",
+  };
+
+  it("requires a contact number when the transport is telephony", async () => {
+    const schema = createAgentDefinitionSchema();
+
+    const result = await schema.safeParseAsync({
+      ...voiceAgent,
+      voiceTransport: "telephony",
+    });
+
+    expect(result.success).toBe(false);
+    expect(errorPaths(result)).toEqual(
+      expect.arrayContaining(["countryCode", "contactNumber"]),
+    );
+  });
+
+  it("accepts a telephony agent with a full number", async () => {
+    const schema = createAgentDefinitionSchema();
+
+    const result = await schema.safeParseAsync({
+      ...voiceAgent,
+      voiceTransport: "telephony",
+      countryCode: "1",
+      contactNumber: "4155551234",
+    });
+
+    expect(result.success ? [] : errorPaths(result)).toEqual([]);
+  });
+
+  it("asks for no number at all when the transport is webrtc", async () => {
+    const schema = createAgentDefinitionSchema();
+
+    const result = await schema.safeParseAsync({
+      ...voiceAgent,
+      voiceTransport: "webrtc",
+    });
+
+    expect(result.success ? [] : errorPaths(result)).toEqual([]);
+  });
+
+  it("ignores a number left behind by a switch back to webrtc", async () => {
+    const schema = createAgentDefinitionSchema();
+
+    const result = await schema.safeParseAsync({
+      ...voiceAgent,
+      voiceTransport: "webrtc",
+      countryCode: "1",
+      contactNumber: "415",
+    });
+
+    expect(result.success ? [] : errorPaths(result)).toEqual([]);
+  });
+
+  it("still rejects a malformed number in telephony mode", async () => {
+    const schema = createAgentDefinitionSchema();
+
+    const result = await schema.safeParseAsync({
+      ...voiceAgent,
+      voiceTransport: "telephony",
+      countryCode: "1",
+      contactNumber: "abc",
+    });
+
+    expect(result.success).toBe(false);
+    expect(errorPaths(result)).toEqual(
+      expect.arrayContaining(["contactNumber"]),
+    );
+  });
+
+  it("defaults to webrtc when no transport is supplied", async () => {
+    const schema = createAgentDefinitionSchema();
+
+    const result = await schema.safeParseAsync(voiceAgent);
+
+    expect(result.success ? [] : errorPaths(result)).toEqual([]);
+  });
+});
+
 import { createAgentDefinitionSchema } from "../helper";

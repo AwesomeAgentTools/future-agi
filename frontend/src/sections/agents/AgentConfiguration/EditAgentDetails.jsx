@@ -5,7 +5,15 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { Box, Typography, Grid, Stack, Button } from "@mui/material";
+import {
+  Box,
+  Typography,
+  Grid,
+  Stack,
+  Button,
+  ToggleButton,
+  ToggleButtonGroup,
+} from "@mui/material";
 import PropTypes from "prop-types";
 import FormTextFieldV2 from "src/components/FormTextField/FormTextFieldV2";
 import { FormSearchSelectFieldControl } from "src/components/FromSearchSelectField";
@@ -26,6 +34,8 @@ import {
   defaultAuthMethodForProvider,
   VOICE_CHAT_PROVIDERS,
   INBOUND_OUTBOUND_COPY,
+  VOICE_TRANSPORT,
+  VOICE_TRANSPORT_COPY,
   isLiveKitProvider,
   validateLiveKitCredentials,
 } from "../constants";
@@ -65,6 +75,11 @@ const EditAgentDetails = ({
     control,
     name: "agentName",
     defaultValue: getValues("agentName"),
+  });
+  const voiceTransport = useWatch({
+    control,
+    name: "voiceTransport",
+    defaultValue: getValues("voiceTransport") || VOICE_TRANSPORT.WEBRTC,
   });
   const assistantId = useWatch({
     control,
@@ -816,11 +831,67 @@ const EditAgentDetails = ({
             />
           </Box>
         </Box>
-        {/* Contact Number and Pin Code */}
+        {/* Call transport: decides whether a phone number is collected */}
         <ShowComponent
           condition={
             agentType === AGENT_TYPES.VOICE &&
             !isLiveKitProvider(selectedProvider)
+          }
+        >
+          <Box
+            display="flex"
+            justifyContent="space-between"
+            alignItems="center"
+            gap={2}
+            border={"1px solid"}
+            borderColor={"background.neutral"}
+            borderRadius={"8px !important"}
+            bgcolor={"background.neutral"}
+            p={1.5}
+          >
+            <Box display={"flex"} flexDirection={"column"}>
+              <Typography
+                typography="s1"
+                fontWeight={"fontWeightMedium"}
+                color={"text.primary"}
+              >
+                {VOICE_TRANSPORT_COPY[voiceTransport]?.title}
+              </Typography>
+              <Typography
+                typography="s2_1"
+                fontWeight={"fontWeightRegular"}
+                color={"text.secondary"}
+              >
+                {VOICE_TRANSPORT_COPY[voiceTransport]?.description}
+              </Typography>
+            </Box>
+            <ToggleButtonGroup
+              value={voiceTransport}
+              exclusive
+              size="small"
+              onChange={(_, value) => value && setValue("voiceTransport", value)}
+            >
+              <ToggleButton
+                value={VOICE_TRANSPORT.WEBRTC}
+                sx={{ px: 2, py: 0.5, fontSize: "0.75rem" }}
+              >
+                {VOICE_TRANSPORT_COPY[VOICE_TRANSPORT.WEBRTC].label}
+              </ToggleButton>
+              <ToggleButton
+                value={VOICE_TRANSPORT.TELEPHONY}
+                sx={{ px: 2, py: 0.5, fontSize: "0.75rem" }}
+              >
+                {VOICE_TRANSPORT_COPY[VOICE_TRANSPORT.TELEPHONY].label}
+              </ToggleButton>
+            </ToggleButtonGroup>
+          </Box>
+        </ShowComponent>
+        {/* Contact Number and Pin Code */}
+        <ShowComponent
+          condition={
+            agentType === AGENT_TYPES.VOICE &&
+            !isLiveKitProvider(selectedProvider) &&
+            voiceTransport === VOICE_TRANSPORT.TELEPHONY
           }
         >
           <Box>

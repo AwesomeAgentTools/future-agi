@@ -5,6 +5,8 @@ import {
   Grid,
   Link,
   Stack,
+  ToggleButton,
+  ToggleButtonGroup,
   Typography,
 } from "@mui/material";
 import PropTypes from "prop-types";
@@ -16,6 +18,8 @@ import {
   defaultAuthMethodForProvider,
   INBOUND_OUTBOUND_COPY,
   VOICE_CHAT_PROVIDERS,
+  VOICE_TRANSPORT,
+  VOICE_TRANSPORT_COPY,
   isLiveKitProvider,
   validateLiveKitCredentials,
 } from "../../constants";
@@ -62,15 +66,15 @@ export default function AgentVoiceForm() {
     name: "assistantId",
     defaultValue: getValues("assistantId"),
   });
-  const contactNumber = useWatch({
-    control,
-    name: "contactNumber",
-    defaultValue: getValues("contactNumber"),
-  });
   const observabilityEnabled = useWatch({
     control,
     name: "observabilityEnabled",
     defaultValue: getValues("observabilityEnabled"),
+  });
+  const voiceTransport = useWatch({
+    control,
+    name: "voiceTransport",
+    defaultValue: getValues("voiceTransport") || VOICE_TRANSPORT.WEBRTC,
   });
 
   const selectedProvider = useWatch({
@@ -714,19 +718,66 @@ export default function AgentVoiceForm() {
       <ShowComponent condition={true}>
         <CreateNewAgentCards
           title={"Contact Information"}
-          subtitle={
-            "Add a phone number to run a telephony (PSTN) simulation, or leave it empty to run a web (WebRTC) simulation."
-          }
+          subtitle={"Choose how test calls reach the agent."}
         >
-          <Typography
-            typography="s1"
-            fontWeight={"fontWeightMedium"}
-            color={"text.primary"}
-          >
-            Phone number is optional — required only for telephony (PSTN) calls
-          </Typography>
           <Box display="flex" flexDirection="column" gap={3}>
-            <Grid container spacing={2} alignItems="flex-start">
+            <Box
+              display="flex"
+              justifyContent="space-between"
+              alignItems="center"
+              gap={2}
+              border={"1px solid"}
+              borderColor={"background.neutral"}
+              borderRadius={"8px !important"}
+              bgcolor={"background.neutral"}
+              p={1.5}
+            >
+              <Box display={"flex"} flexDirection={"column"}>
+                <Typography
+                  typography="s1"
+                  fontWeight={"fontWeightMedium"}
+                  color={"text.primary"}
+                >
+                  {VOICE_TRANSPORT_COPY[voiceTransport]?.title}
+                </Typography>
+                <Typography
+                  typography="s2_1"
+                  fontWeight={"fontWeightRegular"}
+                  color={"text.secondary"}
+                >
+                  {VOICE_TRANSPORT_COPY[voiceTransport]?.description}
+                </Typography>
+              </Box>
+              <ToggleButtonGroup
+                value={voiceTransport}
+                exclusive
+                size="small"
+                onChange={(_, value) => {
+                  if (!value) return;
+                  setFormValue("voiceTransport", value);
+                  if (value === VOICE_TRANSPORT.WEBRTC) {
+                    clearErrors(["countryCode", "contactNumber"]);
+                  }
+                }}
+              >
+                <ToggleButton
+                  value={VOICE_TRANSPORT.WEBRTC}
+                  sx={{ px: 2, py: 0.5, fontSize: "0.75rem" }}
+                >
+                  {VOICE_TRANSPORT_COPY[VOICE_TRANSPORT.WEBRTC].label}
+                </ToggleButton>
+                <ToggleButton
+                  value={VOICE_TRANSPORT.TELEPHONY}
+                  sx={{ px: 2, py: 0.5, fontSize: "0.75rem" }}
+                >
+                  {VOICE_TRANSPORT_COPY[VOICE_TRANSPORT.TELEPHONY].label}
+                </ToggleButton>
+              </ToggleButtonGroup>
+            </Box>
+            <ShowComponent
+              condition={voiceTransport === VOICE_TRANSPORT.TELEPHONY}
+            >
+              <Grid container spacing={2} alignItems="flex-start">
               <Grid item xs={3.5}>
                 <FormSearchSelectFieldControl
                   control={control}
@@ -788,10 +839,11 @@ export default function AgentVoiceForm() {
               <Grid item xs={8.5}>
                 <FormTextFieldV2
                   control={control}
-                  label="Contact Number (optional)"
+                  label="Contact Number"
                   type="number"
                   fieldName="contactNumber"
-                  placeholder="Leave empty for a web (WebRTC) simulation"
+                  placeholder="Number to call for the simulation"
+                  required
                   size="small"
                   fullWidth
                   sx={{
@@ -800,35 +852,9 @@ export default function AgentVoiceForm() {
                     },
                   }}
                 />
+                </Grid>
               </Grid>
-            </Grid>
-
-            <Box
-              border={"1px solid"}
-              borderColor={"background.neutral"}
-              borderRadius={"8px !important"}
-              bgcolor={"background.neutral"}
-              p={1.5}
-            >
-              <Typography
-                typography="s1"
-                fontWeight={"fontWeightMedium"}
-                color={"text.primary"}
-              >
-                {contactNumber?.toString().trim()
-                  ? "Telephony simulation (PSTN)"
-                  : "Web simulation (WebRTC)"}
-              </Typography>
-              <Typography
-                typography="s2_1"
-                fontWeight={"fontWeightRegular"}
-                color={"text.secondary"}
-              >
-                {contactNumber?.toString().trim()
-                  ? "A real phone call is placed over PSTN — requires a configured telephony provider (phone number)."
-                  : "No phone number → runs a web (WebRTC) simulation. No phone call is placed and no telephony provider is needed."}
-              </Typography>
-            </Box>
+            </ShowComponent>
 
             <Box
               display="flex"

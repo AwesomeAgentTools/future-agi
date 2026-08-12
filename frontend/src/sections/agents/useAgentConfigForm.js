@@ -6,7 +6,11 @@ import axios, { endpoints } from "src/utils/axios";
 import { getAgentFormValues } from "./common";
 import { useMutation } from "@tanstack/react-query";
 import logger from "src/utils/logger";
-import { AGENT_TYPES, isLiveKitProvider } from "./constants";
+import {
+  AGENT_TYPES,
+  isLiveKitProvider,
+  VOICE_TRANSPORT,
+} from "./constants";
 
 export const useAgentConfigForm = (schema, agentDetails) => {
   const {
@@ -93,11 +97,17 @@ export const useAgentSubmit = ({
       };
 
       // Only process and include voice-specific fields for voice agents
+      let voiceContactNumber = null;
       if (data.agentType === "voice") {
         const fullContactNumber = data?.countryCode
           ? `+${data.countryCode}${data.contactNumber.trim()}`
           : data.contactNumber.trim();
-        payload.contact_number = fullContactNumber;
+        // A web (WebRTC) simulation carries no number — the backend reads an
+        // empty contact_number as the signal to run over WebRTC.
+        payload.contact_number =
+          data.voiceTransport === VOICE_TRANSPORT.TELEPHONY
+            ? fullContactNumber
+            : "";
         delete payload.model;
         delete payload.model_details;
 
@@ -133,6 +143,8 @@ export const useAgentSubmit = ({
           delete payload.livekit_config_json;
           delete payload.livekit_max_concurrency;
         }
+
+        voiceContactNumber = payload.contact_number;
       } else {
         // Remove voice-specific fields for non-voice agents
         delete payload.country_code;
@@ -187,6 +199,13 @@ export const useAgentSubmit = ({
       payload = Object.fromEntries(
         Object.entries(payload).filter(([, value]) => value !== ""),
       );
+
+      // contact_number has to survive that strip. An empty string is what tells
+      // the backend to run over WebRTC, and the version endpoint only writes
+      // fields present in the request — omitting it keeps the previous number.
+      if (voiceContactNumber !== null) {
+        payload.contact_number = voiceContactNumber;
+      }
 
       const { livekit_api_key, livekit_api_secret, ...safePayload } = payload;
       trackEvent(Events.updateAgentDefClicked, {

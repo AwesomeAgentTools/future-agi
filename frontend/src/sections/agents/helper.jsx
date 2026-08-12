@@ -12,7 +12,11 @@ import { useQuery } from "@tanstack/react-query";
 import axios, { endpoints } from "src/utils/axios";
 import { Box, Skeleton } from "@mui/material";
 import EvaluationCell from "src/sections/projects/LLMTracing/Renderers/EvaluationCell";
-import { AGENT_TYPES, isLiveKitProvider } from "./constants";
+import {
+  AGENT_TYPES,
+  isLiveKitProvider,
+  VOICE_TRANSPORT,
+} from "./constants";
 import AnnotationHeaderCellRenderer from "./CallLogs/AnnotationHeaderCellRenderer";
 import NewAnnotationCellRenderer from "./NewAnnotationCellRenderer";
 
@@ -107,6 +111,11 @@ export const createAgentDefinitionSchema = (options) => {
       knowledgeBase: z.string().optional(),
       countryCode: z.string().optional(),
       contactNumber: z.string().optional(),
+      // Form-only: chooses how the test call reaches the agent. Never sent to
+      // the backend, which derives the mode from contact_number.
+      voiceTransport: z
+        .enum([VOICE_TRANSPORT.WEBRTC, VOICE_TRANSPORT.TELEPHONY])
+        .default(VOICE_TRANSPORT.WEBRTC),
       inbound: z.boolean(),
       commitMessage: z.string().min(1, "Commit message is required"),
       model: z.string().optional(),
@@ -149,35 +158,31 @@ export const createAgentDefinitionSchema = (options) => {
         }
       }
 
+      // The transport toggle decides whether a phone number is collected at
+      // all. In webrtc mode the number is cleared on submit, so anything left
+      // in the field is ignored rather than validated.
       if (
         data.agentType === AGENT_TYPES.VOICE &&
-        !isLiveKitProvider(data.provider)
+        !isLiveKitProvider(data.provider) &&
+        data.voiceTransport === VOICE_TRANSPORT.TELEPHONY
       ) {
-        // Phone number is optional when API key + assistant ID are provided (web bridge)
-        // const hasWebBridgeCreds =
-        //   data.apiKey?.trim() && data.assistantId?.trim();
         const hasCountryCode = !!data.countryCode?.trim();
         const hasContactNumber = !!data.contactNumber?.trim();
-        // Phone number is OPTIONAL: leaving it empty runs a web (WebRTC)
-        // simulation. If either country code or number is provided, the other
-        // is required so a telephony (PSTN) target is fully specified.
-        if (hasContactNumber && !hasCountryCode) {
+        if (!hasCountryCode) {
           ctx.addIssue({
             path: ["countryCode"],
-            message: "Country code is required when contact number is provided",
+            message: "Country code is required for a phone simulation",
             code: z.ZodIssueCode.custom,
           });
         }
-        if (hasCountryCode && !hasContactNumber) {
+        if (!hasContactNumber) {
           ctx.addIssue({
             path: ["contactNumber"],
-            message: "Contact number is required when country code is provided",
+            message: "Contact number is required for a phone simulation",
             code: z.ZodIssueCode.custom,
           });
         }
-        // }
         if (hasContactNumber) {
-          // Validate contact number format only if it's provided
           const trimmedNumber = data.contactNumber.trim();
           if (!/^\d+$/.test(trimmedNumber)) {
             ctx.addIssue({
