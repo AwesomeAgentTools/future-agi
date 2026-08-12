@@ -35,7 +35,7 @@ import pytest
 _TEST_DATABASE = "test_futureagi"
 _EVAL_TABLE = f"{_TEST_DATABASE}.usage_apicalllog"
 
-# (label, config payload, the eval_score it must materialize, carries a number)
+# (label, config payload, the eval_score it must materialize, holds a real number)
 EVAL_OUTPUT_SHAPES: tuple[tuple[str, dict, float, bool], ...] = (
     (
         "structured_complete",
@@ -55,6 +55,18 @@ EVAL_OUTPUT_SHAPES: tuple[tuple[str, dict, float, bool], ...] = (
         0.2,
         True,
     ),
+    (
+        "structured_null_score",
+        {"output": {"output": {"score": None, "choice": "Unknown"}}},
+        0.0,
+        False,
+    ),
+    (
+        "structured_text_score",
+        {"output": {"output": {"score": "high"}}},
+        0.0,
+        False,
+    ),
     ("scalar_score", {"output": {"output": 0.8}}, 0.8, True),
     ("text_output", {"output": {"output": "Passed"}}, 0.0, False),
     ("no_output", {"output": {}}, 0.0, False),
@@ -62,6 +74,13 @@ EVAL_OUTPUT_SHAPES: tuple[tuple[str, dict, float, bool], ...] = (
 
 EVAL_SCORED_SHAPES = tuple(s for s in EVAL_OUTPUT_SHAPES if s[3])
 EVAL_SCORED_AVERAGE = 0.625
+
+# Over every shape: the four numbers above plus "Passed" read as 1.0. The empty,
+# null-score and text-score rows are excluded rather than averaged in as 0.
+EVAL_ALL_SHAPES_AVERAGE = 0.7
+
+# Every path that answers "did this eval pass?" has to name this same set.
+EVAL_PASSING_SHAPES = frozenset({"structured_complete", "text_output"})
 
 EVAL_SHAPE_PAYLOADS = {label: payload for label, payload, _s, _h in EVAL_OUTPUT_SHAPES}
 EVAL_SHAPE_SCORES = {label: score for label, _p, score, _h in EVAL_OUTPUT_SHAPES}
@@ -458,8 +477,10 @@ def ch_eval_output_rows(ch_schema):
 
     def _seed(source_id, shapes, first_id):
         for offset, (label, payload, _score, _has_number) in enumerate(shapes):
+            # trace_id: eval filters select on eval_trace_id, so it names the row.
             # config is double-encoded (a JSON string holding JSON) in CH.
-            literal = json.dumps(payload).replace("\\", "\\\\").replace("'", "\\'")
+            config = dict(payload, trace_id=label)
+            literal = json.dumps(config).replace("\\", "\\\\").replace("'", "\\'")
             client.command(
                 f"""
                 INSERT INTO {_EVAL_TABLE}
@@ -770,8 +791,17 @@ class TestEvalScoreMaterialization:
 
         assert json.loads(result.result_rows[0][0]) == payload["output"]["output"]
 
-    def test_dashboard_average_counts_structured_eval_scores(self, ch_eval_output_rows):
-        """The real widget SQL averages structured rows instead of dropping them."""
+    @pytest.mark.parametrize(
+        ("source_key", "expected"),
+        [
+            ("scored_shapes_source_id", EVAL_SCORED_AVERAGE),
+            ("all_shapes_source_id", EVAL_ALL_SHAPES_AVERAGE),
+        ],
+    )
+    def test_dashboard_average_counts_only_the_shapes_it_can_score(
+        self, ch_eval_output_rows, source_key, expected
+    ):
+        """Structured rows are averaged in; a null or text score stays excluded."""
         from tracer.services.clickhouse.query_builders.dashboard import (
             DashboardQueryBuilder,
         )
@@ -786,7 +816,7 @@ class TestEvalScoreMaterialization:
                     "id": "structured_eval",
                     "name": "structured_eval",
                     "type": "eval_metric",
-                    "config_id": ch_eval_output_rows["scored_shapes_source_id"],
+                    "config_id": ch_eval_output_rows[source_key],
                     "aggregation": "avg",
                 }
             ],
@@ -796,9 +826,80 @@ class TestEvalScoreMaterialization:
 
         result = ch_eval_output_rows["client"].query(sql_test, parameters=params)
 
-        assert [row[1] for row in result.result_rows] == [
-            pytest.approx(EVAL_SCORED_AVERAGE)
-        ]
+        assert [row[1] for row in result.result_rows] == [pytest.approx(expected)]
+
+    def test_pass_fail_paths_classify_every_row_the_same_way(self, ch_eval_output_rows):
+        """One eval, three widgets: the time series, the breakdown label and the
+        filter have to reach the same verdict on the same row.
+        """
+        from tracer.services.clickhouse.query_builders.dashboard import (
+            DashboardQueryBuilder,
+        )
+
+        client = ch_eval_output_rows["client"]
+        source_id = ch_eval_output_rows["all_shapes_source_id"]
+        metric = {
+            "id": "pass_fail_eval",
+            "name": "pass_fail_eval",
+            "type": "eval_metric",
+            "config_id": source_id,
+            "output_type": "PASS_FAIL",
+            "aggregation": "pass_count",
+        }
+        config = {
+            "organization_id": ch_eval_output_rows["organization_id"],
+            "workspace_id": ch_eval_output_rows["workspace_id"],
+            "granularity": "day",
+            "time_range": {"preset": "7D"},
+            "metrics": [metric],
+            "breakdowns": [metric],
+        }
+
+        def _run(sql, params=None):
+            return client.query(
+                sql.replace("usage_apicalllog", _EVAL_TABLE), parameters=params
+            ).result_rows
+
+        builder = DashboardQueryBuilder(config)
+
+        sql, params, _ = builder.build_all_queries()[0]
+        time_series_passes = sum(row[1] for row in _run(sql, params))
+
+        label_expr = builder._resolve_all_breakdowns({})[0]["expr"]
+        breakdown_passes = {
+            label
+            for label, verdict in _run(
+                f"SELECT reference_id, {label_expr} FROM usage_apicalllog AS ev0 "
+                f"WHERE source_id = '{source_id}'"
+            )
+            if verdict == "Pass"
+        }
+
+        clauses, filter_params = builder._build_subquery_filters(
+            [
+                {
+                    "metric_type": "eval_metric",
+                    "metric_name": source_id,
+                    "output_type": "PASS_FAIL",
+                    "operator": "equal_to",
+                    "value": 1.0,
+                }
+            ],
+            {},
+            "f_",
+        )
+        subquery = clauses[0][clauses[0].index("(") + 1 : clauses[0].rindex(")")]
+        filter_passes = {row[0] for row in _run(subquery, filter_params)}
+
+        assert breakdown_passes == filter_passes == set(EVAL_PASSING_SHAPES), (
+            "the breakdown label and the eval filter disagree on which rows "
+            f"passed: breakdown {sorted(breakdown_passes)}, "
+            f"filter {sorted(filter_passes)}"
+        )
+        assert time_series_passes == len(EVAL_PASSING_SHAPES), (
+            "the time series counts a different number of passes than the "
+            f"breakdown and the filter do: {time_series_passes}"
+        )
 
     def test_backfill_leaves_the_score_index_agreeing_with_the_rows(
         self, ch_eval_output_rows

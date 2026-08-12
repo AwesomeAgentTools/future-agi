@@ -249,9 +249,12 @@ class TestClickHouseSchema:
         )
 
         assert (
-            "JSONHas(JSONExtractString(config), 'output', 'output', 'score')"
-            in CH_EVAL_SCORE_EXPR
-        ), "without the nested-score branch a structured output extracts as 0."
+            "JSONType(JSONExtractString(config), 'output', 'output', 'score') "
+            "IN ('Double', 'Int64', 'UInt64')" in CH_EVAL_SCORE_EXPR
+        ), (
+            "the nested-score branch must gate on the value's type: JSONHas is "
+            "true for a null or string score that JSONExtractFloat reads as 0."
+        )
         assert (
             "JSONExtractFloat(JSONExtractString(config), 'output', 'output'))"
             in CH_EVAL_SCORE_EXPR

@@ -1,12 +1,6 @@
 """Re-materialize ``usage_apicalllog.eval_score`` on rows already on disk.
 
 Sequence: DROP INDEX, MODIFY, ADD INDEX, MATERIALIZE COLUMN, MATERIALIZE INDEX.
-
-* ``MODIFY COLUMN`` is metadata-only and does not rewrite stored parts.
-* ``MATERIALIZE COLUMN`` does, but it is a mutation, so it cannot run on boot.
-* ``idx_eval_score`` keeps its pre-backfill bounds unless dropped and re-added
-  (``MATERIALIZE INDEX`` alone does not repair it), and a stale skip index
-  prunes granules, so eval_score filters return nothing at all.
 """
 
 from __future__ import annotations

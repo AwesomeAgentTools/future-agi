@@ -1,15 +1,13 @@
-"""Shared eval-output SQL expressions.
-
-A leaf module: ``schema.py`` and the query builders both read these, and
-``query_builders/__init__`` imports all 15 builder modules, so putting them
-there would pull that whole tree into ``schema.py`` at import time.
-"""
+"""Shared eval-output SQL, kept leaf-level so ``schema.py`` can import it."""
 
 # Structured evals nest their number here: {"score": 0.5, "choice": "Partial"}.
 EVAL_STRUCTURED_SCORE_KEY = "score"
 
 EVAL_TRUTHY_OUTPUTS = ("passed", "pass", "true", "1")
 EVAL_FALSY_OUTPUTS = ("failed", "fail", "false", "0")
+
+# JSONType names for a real number. A null or a string score is not scorable.
+EVAL_NUMERIC_JSON_TYPES = ("Double", "Int64", "UInt64")
 
 # A bare number rendered as text, e.g. "0.8".
 EVAL_NUMERIC_OUTPUT_PATTERN = "^-?[0-9]+\\.?[0-9]*$"
@@ -21,9 +19,12 @@ def sql_str_set(values: tuple[str, ...]) -> str:
 
 
 def eval_has_structured_score(json_args: str) -> str:
-    """SQL predicate: does this row's eval output carry a nested score?
+    """SQL predicate: does this row's eval output nest a NUMERIC score?
 
-    ``json_args`` is spliced into ``JSONHas(...)``: a column holding the
-    serialized output, or a comma-joined argument fragment.
+    Typed, not ``JSONHas``: the extractor beside it scores null/string as 0.
+    ``json_args`` is a column, or a comma-joined JSON argument fragment.
     """
-    return f"JSONHas({json_args}, '{EVAL_STRUCTURED_SCORE_KEY}')"
+    return (
+        f"(JSONType({json_args}, '{EVAL_STRUCTURED_SCORE_KEY}') "
+        f"IN {sql_str_set(EVAL_NUMERIC_JSON_TYPES)})"
+    )

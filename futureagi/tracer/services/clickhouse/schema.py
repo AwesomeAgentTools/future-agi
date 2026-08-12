@@ -1917,9 +1917,7 @@ POST_DDL_ALTERS: list[str] = [
     "ALTER TABLE usage_apicalllog ADD COLUMN IF NOT EXISTS "
     f"eval_score Float64 MATERIALIZED {CH_EVAL_SCORE_EXPR}",
     # ADD COLUMN IF NOT EXISTS no-ops once the column exists, so a deployed
-    # table keeps its old expression until MODIFYed. No DROP/ADD index
-    # sandwich here: Code 524 fires on a TYPE change, and the type is restated
-    # unchanged. Existing rows are backfilled by backfill_eval_score.
+    # table keeps its old expression until MODIFYed.
     "ALTER TABLE usage_apicalllog MODIFY COLUMN "
     f"eval_score Float64 MATERIALIZED {CH_EVAL_SCORE_EXPR}",
     # Restores idx_eval_score if a backfill run died between its DROP and ADD.
