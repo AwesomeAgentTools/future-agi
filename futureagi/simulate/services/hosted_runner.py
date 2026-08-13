@@ -484,7 +484,14 @@ def _build_voice_job(
             "simulator": _voice_simulator_config(dataset),
             "params": _voice_params(
                 transport_kind,
-                inbound=inbound,
+                # Force the simulator to open every conversation. An inbound
+                # target derives agent_first, but these targets wait for the
+                # caller and never send the opening turn, so the call dead-airs
+                # (0 turns). Until the SDK reliably captures a target-initiated
+                # greeting, the simulator opens for both directions — the
+                # pre-existing working behavior. `inbound` still drives SIP
+                # transport (_voice_transport_kind) above.
+                inbound=False,
                 case_count=len(dataset),
                 max_concurrency=_livekit_max_concurrency(credentials),
                 max_call_minutes=_max_call_minutes(simulator_agent),
