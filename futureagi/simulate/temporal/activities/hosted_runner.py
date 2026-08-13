@@ -76,6 +76,7 @@ async def build_runner_job(input: BuildRunnerJobInput) -> BuildRunnerJobOutput:
         run_test_id=input.run_test_id,
         scenario_ids=input.scenario_ids,
         mode=input.mode,
+        call_execution_ids=list(input.call_execution_ids or []),
     )
     return BuildRunnerJobOutput(
         job_id=job["job_id"],

@@ -16,6 +16,12 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
+from rest_framework import status
+from rest_framework.exceptions import NotFound
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
 from model_hub.models.api_key import ApiKey
 from model_hub.models.develop_dataset import Cell, Column, Row
 from model_hub.models.evals_metric import EvalTemplate
@@ -23,11 +29,6 @@ from model_hub.utils.function_eval_params import (
     normalize_eval_runtime_config,
     params_with_defaults_for_response,
 )
-from rest_framework import status
-from rest_framework.exceptions import NotFound
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.response import Response
-from rest_framework.views import APIView
 from simulate.models import (
     AgentDefinition,
     CallExecution,
@@ -6352,10 +6353,15 @@ def _hosted_execution_eligible(run_test) -> bool:
     return False
 
 
-def _dispatch_hosted_rerun(test_execution) -> str:
+def _dispatch_hosted_rerun(test_execution, call_execution_ids=None) -> str:
     """Re-dispatch a hosted execution's rerun via the simulation runner, reusing
     the existing TestExecution id. The reset CallExecution rows (PENDING, cleared
-    metadata) are adopted by the idempotent ALK ``/batch/`` ingestion."""
+    metadata — the ALK batch-claim gone) are re-adopted by the idempotent ALK
+    ``/batch/`` ingestion.
+
+    ``call_execution_ids`` scopes the rebuilt job to only those calls (a partial
+    or single-call rerun); the runner builds exactly their cases so the SDK's
+    positional case→row mapping matches the rows ``/batch`` re-adopts."""
     from simulate.services.hosted_runner import resolve_runner_mode
     from simulate.temporal.client import start_simulation_runner_workflow
 
@@ -6372,6 +6378,7 @@ def _dispatch_hosted_rerun(test_execution) -> str:
             if test_execution.simulator_agent_id
             else None
         ),
+        call_execution_ids=list(call_execution_ids or []),
     )
 
 
@@ -6468,12 +6475,22 @@ class CallExecutionRerunView(APIView):
                     id__in=call_execution_ids, test_execution=test_execution
                 )
 
-            # A hosted call_and_eval rerun re-runs the entire SDK job, so it must
-            # reset every row. Resetting only a selection would leave the runner's
-            # extra conversations to create duplicate rows during /batch adoption.
-            if is_hosted and rerun_type == "call_and_eval":
-                call_executions = CallExecution.objects.filter(
-                    test_execution=test_execution
+            # A hosted call_and_eval rerun reuses the SAME simulation-runner
+            # workflow id (USE_EXISTING); if the original is still running the
+            # rerun would attach to it instead of building a fresh scoped job.
+            # Only allow it once the execution is terminal.
+            if (
+                is_hosted
+                and rerun_type == "call_and_eval"
+                and test_execution.status
+                in (
+                    TestExecution.ExecutionStatus.RUNNING,
+                    TestExecution.ExecutionStatus.EVALUATING,
+                )
+            ):
+                return self._gm.bad_request(
+                    f"Cannot rerun a hosted execution while it is '{test_execution.status}'. "
+                    "Wait for it to finish, then rerun."
                 )
 
             if not call_executions.exists():
@@ -6511,15 +6528,22 @@ class CallExecutionRerunView(APIView):
                         )
 
                     else:  # call_and_eval
-                        # Rerun call + evaluations - clear call data (also resets
-                        # call_metadata, clearing the ALK batch-claim + CSAT
-                        # dispatch flags so the hosted re-run re-adopts + re-scores)
-                        self._clear_call_execution_data(call_execution)
-
-                        # Native path only: prepare_call reads CreateCallExecution
-                        # for system_prompt / voice_settings / phone. The hosted
-                        # runner ignores it and drives the released SDK instead.
-                        if not is_hosted:
+                        # Reset call data (snapshotting the prior result first).
+                        # Hosted MUST use the module-level reset: it clears
+                        # call_metadata — the ALK ``alk_batch_claimed`` claim plus
+                        # the CSAT/eval flags — so the re-run's /batch re-adopts the
+                        # row. The class-local reset (reset_to_default) leaves
+                        # call_metadata intact, so the claim survives and /batch
+                        # would find nothing to adopt (400 → "failed, no
+                        # transcript"). That reset is fine for the native path.
+                        if is_hosted:
+                            _clear_call_execution_data(call_execution)
+                        else:
+                            self._clear_call_execution_data(call_execution)
+                            # Native path only: prepare_call reads
+                            # CreateCallExecution for system_prompt / voice_settings
+                            # / phone. The hosted runner ignores it and drives the
+                            # released SDK instead.
                             _create_rerun_call_execution(call_execution)
 
                         # Mark as pending - will be launched via Temporal below
@@ -6619,7 +6643,9 @@ class CallExecutionRerunView(APIView):
                     # native → RerunCoordinatorWorkflow.
                     try:
                         if is_hosted:
-                            workflow_id = _dispatch_hosted_rerun(test_execution)
+                            workflow_id = _dispatch_hosted_rerun(
+                                test_execution, successful_reruns
+                            )
                             rerun_result = {
                                 "merged": False,
                                 "workflow_id": workflow_id,
@@ -7124,7 +7150,9 @@ class TestExecutionRerunView(APIView):
                     dispatch_error_message = None
                     try:
                         if is_hosted and not eval_only:
-                            workflow_id = _dispatch_hosted_rerun(test_execution)
+                            workflow_id = _dispatch_hosted_rerun(
+                                test_execution, successful_reruns
+                            )
                             rerun_result = {
                                 "merged": False,
                                 "workflow_id": workflow_id,

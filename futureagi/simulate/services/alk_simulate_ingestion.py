@@ -809,7 +809,7 @@ def _apply_payload(call_execution: CallExecution, payload: dict[str, Any]) -> No
 
         _aggregate_chat_metrics(call_execution)
         call_execution.save()
-        _deduct_alk_chat_cost_once(call_execution)
+        _deduct_alk_sim_cost_once(call_execution)
         return
 
     if (
@@ -837,6 +837,7 @@ def _apply_payload(call_execution: CallExecution, payload: dict[str, Any]) -> No
 
     _apply_conversation_metrics(call_execution)
     call_execution.save()
+    _deduct_alk_sim_cost_once(call_execution)
 
 
 _ALK_CHAT_SESSION_PREFIX = "alk-chat"
@@ -938,12 +939,19 @@ def _store_alk_chat_messages(
     return len(rows)
 
 
-def _deduct_alk_chat_cost_once(call_execution: CallExecution) -> None:
-    """Charge a chat run the same way native chat does (TestExecutor._deduct_call_cost:
-    text_call by turns/tokens + TEXT_CALL usage event). Guarded so a re-ingest of
-    the same result does not double-charge."""
+def _deduct_alk_sim_cost_once(call_execution: CallExecution) -> None:
+    """Charge an ALK-ingested sim run the same way native does
+    (TestExecutor._deduct_call_cost: text_call by turns/tokens, voice_call by
+    duration, each with its TEXT_CALL/VOICE_CALL usage event). Guarded so a
+    re-ingest of the same result does not double-charge; a voice call with no
+    billable duration is skipped, mirroring native deduct_call_cost."""
     meta = call_execution.call_metadata or {}
     if meta.get("cost_deducted"):
+        return
+    if (
+        call_execution.simulation_call_type == CallExecution.SimulationCallType.VOICE
+        and not call_execution.duration_seconds
+    ):
         return
     from simulate.services.test_executor import TestExecutor
 
@@ -951,7 +959,7 @@ def _deduct_alk_chat_cost_once(call_execution: CallExecution) -> None:
         TestExecutor._deduct_call_cost(call_execution)
     except Exception:
         logger.exception(
-            "alk_chat_cost_deduct_failed", call_execution_id=str(call_execution.id)
+            "alk_sim_cost_deduct_failed", call_execution_id=str(call_execution.id)
         )
         return
     meta["cost_deducted"] = True

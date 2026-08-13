@@ -42,6 +42,7 @@ class SimulationRunnerWorkflow:
                     scenario_ids=input.scenario_ids,
                     mode=input.mode,
                     simulator_id=input.simulator_id,
+                    call_execution_ids=input.call_execution_ids,
                 ),
                 start_to_close_timeout=timedelta(minutes=2),
                 retry_policy=DB_RETRY_POLICY,

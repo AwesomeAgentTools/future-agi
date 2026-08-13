@@ -547,6 +547,64 @@ class TestResultIngest:
         # Duration backfilled from the last transcript offset (15000 ms).
         assert call.duration_seconds == 15
 
+    def test_voice_ingest_emits_voice_call_billing_once(self, auth_client, run_test):
+        """A completed voice call charges once through TestExecutor._deduct_call_cost
+        (the same path native voice uses to emit the VOICE_CALL usage event); a
+        re-ingest of the same result must not double-charge."""
+        _, call_ids = _start_and_batch(auth_client, run_test)
+        call_id = call_ids[0]
+        body = {"status": "completed", "transcript": _transcript_payload()}
+
+        with patch(
+            "simulate.services.test_executor.TestExecutor._deduct_call_cost"
+        ) as deduct:
+            resp = auth_client.patch(
+                f"{ALK_BASE}/call-executions/{call_id}/result/", body, format="json"
+            )
+            assert resp.status_code == 200, resp.content
+            assert deduct.call_count == 1
+            assert str(deduct.call_args[0][0].id) == str(call_id)
+
+            # Re-ingest of the same terminal result must not charge again.
+            resp2 = auth_client.patch(
+                f"{ALK_BASE}/call-executions/{call_id}/result/", body, format="json"
+            )
+            assert resp2.status_code == 200, resp2.content
+            assert deduct.call_count == 1
+
+        call = CallExecution.objects.get(id=call_id)
+        assert (call.call_metadata or {}).get("cost_deducted") is True
+        assert call.duration_seconds == 15
+
+    def test_hosted_rerun_reset_clears_batch_claim_for_readoption(
+        self, auth_client, run_test
+    ):
+        """The hosted rerun reset must clear call_metadata['alk_batch_claimed'] so
+        /batch re-adopts the row. reset_to_default leaves it — which made hosted
+        reruns 400 ('failed, no transcript'); the module-level reset clears it."""
+        from simulate.services.alk_simulate_ingestion import (
+            create_alk_sim_call_execution_batch,
+        )
+        from simulate.views.run_test import _clear_call_execution_data
+
+        te_id, call_ids = _start_and_batch(auth_client, run_test)
+        call = CallExecution.objects.get(id=call_ids[0])
+        # First run finished: the row is terminal AND still claimed by /batch.
+        assert (call.call_metadata or {}).get("alk_batch_claimed") is True
+        call.status = CallExecution.CallStatus.COMPLETED
+        call.save(update_fields=["status"])
+
+        _clear_call_execution_data(call)
+
+        call.refresh_from_db()
+        assert call.status == CallExecution.CallStatus.PENDING
+        assert "alk_batch_claimed" not in (call.call_metadata or {})
+
+        # /batch now re-adopts the reset row instead of raising nothing-to-create.
+        execution = SimTestExecution.objects.get(id=te_id)
+        batch = create_alk_sim_call_execution_batch(execution)
+        assert str(call.id) in [str(cid) for cid in batch.call_execution_ids]
+
     def test_ingest_writes_token_usage_from_provider_data(self, auth_client, run_test):
         _, call_ids = _start_and_batch(auth_client, run_test)
         call_id = call_ids[0]
@@ -1108,6 +1166,90 @@ class TestBuildVoiceRunnerJob:
         )
         assert deadline <= 0.9 * HOSTED_RUNNER_MAX_DURATION_SECONDS
 
+    def test_rerun_scopes_job_to_selected_calls(
+        self, organization, workspace, simulator_agent
+    ):
+        """A scoped rerun (call_execution_ids) builds ONLY those calls' cases, in
+        canonical (scenario, row) order regardless of request order — so the
+        SDK's positional case→row mapping still lines up with exactly the rows
+        that ALK /batch re-adopts. An id outside the execution is rejected."""
+        import uuid as _uuid
+
+        from model_hub.models.choices import DatasetSourceChoices, SourceChoices
+        from model_hub.models.develop_dataset import Cell, Column, Dataset, Row
+        from simulate.services.alk_simulate_ingestion import (
+            create_alk_sim_call_execution_batch,
+            create_alk_sim_test_execution,
+            precreate_alk_sim_call_executions,
+        )
+        from simulate.services.hosted_runner import (
+            HostedRunnerBuildError,
+            build_start_runner_job,
+        )
+
+        agent = self._voice_agent(
+            organization, workspace, provider="vapi", assistant_id="asst_123"
+        )
+        dataset = Dataset.no_workspace_objects.create(
+            name="four hosted cases",
+            organization=organization,
+            workspace=workspace,
+            source=DatasetSourceChoices.SCENARIO.value,
+        )
+        columns = {
+            name: Column.objects.create(
+                dataset=dataset,
+                name=name,
+                data_type="persona" if name == "persona" else "text",
+                source=SourceChoices.OTHERS.value,
+            )
+            for name in ("persona", "situation", "outcome")
+        }
+        for index in range(4):
+            row = Row.objects.create(dataset=dataset, order=index)
+            for name, value in {
+                "persona": str({"name": f"Customer {index}"}),
+                "situation": f"Situation {index}",
+                "outcome": f"Outcome {index}",
+            }.items():
+                Cell.objects.create(
+                    dataset=dataset, column=columns[name], row=row, value=value
+                )
+
+        scenario = self._scenario(organization, workspace, agent, simulator_agent)
+        scenario.dataset = dataset
+        scenario.save(update_fields=["dataset"])
+        run_test = self._run_test(
+            organization, workspace, agent, simulator_agent, scenario
+        )
+        execution = create_alk_sim_test_execution(run_test)
+        precreated_ids = precreate_alk_sim_call_executions(execution)
+        create_alk_sim_call_execution_batch(execution)
+        assert len(precreated_ids) == 4
+
+        # Select rows 3 and 1 (out of 0..3), given out of order on purpose.
+        selected = [precreated_ids[3], precreated_ids[1]]
+        job = build_start_runner_job(
+            test_execution_id=str(execution.id),
+            run_test_id=str(run_test.id),
+            scenario_ids=[str(scenario.id)],
+            mode="voice_webrtc",
+            call_execution_ids=selected,
+        )
+        cases = job["voice"]["scenario"]["dataset"]
+        # Exactly the two selected cases, in canonical row order (1 then 3).
+        assert [c["persona"]["name"] for c in cases] == ["Customer 1", "Customer 3"]
+
+        # An id outside the execution is rejected (guards the positional map).
+        with pytest.raises(HostedRunnerBuildError):
+            build_start_runner_job(
+                test_execution_id=str(execution.id),
+                run_test_id=str(run_test.id),
+                scenario_ids=[str(scenario.id)],
+                mode="voice_webrtc",
+                call_execution_ids=[str(_uuid.uuid4())],
+            )
+
     def test_builds_sip_outbound_job(self, organization, workspace, simulator_agent):
         from django.test import override_settings
 
@@ -1191,6 +1333,36 @@ class TestHostedRunnerActivityHelpers:
             _voice_params("webrtc", inbound=False)["conversation_direction"]
             == "simulator_first"
         )
+
+    def test_resolve_agent_inbound_prefers_version_snapshot(self):
+        """The per-version configuration_snapshot['inbound'] (what the UI toggle
+        writes) wins over the stale AgentDefinition.inbound column, matching the
+        native TestExecutor dynamic-prompt precedence."""
+        from types import SimpleNamespace
+
+        from simulate.services.hosted_runner import _resolve_agent_inbound
+
+        agent_def_outbound = SimpleNamespace(inbound=False)
+        agent_def_inbound = SimpleNamespace(inbound=True)
+
+        # Snapshot True overrides a stale outbound column (the bug we hit).
+        version = SimpleNamespace(configuration_snapshot={"inbound": True})
+        assert _resolve_agent_inbound(version, agent_def_outbound) is True
+
+        # String "false" must not be truthy (bool("false") is True).
+        version = SimpleNamespace(configuration_snapshot={"inbound": "false"})
+        assert _resolve_agent_inbound(version, agent_def_inbound) is False
+        version = SimpleNamespace(configuration_snapshot={"inbound": "true"})
+        assert _resolve_agent_inbound(version, agent_def_outbound) is True
+
+        # Snapshot missing the key → fall back to the AgentDefinition column.
+        version = SimpleNamespace(configuration_snapshot={})
+        assert _resolve_agent_inbound(version, agent_def_outbound) is False
+        assert _resolve_agent_inbound(version, agent_def_inbound) is True
+
+        # No version at all → column fallback (default inbound when absent).
+        assert _resolve_agent_inbound(None, agent_def_outbound) is False
+        assert _resolve_agent_inbound(None, SimpleNamespace()) is True
 
     """The DID pool is touched only for sip_inbound (mirrors _needs_phone)."""
 

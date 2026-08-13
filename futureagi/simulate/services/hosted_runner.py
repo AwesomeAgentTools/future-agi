@@ -29,7 +29,7 @@ import structlog
 from django.conf import settings
 
 from model_hub.models.develop_dataset import Cell, Row
-from simulate.models import AgentDefinition, Scenarios, TestExecution
+from simulate.models import AgentDefinition, CallExecution, Scenarios, TestExecution
 
 logger = structlog.get_logger(__name__)
 
@@ -145,6 +145,7 @@ def build_start_runner_job(
     run_test_id: str,
     scenario_ids: list[str],
     mode: str = "chat",
+    call_execution_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     if mode != _CHAT_MODE and mode not in _VOICE_MODES:
         raise HostedRunnerBuildError(f"unsupported runner mode: {mode}")
@@ -152,6 +153,7 @@ def build_start_runner_job(
     test_execution = TestExecution.objects.select_related(
         "run_test",
         "run_test__agent_definition",
+        "run_test__agent_version",
         "run_test__simulator_agent",
         "agent_version",
         "simulator_agent",
@@ -166,6 +168,35 @@ def build_start_runner_job(
     if not scenarios:
         raise HostedRunnerBuildError("no scenarios available for the runner job")
 
+    # Rerun scope: when specific calls are requested, build only their cases,
+    # keyed the way ALK /batch adopts rows — (scenario_id, row_id) in canonical
+    # scenario→row order — so the SDK's positional case→row mapping still lines
+    # up with exactly the rows /batch hands back. A rerun also picks up the
+    # RunTest's currently-selected agent version (the version pinned on the
+    # execution can be stale after a later edit).
+    selected_keys: set[tuple[str, str | None]] | None = None
+    agent_version = test_execution.agent_version
+    if call_execution_ids:
+        requested = {str(cid) for cid in call_execution_ids}
+        selected_calls = list(
+            CallExecution.objects.filter(
+                id__in=requested, test_execution=test_execution
+            ).only("id", "scenario_id", "row_id")
+        )
+        if len(selected_calls) != len(requested):
+            raise HostedRunnerBuildError(
+                "one or more selected call executions do not belong to the execution"
+            )
+        selected_keys = {
+            (str(call.scenario_id), str(call.row_id) if call.row_id else None)
+            for call in selected_calls
+        }
+        agent_version = (
+            run_test.agent_version
+            or test_execution.agent_version
+            or getattr(agent_definition, "latest_version", None)
+        )
+
     run_id = str(test_execution.id)
 
     if mode in _VOICE_MODES:
@@ -175,9 +206,10 @@ def build_start_runner_job(
             run_id=run_id,
             run_test=run_test,
             agent_definition=agent_definition,
-            agent_version=test_execution.agent_version,
+            agent_version=agent_version,
             scenarios=scenarios,
             simulator_agent=simulator_agent,
+            selected_keys=selected_keys,
         )
 
     adapter, world_kind = _MODE_TO_ENVIRONMENT[mode]
@@ -201,7 +233,7 @@ def build_start_runner_job(
         },
         "scenario": {
             "name": run_test.name or "hosted-run",
-            "dataset": _personas_for_scenarios(scenarios),
+            "dataset": _personas_for_scenarios(scenarios, selected_keys=selected_keys),
         },
         "evidence": {"sources": [], "required_capabilities": []},
         "metadata": {
@@ -251,13 +283,21 @@ def _persona_for_scenario(scenario: Scenarios) -> dict[str, Any]:
     }
 
 
-def _personas_for_scenarios(scenarios: list[Scenarios]) -> list[dict[str, Any]]:
+def _personas_for_scenarios(
+    scenarios: list[Scenarios],
+    selected_keys: set[tuple[str, str | None]] | None = None,
+) -> list[dict[str, Any]]:
     """Expand dataset scenarios into one SDK test case per platform row.
 
     The ALK sink allocates CallExecutions in scenario order and then dataset-row
     order. The hosted job must use that same order: otherwise a ten-row scenario
     allocates ten calls but the SDK submits only one report, leaving nine calls
     permanently pending.
+
+    ``selected_keys`` (rerun scope) filters to only the given
+    ``(scenario_id, row_id)`` cases while preserving that canonical order, so a
+    partial rerun's job cases line up positionally with the exact rows ALK
+    ``/batch`` re-adopts. ``None`` builds every case (a full run).
     """
     dataset_ids = [scenario.dataset_id for scenario in scenarios if scenario.dataset_id]
     rows_by_dataset: dict[Any, list[Row]] = defaultdict(list)
@@ -271,10 +311,14 @@ def _personas_for_scenarios(scenarios: list[Scenarios]) -> list[dict[str, Any]]:
     ):
         values_by_row[cell.row_id][cell.column.name] = cell.value
 
+    def _selected(key: tuple[str, str | None]) -> bool:
+        return selected_keys is None or key in selected_keys
+
     personas: list[dict[str, Any]] = []
     for scenario in scenarios:
         if not scenario.dataset_id:
-            personas.append(_persona_for_scenario(scenario))
+            if _selected((str(scenario.id), None)):
+                personas.append(_persona_for_scenario(scenario))
             continue
 
         scenario_rows = rows_by_dataset.get(scenario.dataset_id, [])
@@ -282,9 +326,16 @@ def _personas_for_scenarios(scenarios: list[Scenarios]) -> list[dict[str, Any]]:
             raise HostedRunnerBuildError(
                 f"scenario {scenario.id} has a dataset with no rows"
             )
-        personas.extend(
-            _persona_for_dataset_row(scenario, values_by_row[row.id])
-            for row in scenario_rows
+        for row in scenario_rows:
+            if _selected((str(scenario.id), str(row.id))):
+                personas.append(
+                    _persona_for_dataset_row(scenario, values_by_row[row.id])
+                )
+
+    if selected_keys is not None and len(personas) != len(selected_keys):
+        raise HostedRunnerBuildError(
+            "selected call executions could not be mapped one-to-one to runner "
+            f"cases (matched {len(personas)} of {len(selected_keys)})"
         )
     return personas
 
@@ -395,11 +446,13 @@ def _build_voice_job(
     agent_version,
     scenarios: list[Scenarios],
     simulator_agent=None,
+    selected_keys: set[tuple[str, str | None]] | None = None,
 ) -> dict[str, Any]:
     credentials = _voice_credentials(agent_definition, agent_version)
     provider = _voice_provider(agent_definition, credentials)
-    transport_kind = _voice_transport_kind(agent_definition, provider)
-    dataset = _personas_for_scenarios(scenarios)
+    inbound = _resolve_agent_inbound(agent_version, agent_definition)
+    transport_kind = _voice_transport_kind(agent_definition, provider, inbound)
+    dataset = _personas_for_scenarios(scenarios, selected_keys=selected_keys)
 
     if (transport_kind in {"sip_inbound", "sip_outbound"}) != (mode == _VOICE_SIP_MODE):
         raise HostedRunnerBuildError(
@@ -431,7 +484,7 @@ def _build_voice_job(
             "simulator": _voice_simulator_config(dataset),
             "params": _voice_params(
                 transport_kind,
-                inbound=bool(agent_definition.inbound),
+                inbound=inbound,
                 case_count=len(dataset),
                 max_concurrency=_livekit_max_concurrency(credentials),
                 max_call_minutes=_max_call_minutes(simulator_agent),
@@ -482,13 +535,34 @@ def _voice_provider(agent_definition, credentials) -> str:
     return str(provider).strip().lower()
 
 
-def _voice_transport_kind(agent_definition, provider: str) -> str:
+def _resolve_agent_inbound(agent_version, agent_definition) -> bool:
+    """Resolve the agent's inbound/outbound intent the way native does.
+
+    Mirrors the TestExecutor dynamic-prompt precedence: prefer the per-version
+    ``configuration_snapshot['inbound']`` the UI toggle writes, fall back to the
+    ``AgentDefinition.inbound`` column, default inbound. The bare column is stale
+    for versioned edits (the toggle only updates the snapshot), so the job
+    direction must read the snapshot first — otherwise an inbound agent runs
+    ``simulator_first`` while ingestion already treats it as inbound.
+    """
+    raw_inbound = None
+    snapshot = getattr(agent_version, "configuration_snapshot", None) or {}
+    if isinstance(snapshot, dict):
+        raw_inbound = snapshot.get("inbound", None)
+    if raw_inbound is None:
+        raw_inbound = getattr(agent_definition, "inbound", True)
+    if isinstance(raw_inbound, str):
+        return raw_inbound.strip().lower() == "true"
+    return bool(raw_inbound)
+
+
+def _voice_transport_kind(agent_definition, provider: str, inbound: bool) -> str:
     if _target_uses_phone(agent_definition):
         # From the target agent's perspective: an inbound agent receives the
         # call, so the simulator dials out to it (sip_outbound); an outbound
         # agent places the call, so it dials the simulator's leased DID
         # (sip_inbound). Mirrors the native is_outbound gate.
-        return "sip_outbound" if agent_definition.inbound else "sip_inbound"
+        return "sip_outbound" if inbound else "sip_inbound"
     return _provider_profile(provider)["web_transport_kind"]
 
 

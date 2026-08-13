@@ -104,12 +104,16 @@ def start_simulation_runner_workflow(
     scenario_ids: list[str],
     mode: str = "chat",
     simulator_id: str | None = None,
+    call_execution_ids: list[str] | None = None,
 ) -> str:
     """Start a hosted SimulationRunnerWorkflow from sync Django code.
 
     Unlike ``start_test_execution_workflow`` this does not launch native
     per-call workflows — it dispatches the released SDK to the simulation-runner
     worker, which submits results back through the ALK ingestion API.
+
+    ``call_execution_ids`` scopes a rerun to only the given calls (the job builds
+    just their cases); omit it for a full-execution run.
     """
     return async_to_sync(_start_simulation_runner_workflow_async)(
         test_execution_id=test_execution_id,
@@ -118,6 +122,7 @@ def start_simulation_runner_workflow(
         scenario_ids=scenario_ids,
         mode=mode,
         simulator_id=simulator_id,
+        call_execution_ids=call_execution_ids,
     )
 
 
@@ -128,6 +133,7 @@ async def _start_simulation_runner_workflow_async(
     scenario_ids: list[str],
     mode: str = "chat",
     simulator_id: str | None = None,
+    call_execution_ids: list[str] | None = None,
 ) -> str:
     from temporalio.common import WorkflowIDConflictPolicy, WorkflowIDReusePolicy
 
@@ -149,6 +155,7 @@ async def _start_simulation_runner_workflow_async(
             scenario_ids=scenario_ids,
             mode=mode,
             simulator_id=simulator_id,
+            call_execution_ids=list(call_execution_ids or []),
         ),
         id=workflow_id,
         task_queue=QUEUE_RUNNER,

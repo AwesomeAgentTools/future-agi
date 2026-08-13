@@ -17,6 +17,9 @@ class SimulationRunnerInput:
     scenario_ids: list[str] = field(default_factory=list)
     mode: str = "chat"
     simulator_id: str | None = None
+    # Rerun scope: when non-empty, the job builds only the cases for these
+    # CallExecution ids (single/partial rerun). Empty ⇒ the whole execution.
+    call_execution_ids: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -35,6 +38,7 @@ class BuildRunnerJobInput:
     scenario_ids: list[str]
     mode: str
     simulator_id: str | None = None
+    call_execution_ids: list[str] = field(default_factory=list)
 
 
 @dataclass
