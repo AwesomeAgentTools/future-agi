@@ -140,14 +140,32 @@ class FalconLLMClient:
         payload = {
             "model": self.model,
             "messages": messages,
-            "tools": tools or [],
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
             "stream": True,
             "stream_options": {"include_usage": True},
         }
+        if tools:
+            # Flatten $defs/$ref — Vertex/Gemini (a managed gateway target)
+            # rejects JSON-Schema refs, mirroring _stream_openai. Without this
+            # the gateway returns 400 on tool-carrying managed calls.
+            try:
+                payload["tools"] = _inline_refs(tools)
+            except Exception:
+                logger.warning(
+                    "tool_schema_flatten_failed_fallback_to_raw", exc_info=True
+                )
+                payload["tools"] = tools
+        else:
+            payload["tools"] = []
         if self.response_format:
-            payload["response_format"] = self.response_format
+            try:
+                payload["response_format"] = _inline_refs(self.response_format)
+            except Exception:
+                logger.warning(
+                    "response_format_flatten_failed_fallback_to_raw", exc_info=True
+                )
+                payload["response_format"] = self.response_format
 
         async for chunk in stream_chat_completion(payload):
             metadata = chunk.get("agentcc_metadata")
