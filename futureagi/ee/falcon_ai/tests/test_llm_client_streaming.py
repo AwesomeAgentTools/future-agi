@@ -120,6 +120,44 @@ async def test_managed_stream_forwards_incremental_tool_calls_usage_and_metadata
 
 
 @pytest.mark.asyncio
+async def test_managed_stream_inlines_ref_tool_schemas():
+    import json
+
+    captured = {}
+
+    async def managed_stream(payload):
+        captured["payload"] = payload
+        yield {"choices": [{"delta": {}, "finish_reason": "stop"}]}
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "make_agent",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"cfg": {"$ref": "#/$defs/Cfg"}},
+                    "$defs": {"Cfg": {"type": "object"}},
+                },
+            },
+        }
+    ]
+
+    with patch(
+        "ee.licensing.managed_ai.stream_chat_completion",
+        new=managed_stream,
+    ):
+        async for _ in FalconLLMClient().stream_completion(
+            [{"role": "user", "content": "go"}], tools=tools
+        ):
+            pass
+
+    serialized = json.dumps(captured["payload"]["tools"])
+    assert "$ref" not in serialized
+    assert "$defs" not in serialized
+
+
+@pytest.mark.asyncio
 async def test_managed_stream_normalizes_length_finish_reason():
     async def managed_stream(payload):
         yield {"choices": [{"delta": {}, "finish_reason": "length"}]}
