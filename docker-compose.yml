@@ -306,10 +306,10 @@ services:
       GOOGLE_CLOUD_LOCATION: global
       SIMULATOR_LLM_PROVIDER: vertex
       SIMULATOR_LLM_MODEL: gemini-3.1-flash-lite
-      # Streaming Gemini TTS (multilingual incl Arabic; ~1.2s first-byte).
-      # deepgram aura-2 was English-only + 400'd on non-English personas.
-      SIMULATOR_TTS_PROVIDER: gemini
-      SIMULATOR_TTS_MODEL: gemini-3.1-flash-tts-preview
+      # TTS is chosen per persona language by the hosted runner
+      # (_voice_simulator_config): English -> Deepgram aura-2-andromeda-en,
+      # other/unknown -> streaming Gemini (multilingual). Set
+      # SIMULATOR_TTS_PROVIDER / SIMULATOR_TTS_MODEL here to force one engine.
     volumes:
       # Runner image lacks the key (only the backend image has it); mount it.
       - ${GOOGLE_APPLICATION_CREDENTIALS:-/dev/null}:/app/backend/Vertex_AI_Creds.json:ro

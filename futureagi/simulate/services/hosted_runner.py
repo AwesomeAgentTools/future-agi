@@ -704,15 +704,20 @@ def _voice_simulator_config(
     if language:
         stt["language"] = language
 
-    # The simulator must SPEAK the persona's language. Deepgram Aura-2 (the old
-    # default) is English-only, so a non-English persona came out as English
-    # gibberish the target couldn't understand and the call died after the
-    # opener. Use Cartesia Sonic-3 (multilingual) as the default sim voice so any
-    # persona language is voiced natively; env overrides
-    # (SIMULATOR_TTS_PROVIDER / SIMULATOR_TTS_MODEL) still win.
+    # The simulator must SPEAK the persona's language, so the hosted runner
+    # picks the voice model per language (the SDK just builds whatever provider
+    # it is handed). English keeps Deepgram Aura-2 andromeda (cheaper, natural);
+    # every other/unknown language uses the multilingual streaming Gemini voice,
+    # because Deepgram Aura-2 is English-only and a non-English persona would
+    # otherwise come out as English gibberish. Env overrides
+    # (SIMULATOR_TTS_PROVIDER / SIMULATOR_TTS_MODEL) still win per field.
+    if _is_english_language(language):
+        default_tts_provider, default_tts_model = "deepgram", "aura-2-andromeda-en"
+    else:
+        default_tts_provider, default_tts_model = "gemini", "gemini-3.1-flash-tts-preview"
     tts = {
-        "provider": _voice_setting("SIMULATOR_TTS_PROVIDER") or "cartesia",
-        "model": _voice_setting("SIMULATOR_TTS_MODEL") or "sonic-3",
+        "provider": _voice_setting("SIMULATOR_TTS_PROVIDER") or default_tts_provider,
+        "model": _voice_setting("SIMULATOR_TTS_MODEL") or default_tts_model,
     }
 
     return {
@@ -727,6 +732,16 @@ def _voice_simulator_config(
         "stt": stt,
         "tts": tts,
     }
+
+
+def _is_english_language(language: str | None) -> bool:
+    """Only a language explicitly resolved to English routes to Deepgram; an
+    unknown/unset or ``multi`` language uses the multilingual Gemini voice
+    (routing English gibberish to a non-English persona is the failure to
+    avoid, so unknown defaults to multilingual)."""
+    if not language:
+        return False
+    return language.strip().lower().replace("_", "-").split("-")[0] == "en"
 
 
 def _dataset_language(dataset: list[dict[str, Any]] | None) -> str | None:

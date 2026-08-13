@@ -4428,10 +4428,10 @@ class TestExecutor:
         """
         transcript_data = {
             "transcript": "",
-            "voice_recording": "",
+            "voice_recording": call_execution.recording_url or "",
             "assistant_recording": "",
             "customer_recording": "",
-            "stereo_recording": "",
+            "stereo_recording": call_execution.stereo_recording_url or "",
             "user_chat_transcript": "",
             "assistant_chat_transcript": "",
         }
@@ -4593,6 +4593,24 @@ class TestExecutor:
                 if (provider_key and call_execution.provider_call_data)
                 else None
             )
+
+            for provider_data in (call_execution.provider_call_data or {}).values():
+                if not isinstance(provider_data, dict):
+                    continue
+                normalized_recording = provider_data.get("recording", {})
+                if not isinstance(normalized_recording, dict):
+                    continue
+                for key, transcript_key in (
+                    ("assistant", "assistant_recording"),
+                    ("customer", "customer_recording"),
+                    ("stereo", "stereo_recording"),
+                    ("combined", "voice_recording"),
+                ):
+                    if (
+                        normalized_recording.get(key)
+                        and not transcript_data[transcript_key]
+                    ):
+                        transcript_data[transcript_key] = normalized_recording[key]
 
             recording_urls = self.voice_service_manager.get_recording_urls(
                 provider_payload
