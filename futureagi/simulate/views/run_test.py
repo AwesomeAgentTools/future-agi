@@ -6177,7 +6177,14 @@ def _clear_call_execution_data(call_execution):
     call_execution.ai_interruption_rate = None
     call_execution.avg_stop_time_after_interruption_ms = None
     call_execution.conversation_metrics_data = None
-    call_execution.call_metadata = {}
+    # Keep the dataset row linkage: the results grid resolves each call's
+    # Scenario Information cells via row_id. Everything else (the ALK
+    # alk_batch_claimed claim, eval flags) is intentionally dropped so /batch
+    # re-adopts the row.
+    _preserved_row_id = (call_execution.call_metadata or {}).get("row_id")
+    call_execution.call_metadata = (
+        {"row_id": _preserved_row_id} if _preserved_row_id else {}
+    )
     call_execution.save()
 
 
