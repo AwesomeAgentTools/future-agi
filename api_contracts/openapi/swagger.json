@@ -49078,6 +49078,60 @@
                 }
             ]
         },
+        "/simulate/api/alk-simulate/run-tests/provision/": {
+            "post": {
+                "operationId": "simulate_api_alk-simulate_run-tests_provision_run_test",
+                "description": "Stand up a chat RunTest + scenario-of-record from SDK personas so an\nSDK-first run has somewhere to post — without the native UI's async\nscenario generation. See ``provision_alk_sim_run_test``.",
+                "parameters": [
+                    {
+                        "name": "data",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/ALKSimulateProvisionRunTestRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ALKSimulateProvisionResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiTextErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiTextErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiTextErrorResponse"
+                        }
+                    },
+                    "default": {
+                        "description": "Default error response",
+                        "schema": {
+                            "$ref": "#/definitions/ManagementAPIErrorResponse"
+                        }
+                    }
+                },
+                "tags": [
+                    "simulate"
+                ],
+                "x-runtime-request-validation": true,
+                "x-runtime-response-validation": true
+            },
+            "parameters": []
+        },
         "/simulate/api/alk-simulate/run-tests/{run_test_id}/test-executions/": {
             "post": {
                 "operationId": "simulate_api_alk-simulate_run-tests_start_test_execution",
@@ -113226,6 +113280,21 @@
                     "maximum": 1.0,
                     "minimum": 0.0,
                     "x-nullable": true
+                },
+                "latency_ms": {
+                    "title": "Latency ms",
+                    "type": "integer",
+                    "minimum": 0,
+                    "x-nullable": true
+                },
+                "tool_calls": {
+                    "title": "Tool calls",
+                    "type": "object"
+                },
+                "tool_call_id": {
+                    "title": "Tool call id",
+                    "type": "string",
+                    "maxLength": 255
                 }
             }
         },
@@ -113373,6 +113442,118 @@
                 },
                 "result": {
                     "$ref": "#/definitions/ALKSimulateResultOutcome"
+                }
+            }
+        },
+        "ALKSimulateProvisionPersona": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "title": "Name",
+                    "type": "string",
+                    "maxLength": 255
+                },
+                "role": {
+                    "title": "Role",
+                    "type": "string",
+                    "maxLength": 255
+                },
+                "situation": {
+                    "title": "Situation",
+                    "type": "string"
+                },
+                "outcome": {
+                    "title": "Outcome",
+                    "type": "string"
+                },
+                "persona": {
+                    "title": "Persona",
+                    "type": "object"
+                }
+            }
+        },
+        "ALKSimulateProvisionRunTestRequest": {
+            "required": [
+                "name"
+            ],
+            "type": "object",
+            "properties": {
+                "name": {
+                    "title": "Name",
+                    "type": "string",
+                    "maxLength": 255,
+                    "minLength": 1
+                },
+                "description": {
+                    "title": "Description",
+                    "type": "string"
+                },
+                "personas": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/ALKSimulateProvisionPersona"
+                    }
+                },
+                "scenario_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "format": "uuid"
+                    }
+                },
+                "agent_definition_id": {
+                    "title": "Agent definition id",
+                    "type": "string",
+                    "format": "uuid",
+                    "x-nullable": true
+                },
+                "agent_name": {
+                    "title": "Agent name",
+                    "type": "string",
+                    "maxLength": 255
+                }
+            }
+        },
+        "ALKSimulateProvisionResult": {
+            "required": [
+                "run_test_id",
+                "scenario_ids",
+                "agent_definition_id"
+            ],
+            "type": "object",
+            "properties": {
+                "run_test_id": {
+                    "title": "Run test id",
+                    "type": "string",
+                    "format": "uuid"
+                },
+                "scenario_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "format": "uuid"
+                    }
+                },
+                "agent_definition_id": {
+                    "title": "Agent definition id",
+                    "type": "string",
+                    "format": "uuid"
+                }
+            }
+        },
+        "ALKSimulateProvisionResponse": {
+            "required": [
+                "result"
+            ],
+            "type": "object",
+            "properties": {
+                "status": {
+                    "title": "Status",
+                    "type": "boolean",
+                    "default": true
+                },
+                "result": {
+                    "$ref": "#/definitions/ALKSimulateProvisionResult"
                 }
             }
         },

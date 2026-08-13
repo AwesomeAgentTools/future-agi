@@ -15629,6 +15629,8 @@ export const ALKSimulateTranscriptSegmentApiSpeakerRole = {
   unknown: 'unknown',
 } as const;
 
+export type ALKSimulateTranscriptSegmentApiToolCalls = { [key: string]: unknown };
+
 export interface ALKSimulateTranscriptSegmentApi {
   speaker_role: ALKSimulateTranscriptSegmentApiSpeakerRole;
   content: string;
@@ -15641,6 +15643,11 @@ export interface ALKSimulateTranscriptSegmentApi {
      * @maximum 1
      */
   confidence_score?: number;
+  /** @minimum 0 */
+  latency_ms?: number;
+  tool_calls?: ALKSimulateTranscriptSegmentApiToolCalls;
+  /** @maxLength 255 */
+  tool_call_id?: string;
 }
 
 export interface ALKSimulateCostBreakdownApi {
@@ -15681,6 +15688,43 @@ export interface ALKSimulateResultOutcomeApi {
 export interface ALKSimulateResultResponseApi {
   status?: boolean;
   result: ALKSimulateResultOutcomeApi;
+}
+
+export type ALKSimulateProvisionPersonaApiPersona = { [key: string]: unknown };
+
+export interface ALKSimulateProvisionPersonaApi {
+  /** @maxLength 255 */
+  name?: string;
+  /** @maxLength 255 */
+  role?: string;
+  situation?: string;
+  outcome?: string;
+  persona?: ALKSimulateProvisionPersonaApiPersona;
+}
+
+export interface ALKSimulateProvisionRunTestRequestApi {
+  /**
+     * @minLength 1
+     * @maxLength 255
+     */
+  name: string;
+  description?: string;
+  personas?: ALKSimulateProvisionPersonaApi[];
+  scenario_ids?: string[];
+  agent_definition_id?: string;
+  /** @maxLength 255 */
+  agent_name?: string;
+}
+
+export interface ALKSimulateProvisionResultApi {
+  run_test_id: string;
+  scenario_ids: string[];
+  agent_definition_id: string;
+}
+
+export interface ALKSimulateProvisionResponseApi {
+  status?: boolean;
+  result: ALKSimulateProvisionResultApi;
 }
 
 export interface ALKSimulateStartTestExecutionRequestApi {

@@ -5,7 +5,7 @@
 export const OPENAPI_CONTRACT = Object.freeze({
   "generatedFrom": "api_contracts/openapi/swagger.json",
   "swaggerVersion": "2.0",
-  "endpointCount": 982,
+  "endpointCount": 983,
   "endpoints": {
     "/accounts/2fa/recovery-codes/": {
       "get": {
@@ -27245,6 +27245,34 @@ export const OPENAPI_CONTRACT = Object.freeze({
         }
       }
     },
+    "/simulate/api/alk-simulate/run-tests/provision/": {
+      "post": {
+        "operationId": "simulate_api_alk-simulate_run-tests_provision_run_test",
+        "runtimeRequestValidation": true,
+        "runtimeResponseValidation": true,
+        "requestBody": {
+          "$ref": "#/definitions/ALKSimulateProvisionRunTestRequest"
+        },
+        "queryParameters": {},
+        "responses": {
+          "200": {
+            "$ref": "#/definitions/ALKSimulateProvisionResponse"
+          },
+          "400": {
+            "$ref": "#/definitions/ApiTextErrorResponse"
+          },
+          "404": {
+            "$ref": "#/definitions/ApiTextErrorResponse"
+          },
+          "500": {
+            "$ref": "#/definitions/ApiTextErrorResponse"
+          },
+          "default": {
+            "$ref": "#/definitions/ManagementAPIErrorResponse"
+          }
+        }
+      }
+    },
     "/simulate/api/alk-simulate/run-tests/{run_test_id}/test-executions/": {
       "post": {
         "operationId": "simulate_api_alk-simulate_run-tests_start_test_execution",
@@ -41613,6 +41641,64 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
         "result": {
           "$ref": "#/definitions/ALKSimulateBatchCreateResult"
+        }
+      }
+    },
+    "ALKSimulateProvisionResponse": {
+      "required": [
+        "result"
+      ],
+      "type": "object",
+      "properties": {
+        "status": {
+          "title": "Status",
+          "type": "boolean",
+          "default": true
+        },
+        "result": {
+          "$ref": "#/definitions/ALKSimulateProvisionResult"
+        }
+      }
+    },
+    "ALKSimulateProvisionRunTestRequest": {
+      "required": [
+        "name"
+      ],
+      "type": "object",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string",
+          "maxLength": 255,
+          "minLength": 1
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "personas": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ALKSimulateProvisionPersona"
+          }
+        },
+        "scenario_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "agent_definition_id": {
+          "title": "Agent definition id",
+          "type": "string",
+          "format": "uuid",
+          "x-nullable": true
+        },
+        "agent_name": {
+          "title": "Agent name",
+          "type": "string",
+          "maxLength": 255
         }
       }
     },
@@ -75865,6 +75951,60 @@ export const OPENAPI_CONTRACT = Object.freeze({
         }
       }
     },
+    "ALKSimulateProvisionResult": {
+      "required": [
+        "run_test_id",
+        "scenario_ids",
+        "agent_definition_id"
+      ],
+      "type": "object",
+      "properties": {
+        "run_test_id": {
+          "title": "Run test id",
+          "type": "string",
+          "format": "uuid"
+        },
+        "scenario_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "agent_definition_id": {
+          "title": "Agent definition id",
+          "type": "string",
+          "format": "uuid"
+        }
+      }
+    },
+    "ALKSimulateProvisionPersona": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string",
+          "maxLength": 255
+        },
+        "role": {
+          "title": "Role",
+          "type": "string",
+          "maxLength": 255
+        },
+        "situation": {
+          "title": "Situation",
+          "type": "string"
+        },
+        "outcome": {
+          "title": "Outcome",
+          "type": "string"
+        },
+        "persona": {
+          "title": "Persona",
+          "type": "object"
+        }
+      }
+    },
     "ALKSimulateCostBreakdown": {
       "type": "object",
       "properties": {
@@ -75936,6 +76076,21 @@ export const OPENAPI_CONTRACT = Object.freeze({
           "maximum": 1,
           "minimum": 0,
           "x-nullable": true
+        },
+        "latency_ms": {
+          "title": "Latency ms",
+          "type": "integer",
+          "minimum": 0,
+          "x-nullable": true
+        },
+        "tool_calls": {
+          "title": "Tool calls",
+          "type": "object"
+        },
+        "tool_call_id": {
+          "title": "Tool call id",
+          "type": "string",
+          "maxLength": 255
         }
       }
     },

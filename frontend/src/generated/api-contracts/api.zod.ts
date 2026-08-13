@@ -29132,6 +29132,10 @@ export const simulateApiAlkSimulateCallExecutionsResultBodyTranscriptItemEndTime
 export const simulateApiAlkSimulateCallExecutionsResultBodyTranscriptItemConfidenceScoreMin = 0;
 export const simulateApiAlkSimulateCallExecutionsResultBodyTranscriptItemConfidenceScoreMax = 1;
 
+export const simulateApiAlkSimulateCallExecutionsResultBodyTranscriptItemLatencyMsMin = 0;
+
+export const simulateApiAlkSimulateCallExecutionsResultBodyTranscriptItemToolCallIdMax = 255;
+
 export const simulateApiAlkSimulateCallExecutionsResultBodyRecordingUrlMax = 500;
 
 export const simulateApiAlkSimulateCallExecutionsResultBodyStereoRecordingUrlMax = 500;
@@ -29151,7 +29155,12 @@ export const SimulateApiAlkSimulateCallExecutionsResultBody = zod.object({
   "content": zod.string(),
   "start_time_ms": zod.number().min(simulateApiAlkSimulateCallExecutionsResultBodyTranscriptItemStartTimeMsMin).default(simulateApiAlkSimulateCallExecutionsResultBodyTranscriptItemStartTimeMsDefault),
   "end_time_ms": zod.number().min(simulateApiAlkSimulateCallExecutionsResultBodyTranscriptItemEndTimeMsMin).default(simulateApiAlkSimulateCallExecutionsResultBodyTranscriptItemEndTimeMsDefault),
-  "confidence_score": zod.number().min(simulateApiAlkSimulateCallExecutionsResultBodyTranscriptItemConfidenceScoreMin).max(simulateApiAlkSimulateCallExecutionsResultBodyTranscriptItemConfidenceScoreMax).optional()
+  "confidence_score": zod.number().min(simulateApiAlkSimulateCallExecutionsResultBodyTranscriptItemConfidenceScoreMin).max(simulateApiAlkSimulateCallExecutionsResultBodyTranscriptItemConfidenceScoreMax).optional(),
+  "latency_ms": zod.number().min(simulateApiAlkSimulateCallExecutionsResultBodyTranscriptItemLatencyMsMin).optional(),
+  "tool_calls": zod.object({
+
+}).passthrough().optional(),
+  "tool_call_id": zod.string().max(simulateApiAlkSimulateCallExecutionsResultBodyTranscriptItemToolCallIdMax).optional()
 })).optional(),
   "recording_url": zod.string().url().max(simulateApiAlkSimulateCallExecutionsResultBodyRecordingUrlMax).optional(),
   "stereo_recording_url": zod.string().url().max(simulateApiAlkSimulateCallExecutionsResultBodyStereoRecordingUrlMax).optional(),
@@ -29179,6 +29188,50 @@ export const SimulateApiAlkSimulateCallExecutionsResultResponse = zod.object({
   "call_execution_id": zod.string().uuid(),
   "status": zod.string().min(1),
   "eval_dispatched": zod.boolean()
+})
+})
+
+
+/**
+ * Stand up a chat RunTest + scenario-of-record from SDK personas so an
+SDK-first run has somewhere to post — without the native UI's async
+scenario generation. See ``provision_alk_sim_run_test``.
+ */
+export const simulateApiAlkSimulateRunTestsProvisionRunTestBodyNameMax = 255;
+
+export const simulateApiAlkSimulateRunTestsProvisionRunTestBodyPersonasItemNameMax = 255;
+
+export const simulateApiAlkSimulateRunTestsProvisionRunTestBodyPersonasItemRoleMax = 255;
+
+export const simulateApiAlkSimulateRunTestsProvisionRunTestBodyAgentNameMax = 255;
+
+
+
+export const SimulateApiAlkSimulateRunTestsProvisionRunTestBody = zod.object({
+  "name": zod.string().min(1).max(simulateApiAlkSimulateRunTestsProvisionRunTestBodyNameMax),
+  "description": zod.string().optional(),
+  "personas": zod.array(zod.object({
+  "name": zod.string().max(simulateApiAlkSimulateRunTestsProvisionRunTestBodyPersonasItemNameMax).optional(),
+  "role": zod.string().max(simulateApiAlkSimulateRunTestsProvisionRunTestBodyPersonasItemRoleMax).optional(),
+  "situation": zod.string().optional(),
+  "outcome": zod.string().optional(),
+  "persona": zod.object({
+
+}).passthrough().optional()
+})).optional(),
+  "scenario_ids": zod.array(zod.string().uuid()).optional(),
+  "agent_definition_id": zod.string().uuid().optional(),
+  "agent_name": zod.string().max(simulateApiAlkSimulateRunTestsProvisionRunTestBodyAgentNameMax).optional()
+})
+
+export const simulateApiAlkSimulateRunTestsProvisionRunTestResponseStatusDefault = true;
+
+export const SimulateApiAlkSimulateRunTestsProvisionRunTestResponse = zod.object({
+  "status": zod.boolean().default(simulateApiAlkSimulateRunTestsProvisionRunTestResponseStatusDefault),
+  "result": zod.object({
+  "run_test_id": zod.string().uuid(),
+  "scenario_ids": zod.array(zod.string().uuid()),
+  "agent_definition_id": zod.string().uuid()
 })
 })
 

@@ -12,6 +12,8 @@ import type {
   AIFilterRequestApi,
   AIFilterResponseApi,
   ALKSimulateBatchCreateResponseApi,
+  ALKSimulateProvisionResponseApi,
+  ALKSimulateProvisionRunTestRequestApi,
   ALKSimulateResultApi,
   ALKSimulateResultResponseApi,
   ALKSimulateStartTestExecutionRequestApi,
@@ -52494,6 +52496,67 @@ export const simulateApiAlkSimulateCallExecutionsResult = async (callExecutionId
     headers: { 'Content-Type': 'application/json', ...options?.headers },
     body: JSON.stringify(
       aLKSimulateResultApi,)
+  }
+);}
+
+
+
+export type simulateApiAlkSimulateRunTestsProvisionRunTestResponse200 = {
+  data: ALKSimulateProvisionResponseApi
+  status: 200
+}
+
+export type simulateApiAlkSimulateRunTestsProvisionRunTestResponse400 = {
+  data: ApiTextErrorResponseApi
+  status: 400
+}
+
+export type simulateApiAlkSimulateRunTestsProvisionRunTestResponse404 = {
+  data: ApiTextErrorResponseApi
+  status: 404
+}
+
+export type simulateApiAlkSimulateRunTestsProvisionRunTestResponse500 = {
+  data: ApiTextErrorResponseApi
+  status: 500
+}
+
+export type simulateApiAlkSimulateRunTestsProvisionRunTestResponseDefault = {
+  data: ManagementAPIErrorResponseApi
+  status: Exclude<HTTPStatusCodes, 200 | 400 | 404 | 500>
+}
+
+export type simulateApiAlkSimulateRunTestsProvisionRunTestResponseSuccess = (simulateApiAlkSimulateRunTestsProvisionRunTestResponse200) & {
+  headers: Headers;
+};
+export type simulateApiAlkSimulateRunTestsProvisionRunTestResponseError = (simulateApiAlkSimulateRunTestsProvisionRunTestResponse400 | simulateApiAlkSimulateRunTestsProvisionRunTestResponse404 | simulateApiAlkSimulateRunTestsProvisionRunTestResponse500 | simulateApiAlkSimulateRunTestsProvisionRunTestResponseDefault) & {
+  headers: Headers;
+};
+
+export type simulateApiAlkSimulateRunTestsProvisionRunTestResponse = (simulateApiAlkSimulateRunTestsProvisionRunTestResponseSuccess | simulateApiAlkSimulateRunTestsProvisionRunTestResponseError)
+
+export const getSimulateApiAlkSimulateRunTestsProvisionRunTestUrl = () => {
+
+
+
+
+  return `/simulate/api/alk-simulate/run-tests/provision/`
+}
+
+/**
+ * Stand up a chat RunTest + scenario-of-record from SDK personas so an
+SDK-first run has somewhere to post — without the native UI's async
+scenario generation. See ``provision_alk_sim_run_test``.
+ */
+export const simulateApiAlkSimulateRunTestsProvisionRunTest = async (aLKSimulateProvisionRunTestRequestApi: ALKSimulateProvisionRunTestRequestApi, options?: RequestInit): Promise<simulateApiAlkSimulateRunTestsProvisionRunTestResponse> => {
+
+  return apiMutator<simulateApiAlkSimulateRunTestsProvisionRunTestResponse>(getSimulateApiAlkSimulateRunTestsProvisionRunTestUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      aLKSimulateProvisionRunTestRequestApi,)
   }
 );}
 
