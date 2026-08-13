@@ -146,6 +146,13 @@ async def run_hosted_sdk_job(input: RunHostedJobInput) -> RunHostedJobOutput:
                 if parsed is not None:
                     last = parsed
                     activity.heartbeat(parsed.get("phase"))
+                else:
+                    # Surface the SDK child's engine logs + tracebacks (stderr is
+                    # merged into stdout). These were previously dropped, hiding
+                    # why a run produced no turns / failed. Truncate for sanity.
+                    activity.logger.info(
+                        "alk_child[%s] %s", input.job_id[:8], line[:2000]
+                    )
             return_code = await proc.wait()
         except asyncio.CancelledError:
             _terminate(proc)
