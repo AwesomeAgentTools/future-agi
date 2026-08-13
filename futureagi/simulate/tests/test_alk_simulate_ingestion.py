@@ -1323,14 +1323,25 @@ class TestHostedRunnerActivityHelpers:
     def test_voice_conversation_direction_follows_agent_call_direction(self):
         from simulate.services.hosted_runner import _voice_params
 
-        # Inbound agent receives the call → it greets first.
+        # Inbound target receives the call → the simulator (caller) opens
+        # (simulator_first), matching native ee/voice first_message_mode.
         assert (
             _voice_params("webrtc", inbound=True)["conversation_direction"]
-            == "agent_first"
+            == "simulator_first"
         )
-        # Outbound agent places the call → the simulator/callee answers first.
+        # Outbound target places the call → the target opens (agent_first).
         assert (
             _voice_params("webrtc", inbound=False)["conversation_direction"]
+            == "agent_first"
+        )
+        # Retell has no per-call first-message control → pinned to simulator_first
+        # in both directions (its outbound/target-opens case is unsupported).
+        assert (
+            _voice_params("retell_webcall", inbound=True)["conversation_direction"]
+            == "simulator_first"
+        )
+        assert (
+            _voice_params("retell_webcall", inbound=False)["conversation_direction"]
             == "simulator_first"
         )
 

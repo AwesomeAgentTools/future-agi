@@ -484,14 +484,7 @@ def _build_voice_job(
             "simulator": _voice_simulator_config(dataset),
             "params": _voice_params(
                 transport_kind,
-                # Force the simulator to open every conversation. An inbound
-                # target derives agent_first, but these targets wait for the
-                # caller and never send the opening turn, so the call dead-airs
-                # (0 turns). Until the SDK reliably captures a target-initiated
-                # greeting, the simulator opens for both directions — the
-                # pre-existing working behavior. `inbound` still drives SIP
-                # transport (_voice_transport_kind) above.
-                inbound=False,
+                inbound=inbound,
                 case_count=len(dataset),
                 max_concurrency=_livekit_max_concurrency(credentials),
                 max_call_minutes=_max_call_minutes(simulator_agent),
@@ -776,10 +769,17 @@ def _voice_params(
     from simulate.temporal.constants import HOSTED_RUNNER_MAX_DURATION_SECONDS
 
     is_telephony = transport_kind in {"sip_inbound", "sip_outbound"}
-    # Who opens the conversation follows the target agent's call direction: an
-    # inbound agent receives the call and greets first (agent_first); an outbound
-    # agent places the call so the simulator/callee answers first.
-    conversation_direction = "agent_first" if inbound else "simulator_first"
+    # Who opens the conversation follows the target's call direction, matching the
+    # native platform (ee/voice ``voice_small.py`` sets the simulator's
+    # first_message_mode the same way): an INBOUND target RECEIVES the call, so
+    # the simulator (the caller) speaks first (simulator_first); an OUTBOUND
+    # target PLACES the call, so the target speaks first (agent_first).
+    conversation_direction = "simulator_first" if inbound else "agent_first"
+    # Retell has no per-call first-message control wired in the SDK, so its target
+    # cannot be made to greet first — pin Retell to simulator_first (its
+    # outbound/target-opens case is unsupported; the simulator opens instead).
+    if transport_kind == "retell_webcall":
+        conversation_direction = "simulator_first"
     # Telephone leases a single DID, so the engine keeps those cases serial
     # regardless of the requested ceiling; mirror that here for the deadline.
     effective_concurrency = (
