@@ -704,23 +704,16 @@ def _voice_simulator_config(
     if language:
         stt["language"] = language
 
-    # The simulator must SPEAK the persona's language. Deepgram Aura-2 (the
-    # English default) only ships English/EU voices — an Arabic persona voiced by
-    # ``aura-2-andromeda-en`` comes out as English-accented gibberish the target
-    # can't understand, so the conversation dies after the opener. For any
-    # non-English language, use OpenAI TTS (``gpt-4o-mini-tts``), which renders
-    # the text in its own language (ElevenLabs multilingual would also work but
-    # its key is not provisioned in the hosted runner). English keeps Deepgram.
-    tts_provider = _voice_setting("SIMULATOR_TTS_PROVIDER")
-    tts_model = _voice_setting("SIMULATOR_TTS_MODEL")
-    if not tts_provider:
-        if language and language not in ("en", "en-us", "english"):
-            tts_provider = "openai"
-            tts_model = tts_model or "gpt-4o-mini-tts"
-        else:
-            tts_provider = "deepgram"
-            tts_model = tts_model or "aura-2-andromeda-en"
-    tts = {"provider": tts_provider, "model": tts_model or "aura-2-andromeda-en"}
+    # The simulator must SPEAK the persona's language. Deepgram Aura-2 (the old
+    # default) is English-only, so a non-English persona came out as English
+    # gibberish the target couldn't understand and the call died after the
+    # opener. Use Cartesia Sonic-3 (multilingual) as the default sim voice so any
+    # persona language is voiced natively; env overrides
+    # (SIMULATOR_TTS_PROVIDER / SIMULATOR_TTS_MODEL) still win.
+    tts = {
+        "provider": _voice_setting("SIMULATOR_TTS_PROVIDER") or "cartesia",
+        "model": _voice_setting("SIMULATOR_TTS_MODEL") or "sonic-3",
+    }
 
     return {
         "llm": {
