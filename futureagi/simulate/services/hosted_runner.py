@@ -703,6 +703,25 @@ def _voice_simulator_config(
     language = _voice_setting("SIMULATOR_STT_LANGUAGE") or _dataset_language(dataset)
     if language:
         stt["language"] = language
+
+    # The simulator must SPEAK the persona's language. Deepgram Aura-2 (the
+    # English default) only ships English/EU voices — an Arabic persona voiced by
+    # ``aura-2-andromeda-en`` comes out as English-accented gibberish the target
+    # can't understand, so the conversation dies after the opener. For any
+    # non-English language, use OpenAI TTS (``gpt-4o-mini-tts``), which renders
+    # the text in its own language (ElevenLabs multilingual would also work but
+    # its key is not provisioned in the hosted runner). English keeps Deepgram.
+    tts_provider = _voice_setting("SIMULATOR_TTS_PROVIDER")
+    tts_model = _voice_setting("SIMULATOR_TTS_MODEL")
+    if not tts_provider:
+        if language and language not in ("en", "en-us", "english"):
+            tts_provider = "openai"
+            tts_model = tts_model or "gpt-4o-mini-tts"
+        else:
+            tts_provider = "deepgram"
+            tts_model = tts_model or "aura-2-andromeda-en"
+    tts = {"provider": tts_provider, "model": tts_model or "aura-2-andromeda-en"}
+
     return {
         "llm": {
             # Match ALK's supported default and the credential present in the
@@ -713,10 +732,7 @@ def _voice_simulator_config(
             "model": _voice_setting("SIMULATOR_LLM_MODEL") or "gpt-4.1",
         },
         "stt": stt,
-        "tts": {
-            "provider": _voice_setting("SIMULATOR_TTS_PROVIDER") or "deepgram",
-            "model": _voice_setting("SIMULATOR_TTS_MODEL") or "aura-2-andromeda-en",
-        },
+        "tts": tts,
     }
 
 

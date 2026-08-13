@@ -1315,10 +1315,23 @@ class TestHostedRunnerActivityHelpers:
         from simulate.services.hosted_runner import _voice_simulator_config
 
         settings.SIMULATOR_STT_LANGUAGE = ""
+        settings.SIMULATOR_TTS_PROVIDER = ""
+        settings.SIMULATOR_TTS_MODEL = ""
 
         simulator = _voice_simulator_config([{"persona": {"language": "arabic"}}])
 
         assert simulator["stt"]["language"] == "ar"
+        # Non-English persona must be VOICED in its language: Deepgram Aura-2 is
+        # English-only, so a non-English language switches TTS to OpenAI (which
+        # renders the text in its own language). English keeps Deepgram.
+        assert simulator["tts"]["provider"] == "openai"
+        assert simulator["tts"]["model"] == "gpt-4o-mini-tts"
+
+        english = _voice_simulator_config([{"persona": {"language": "english"}}])
+        assert english["tts"]["provider"] == "deepgram"
+
+        none_lang = _voice_simulator_config([{"persona": {}}])
+        assert none_lang["tts"]["provider"] == "deepgram"
 
     def test_voice_conversation_direction_follows_agent_call_direction(self):
         from simulate.services.hosted_runner import _voice_params
