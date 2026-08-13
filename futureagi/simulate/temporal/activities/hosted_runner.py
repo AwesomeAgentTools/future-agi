@@ -249,6 +249,10 @@ def _runs_base() -> str:
 
 def _child_environment(job: dict[str, Any]) -> dict[str, str]:
     env = dict(os.environ)
+    # Child cwd is a mkdtemp dir; absolutize a relative key path so it resolves.
+    creds = env.get("GOOGLE_APPLICATION_CREDENTIALS")
+    if creds and not os.path.isabs(creds):
+        env["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.abspath(creds)
     sink = job.get("sink") or {}
     if sink.get("api_url"):
         env["FI_BASE_URL"] = str(sink["api_url"])
