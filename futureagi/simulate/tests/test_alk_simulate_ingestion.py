@@ -547,6 +547,39 @@ class TestResultIngest:
         # Duration backfilled from the last transcript offset (15000 ms).
         assert call.duration_seconds == 15
 
+    def test_ingest_persists_stereo_recording_url_and_serializer_surfaces_it(
+        self, auth_client, run_test
+    ):
+        """A LiveKit result PATCH carrying stereo_recording_url lands on the model
+        and surfaces through CallExecutionDetailSerializer as recordings['stereo']."""
+        from simulate.serializers.test_execution import (
+            CallExecutionDetailSerializer,
+        )
+
+        _, call_ids = _start_and_batch(auth_client, run_test)
+        call_id = call_ids[0]
+        stereo_url = "https://cdn.example.com/stereo.wav"
+
+        resp = auth_client.patch(
+            f"{ALK_BASE}/call-executions/{call_id}/result/",
+            {
+                "status": "completed",
+                "transcript": _transcript_payload(),
+                "stereo_recording_url": stereo_url,
+                "provider_call_data": {"livekit": {"room": "alk-room"}},
+            },
+            format="json",
+        )
+        assert resp.status_code == 200, resp.content
+
+        call = CallExecution.objects.get(id=call_id)
+        assert call.stereo_recording_url == stereo_url
+
+        recordings = CallExecutionDetailSerializer(
+            context={"detail_mode": True}
+        ).get_recordings(call)
+        assert recordings["stereo"] == stereo_url
+
     def test_voice_ingest_emits_voice_call_billing_once(self, auth_client, run_test):
         """A completed voice call charges once through TestExecutor._deduct_call_cost
         (the same path native voice uses to emit the VOICE_CALL usage event); a
