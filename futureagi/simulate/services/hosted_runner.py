@@ -846,7 +846,10 @@ def _voice_params(
         "record_audio": True,
         "recording_root": "recordings",
         "max_seconds": max_seconds,
-        "min_turn_messages": 6,
+        # Below this many messages a call is treated as insufficient/failed, and
+        # the simulator won't end the call earlier. Kept low so short but valid
+        # conversations aren't marked failed.
+        "min_turn_messages": 4,
         "conversation_direction": conversation_direction,
         "connect_timeout": connect_timeout,
         "readiness_timeout": readiness_timeout,
