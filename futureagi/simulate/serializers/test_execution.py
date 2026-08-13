@@ -475,18 +475,23 @@ class CallExecutionDetailSerializer(serializers.ModelSerializer):
         ):
             return {}
 
-        provider_payload = None
-        if hasattr(obj, "provider_call_data") and isinstance(
-            obj.provider_call_data, dict
-        ):
-            provider_payload = obj.provider_call_data.get(ProviderChoices.VAPI.value)
+        pcd = (
+            obj.provider_call_data
+            if hasattr(obj, "provider_call_data")
+            and isinstance(obj.provider_call_data, dict)
+            else {}
+        )
+        provider_payload = pcd.get(ProviderChoices.VAPI.value)
 
-        # Shortcut dict from the provider payload's "recording" sub-object.
+        # Per-channel recording URLs live under <provider>.recording for whatever
+        # provider produced the call (vapi, livekit, ...). Read the shortcut from
+        # whichever bucket carries a "recording" dict — not just vapi — so
+        # LiveKit's per-channel customer/assistant tracks surface here too.
         shortcut = {}
-        if isinstance(provider_payload, dict):
-            raw_shortcut = provider_payload.get("recording")
-            if isinstance(raw_shortcut, dict):
-                shortcut = raw_shortcut
+        for bucket in pcd.values():
+            if isinstance(bucket, dict) and isinstance(bucket.get("recording"), dict):
+                shortcut = bucket["recording"]
+                break
 
         recordings: dict[str, str] = {}
         # Model fields (FAGI-rehosted S3 URLs) win, then the provider shortcut.
