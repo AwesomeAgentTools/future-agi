@@ -23,6 +23,7 @@ import json
 import os
 import uuid
 from collections import defaultdict
+from enum import StrEnum
 from typing import Any
 
 import structlog
@@ -40,6 +41,16 @@ _JOB_SCHEMA_VERSION = "futureagi.runner-job.v1"
 # the voice ``max_seconds`` so hosted calls end naturally rather than being cut
 # at the previous hard 120s.
 _DEFAULT_MAX_CALL_MINUTES = 30
+
+
+class ConversationDirection(StrEnum):
+    """Who opens a hosted voice conversation. The value is the wire string the
+    SDK engine reads from the job (``livekit.py`` validates against exactly
+    these); ``StrEnum`` is a ``str`` subclass so it serializes into the job JSON
+    unchanged."""
+
+    SIMULATOR_FIRST = "simulator_first"
+    AGENT_FIRST = "agent_first"
 
 _MODE_TO_ENVIRONMENT = {
     "chat": ("chat", "conversation"),
@@ -451,6 +462,7 @@ def _build_voice_job(
     credentials = _voice_credentials(agent_definition, agent_version)
     provider = _voice_provider(agent_definition, credentials)
     inbound = _resolve_agent_inbound(agent_version, agent_definition)
+    target_speaks_first = _resolve_target_speaks_first(agent_version, agent_definition)
     transport_kind = _voice_transport_kind(agent_definition, provider, inbound)
     dataset = _personas_for_scenarios(scenarios, selected_keys=selected_keys)
 
@@ -488,6 +500,7 @@ def _build_voice_job(
                 case_count=len(dataset),
                 max_concurrency=_livekit_max_concurrency(credentials),
                 max_call_minutes=_max_call_minutes(simulator_agent),
+                target_speaks_first=target_speaks_first,
             ),
         },
         "sink": {
@@ -554,6 +567,28 @@ def _resolve_agent_inbound(agent_version, agent_definition) -> bool:
     if isinstance(raw_inbound, str):
         return raw_inbound.strip().lower() == "true"
     return bool(raw_inbound)
+
+
+def _resolve_target_speaks_first(agent_version, agent_definition) -> bool | None:
+    """Resolve the explicit "does the target agent speak first?" toggle.
+
+    Tri-state: ``True``/``False`` override the conversation direction; ``None``
+    means "auto" (derive from inbound/outbound). Mirrors
+    ``_resolve_agent_inbound``'s snapshot-first precedence so a versioned edit is
+    honored, and coerces the ``"true"``/``"false"`` strings the snapshot may hold
+    (``bool("false")`` is truthy — must parse, not cast).
+    """
+    raw = None
+    snapshot = getattr(agent_version, "configuration_snapshot", None) or {}
+    if isinstance(snapshot, dict):
+        raw = snapshot.get("target_speaks_first", None)
+    if raw is None:
+        raw = getattr(agent_definition, "target_speaks_first", None)
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        return raw.strip().lower() == "true"
+    return bool(raw)
 
 
 def _voice_transport_kind(agent_definition, provider: str, inbound: bool) -> str:
@@ -789,21 +824,35 @@ def _voice_params(
     case_count: int = 1,
     max_concurrency: int = 1,
     max_call_minutes: int = _DEFAULT_MAX_CALL_MINUTES,
+    target_speaks_first: bool | None = None,
 ) -> dict[str, Any]:
     from simulate.temporal.constants import HOSTED_RUNNER_MAX_DURATION_SECONDS
 
     is_telephony = transport_kind in {"sip_inbound", "sip_outbound"}
-    # Who opens the conversation follows the target's call direction, matching the
-    # native platform (ee/voice ``voice_small.py`` sets the simulator's
-    # first_message_mode the same way): an INBOUND target RECEIVES the call, so
-    # the simulator (the caller) speaks first (simulator_first); an OUTBOUND
-    # target PLACES the call, so the target speaks first (agent_first).
-    conversation_direction = "simulator_first" if inbound else "agent_first"
+    # Who opens the conversation. The explicit ``target_speaks_first`` toggle on
+    # the agent definition wins when set (True: wait for the target's greeting;
+    # False: the simulator opens). When unset (None), fall back to the target's
+    # call direction, matching the native platform (ee/voice ``voice_small.py``
+    # sets the simulator's first_message_mode the same way): an INBOUND target
+    # RECEIVES the call, so the simulator (the caller) speaks first; an OUTBOUND
+    # target PLACES the call, so the target speaks first.
+    if target_speaks_first is not None:
+        conversation_direction = (
+            ConversationDirection.AGENT_FIRST
+            if target_speaks_first
+            else ConversationDirection.SIMULATOR_FIRST
+        )
+    else:
+        conversation_direction = (
+            ConversationDirection.SIMULATOR_FIRST
+            if inbound
+            else ConversationDirection.AGENT_FIRST
+        )
     # Retell has no per-call first-message control wired in the SDK, so its target
-    # cannot be made to greet first — pin Retell to simulator_first (its
-    # outbound/target-opens case is unsupported; the simulator opens instead).
+    # cannot be made to greet first — pin Retell to simulator_first regardless of
+    # the toggle (its target-opens case is unsupported; the simulator opens).
     if transport_kind == "retell_webcall":
-        conversation_direction = "simulator_first"
+        conversation_direction = ConversationDirection.SIMULATOR_FIRST
     # Telephone leases a single DID, so the engine keeps those cases serial
     # regardless of the requested ceiling; mirror that here for the deadline.
     effective_concurrency = (
@@ -850,7 +899,7 @@ def _voice_params(
         # the simulator won't end the call earlier. Kept low so short but valid
         # conversations aren't marked failed.
         "min_turn_messages": 4,
-        "conversation_direction": conversation_direction,
+        "conversation_direction": conversation_direction.value,
         "connect_timeout": connect_timeout,
         "readiness_timeout": readiness_timeout,
         "cleanup_timeout": cleanup_timeout,

@@ -17,6 +17,7 @@ import {
   AUTH_METHODS_BY_PROVIDER,
   defaultAuthMethodForProvider,
   INBOUND_OUTBOUND_COPY,
+  TARGET_SPEAKS_FIRST_COPY,
   VOICE_CHAT_PROVIDERS,
   VOICE_TRANSPORT,
   VOICE_TRANSPORT_COPY,
@@ -778,80 +779,80 @@ export default function AgentVoiceForm() {
               condition={voiceTransport === VOICE_TRANSPORT.TELEPHONY}
             >
               <Grid container spacing={2} alignItems="flex-start">
-              <Grid item xs={3.5}>
-                <FormSearchSelectFieldControl
-                  control={control}
-                  fullWidth
-                  fieldName="countryCode"
-                  label="Country Code"
-                  size="small"
-                  placeholder="+1"
-                  options={pinCodeOptions.map((pinCodeOption) => ({
-                    label:
-                      `${pinCodeOption.label} (+${pinCodeOption.value})`
-                        .length > 20
-                        ? `${pinCodeOption.label.slice(0, 13)}... (+${pinCodeOption.value})`
-                        : `${pinCodeOption.label} (+${pinCodeOption.value})`,
-                    value: pinCodeOption.value,
-                    component: (
-                      <Box
-                        sx={{
-                          py: 1,
-                          pr: 1,
-                          display: "flex",
-                          flexDirection: "row",
-                          width: "100%",
-                          alignItems: "center",
-                          justifyContent: "space-between",
-                        }}
-                      >
-                        <Box display="flex" alignItems="center" gap={1}>
-                          <Image
-                            src={pinCodeOption.countryFlag}
-                            width="20px"
-                            wrapperProps={{
-                              style: {
-                                display: "flex",
-                                alignItems: "center",
-                              },
-                            }}
-                          />
+                <Grid item xs={3.5}>
+                  <FormSearchSelectFieldControl
+                    control={control}
+                    fullWidth
+                    fieldName="countryCode"
+                    label="Country Code"
+                    size="small"
+                    placeholder="+1"
+                    options={pinCodeOptions.map((pinCodeOption) => ({
+                      label:
+                        `${pinCodeOption.label} (+${pinCodeOption.value})`
+                          .length > 20
+                          ? `${pinCodeOption.label.slice(0, 13)}... (+${pinCodeOption.value})`
+                          : `${pinCodeOption.label} (+${pinCodeOption.value})`,
+                      value: pinCodeOption.value,
+                      component: (
+                        <Box
+                          sx={{
+                            py: 1,
+                            pr: 1,
+                            display: "flex",
+                            flexDirection: "row",
+                            width: "100%",
+                            alignItems: "center",
+                            justifyContent: "space-between",
+                          }}
+                        >
+                          <Box display="flex" alignItems="center" gap={1}>
+                            <Image
+                              src={pinCodeOption.countryFlag}
+                              width="20px"
+                              wrapperProps={{
+                                style: {
+                                  display: "flex",
+                                  alignItems: "center",
+                                },
+                              }}
+                            />
+                            <Typography
+                              variant="body2"
+                              maxWidth={"100px"}
+                              noWrap
+                              textOverflow={"ellipsis"}
+                            >
+                              {pinCodeOption.label}
+                            </Typography>
+                          </Box>
                           <Typography
                             variant="body2"
-                            maxWidth={"100px"}
-                            noWrap
-                            textOverflow={"ellipsis"}
+                            fontWeight="fontWeightRegular"
                           >
-                            {pinCodeOption.label}
+                            +{pinCodeOption.value}
                           </Typography>
                         </Box>
-                        <Typography
-                          variant="body2"
-                          fontWeight="fontWeightRegular"
-                        >
-                          +{pinCodeOption.value}
-                        </Typography>
-                      </Box>
-                    ),
-                  }))}
-                />
-              </Grid>
-              <Grid item xs={8.5}>
-                <FormTextFieldV2
-                  control={control}
-                  label="Contact Number"
-                  type="number"
-                  fieldName="contactNumber"
-                  placeholder="Number to call for the simulation"
-                  required
-                  size="small"
-                  fullWidth
-                  sx={{
-                    "& .MuiInputLabel-root": {
-                      fontWeight: 500,
-                    },
-                  }}
-                />
+                      ),
+                    }))}
+                  />
+                </Grid>
+                <Grid item xs={8.5}>
+                  <FormTextFieldV2
+                    control={control}
+                    label="Contact Number"
+                    type="number"
+                    fieldName="contactNumber"
+                    placeholder="Number to call for the simulation"
+                    required
+                    size="small"
+                    fullWidth
+                    sx={{
+                      "& .MuiInputLabel-root": {
+                        fontWeight: 500,
+                      },
+                    }}
+                  />
                 </Grid>
               </Grid>
             </ShowComponent>
@@ -930,6 +931,53 @@ export default function AgentVoiceForm() {
                 uses your own endpoint, which we can only receive calls into.
               </Typography>
             )}
+
+            <Box
+              display="flex"
+              justifyContent="space-between"
+              alignItems="center"
+              border={"1px solid"}
+              borderColor={"background.neutral"}
+              borderRadius={"8px !important"}
+              p={1.5}
+            >
+              <Box display={"flex"} flexDirection={"column"}>
+                <Typography
+                  typography="s1"
+                  fontWeight={"fontWeightMedium"}
+                  color={"text.primary"}
+                >
+                  {TARGET_SPEAKS_FIRST_COPY.title}
+                </Typography>
+                <Typography
+                  typography="s2_1"
+                  fontWeight={"fontWeightRegular"}
+                  color={"text.secondary"}
+                >
+                  {TARGET_SPEAKS_FIRST_COPY.description}
+                </Typography>
+              </Box>
+              <CustomTooltip
+                show={true}
+                title={TARGET_SPEAKS_FIRST_COPY.tooltip}
+                placement="bottom"
+                arrow
+                size="small"
+                type="black"
+                slotProps={{
+                  tooltip: { sx: { maxWidth: "200px !important" } },
+                }}
+              >
+                <Box>
+                  <SwitchField
+                    control={control}
+                    fieldName="targetSpeaksFirst"
+                    label=""
+                    labelPlacement="end"
+                  />
+                </Box>
+              </CustomTooltip>
+            </Box>
           </Box>
         </CreateNewAgentCards>
       </ShowComponent>

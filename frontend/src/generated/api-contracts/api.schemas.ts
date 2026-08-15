@@ -14146,6 +14146,8 @@ export interface AgentDefinitionListResponseApi {
   readonly contact_number?: string;
   /** Whether the agent handles inbound calls */
   readonly inbound?: boolean;
+  /** Whether the target agent speaks first (greets) in a hosted voice simulation. True: the simulator waits for the target's greeting; False: the simulator opens the conversation; null: derive from inbound/outbound. Retell targets always let the simulator open (SDK limitation). */
+  readonly target_speaks_first?: boolean;
   /**
      * Detailed description of the AI agent's purpose and capabilities
      * @minLength 1
@@ -14273,6 +14275,7 @@ export interface AgentDefinitionCreateRequestApi {
   /** @minLength 1 */
   commit_message: string;
   inbound?: boolean;
+  target_speaks_first?: boolean;
   description?: string;
   provider?: string;
   api_key?: string;
@@ -14414,6 +14417,8 @@ export interface AgentDefinitionResponseApi {
   readonly contact_number?: string;
   /** Whether the agent handles inbound calls */
   readonly inbound?: boolean;
+  /** Whether the target agent speaks first (greets) in a hosted voice simulation. True: the simulator waits for the target's greeting; False: the simulator opens the conversation; null: derive from inbound/outbound. Retell targets always let the simulator open (SDK limitation). */
+  readonly target_speaks_first?: boolean;
   /**
      * Detailed description of the AI agent's purpose and capabilities
      * @minLength 1
@@ -14510,6 +14515,7 @@ export interface AgentDefinitionEditRequestApi {
   languages?: string[];
   contact_number?: string;
   inbound?: boolean;
+  target_speaks_first?: boolean;
   knowledge_base?: string;
   model?: string;
   model_details?: AgentDefinitionEditRequestApiModelDetails;
@@ -14614,6 +14620,7 @@ export interface AgentVersionCreateRequestApi {
   languages?: string[];
   contact_number?: string;
   inbound?: boolean;
+  target_speaks_first?: boolean;
   knowledge_base?: string;
   model?: string;
   model_details?: AgentVersionCreateRequestApiModelDetails;
@@ -15106,6 +15113,8 @@ export interface AgentDefinitionApi {
   contact_number?: string;
   /** Whether the agent handles inbound calls */
   inbound: boolean;
+  /** Whether the target agent speaks first (greets) in a hosted voice simulation. True: the simulator waits for the target's greeting; False: the simulator opens the conversation; null: derive from inbound/outbound. Retell targets always let the simulator open (SDK limitation). */
+  target_speaks_first?: boolean;
   /**
      * Detailed description of the AI agent's purpose and capabilities
      * @minLength 1

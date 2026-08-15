@@ -50,6 +50,20 @@ export const INBOUND_OUTBOUND_COPY = {
   },
 };
 
+/**
+ * Copy for the "does your agent speak first?" question, read by both the create
+ * and edit forms so they cannot drift apart. Drives the hosted simulator's
+ * conversation direction: on -> the simulator waits for the agent's greeting;
+ * off -> the simulator opens the conversation.
+ */
+export const TARGET_SPEAKS_FIRST_COPY = {
+  title: "Agent speaks first",
+  description:
+    "Turn on if your agent greets first. The simulator waits for it before replying.",
+  tooltip:
+    "When on, the simulator waits for your agent's greeting. When off, the simulator opens the conversation.",
+};
+
 /** How a voice test call reaches the agent. */
 export const VOICE_TRANSPORT = {
   WEBRTC: "webrtc",
@@ -64,8 +78,7 @@ export const VOICE_TRANSPORT_COPY = {
   [VOICE_TRANSPORT.WEBRTC]: {
     label: "Web",
     title: "Web simulation (WebRTC)",
-    description:
-      "No phone call is placed and no telephony provider is needed.",
+    description: "No phone call is placed and no telephony provider is needed.",
   },
   [VOICE_TRANSPORT.TELEPHONY]: {
     label: "Phone",

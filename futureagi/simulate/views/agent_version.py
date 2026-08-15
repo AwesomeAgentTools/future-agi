@@ -165,6 +165,7 @@ class CreateAgentVersionView(APIView):
                 "languages",
                 "contact_number",
                 "inbound",
+                "target_speaks_first",
                 "model",
                 "model_details",
             ]

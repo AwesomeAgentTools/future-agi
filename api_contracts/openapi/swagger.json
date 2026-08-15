@@ -110082,6 +110082,13 @@
                     "type": "boolean",
                     "readOnly": true
                 },
+                "target_speaks_first": {
+                    "title": "Target speaks first",
+                    "description": "Whether the target agent speaks first (greets) in a hosted voice simulation. True: the simulator waits for the target's greeting; False: the simulator opens the conversation; null: derive from inbound/outbound. Retell targets always let the simulator open (SDK limitation).",
+                    "type": "boolean",
+                    "readOnly": true,
+                    "x-nullable": true
+                },
                 "description": {
                     "title": "Description",
                     "description": "Detailed description of the AI agent's purpose and capabilities",
@@ -110404,6 +110411,11 @@
                     "type": "boolean",
                     "default": true
                 },
+                "target_speaks_first": {
+                    "title": "Target speaks first",
+                    "type": "boolean",
+                    "x-nullable": true
+                },
                 "description": {
                     "title": "Description",
                     "type": "string",
@@ -110560,6 +110572,13 @@
                     "description": "Whether the agent handles inbound calls",
                     "type": "boolean",
                     "readOnly": true
+                },
+                "target_speaks_first": {
+                    "title": "Target speaks first",
+                    "description": "Whether the target agent speaks first (greets) in a hosted voice simulation. True: the simulator waits for the target's greeting; False: the simulator opens the conversation; null: derive from inbound/outbound. Retell targets always let the simulator open (SDK limitation).",
+                    "type": "boolean",
+                    "readOnly": true,
+                    "x-nullable": true
                 },
                 "description": {
                     "title": "Description",
@@ -110867,6 +110886,11 @@
                     "title": "Inbound",
                     "type": "boolean"
                 },
+                "target_speaks_first": {
+                    "title": "Target speaks first",
+                    "type": "boolean",
+                    "x-nullable": true
+                },
                 "knowledge_base": {
                     "title": "Knowledge base",
                     "type": "string",
@@ -111109,6 +111133,11 @@
                 "inbound": {
                     "title": "Inbound",
                     "type": "boolean"
+                },
+                "target_speaks_first": {
+                    "title": "Target speaks first",
+                    "type": "boolean",
+                    "x-nullable": true
                 },
                 "knowledge_base": {
                     "title": "Knowledge base",
@@ -111910,6 +111939,12 @@
                     "title": "Inbound",
                     "description": "Whether the agent handles inbound calls",
                     "type": "boolean"
+                },
+                "target_speaks_first": {
+                    "title": "Target speaks first",
+                    "description": "Whether the target agent speaks first (greets) in a hosted voice simulation. True: the simulator waits for the target's greeting; False: the simulator opens the conversation; null: derive from inbound/outbound. Retell targets always let the simulator open (SDK limitation).",
+                    "type": "boolean",
+                    "x-nullable": true
                 },
                 "description": {
                     "title": "Description",

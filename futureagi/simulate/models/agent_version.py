@@ -191,6 +191,7 @@ class AgentVersion(BaseModel):
 
         schema = AgentConfigurationSnapshot(
             inbound=agent.inbound,
+            target_speaks_first=agent.target_speaks_first,
             language=agent.language,
             languages=agent.languages or [],
             provider=agent.provider,

@@ -12,11 +12,7 @@ import { useQuery } from "@tanstack/react-query";
 import axios, { endpoints } from "src/utils/axios";
 import { Box, Skeleton } from "@mui/material";
 import EvaluationCell from "src/sections/projects/LLMTracing/Renderers/EvaluationCell";
-import {
-  AGENT_TYPES,
-  isLiveKitProvider,
-  VOICE_TRANSPORT,
-} from "./constants";
+import { AGENT_TYPES, isLiveKitProvider, VOICE_TRANSPORT } from "./constants";
 import AnnotationHeaderCellRenderer from "./CallLogs/AnnotationHeaderCellRenderer";
 import NewAnnotationCellRenderer from "./NewAnnotationCellRenderer";
 
@@ -48,7 +44,13 @@ export const stepFields = [
     "observabilityEnabled",
     "model",
   ],
-  ["description", "knowledgeBase", "inbound", "commitMessage"],
+  [
+    "description",
+    "knowledgeBase",
+    "inbound",
+    "targetSpeaksFirst",
+    "commitMessage",
+  ],
 ];
 
 export const emptyAgentSteps = [
@@ -117,6 +119,7 @@ export const createAgentDefinitionSchema = (options) => {
         .enum([VOICE_TRANSPORT.WEBRTC, VOICE_TRANSPORT.TELEPHONY])
         .default(VOICE_TRANSPORT.WEBRTC),
       inbound: z.boolean(),
+      targetSpeaksFirst: z.boolean().optional().default(false),
       commitMessage: z.string().min(1, "Commit message is required"),
       model: z.string().optional(),
       modelDetails: z.any().optional().nullable(),
@@ -360,6 +363,7 @@ export const defaultAgentDefinitionValues = {
   countryCode: "",
   contactNumber: "",
   inbound: true,
+  targetSpeaksFirst: false,
   commitMessage: "",
   observabilityEnabled: false,
   token: "",

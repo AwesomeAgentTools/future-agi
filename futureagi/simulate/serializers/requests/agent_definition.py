@@ -26,6 +26,7 @@ class AgentDefinitionCreateRequestSerializer(serializers.Serializer):
     )
     commit_message = serializers.CharField(required=True)
     inbound = serializers.BooleanField(required=False, default=True)
+    target_speaks_first = serializers.BooleanField(required=False, allow_null=True)
 
     # Optional fields
     description = serializers.CharField(required=False, allow_blank=True, default="")
@@ -314,6 +315,7 @@ class AgentDefinitionEditRequestSerializer(serializers.Serializer):
         required=False, allow_blank=True, allow_null=True
     )
     inbound = serializers.BooleanField(required=False)
+    target_speaks_first = serializers.BooleanField(required=False, allow_null=True)
     knowledge_base = serializers.UUIDField(required=False, allow_null=True)
     model = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     model_details = serializers.JSONField(required=False, allow_null=True)

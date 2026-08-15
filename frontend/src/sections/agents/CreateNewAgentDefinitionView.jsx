@@ -140,6 +140,7 @@ const CreateNewAgentDefinitionView = () => {
         // country_code: data.countryCode,
         contact_number: data.contactNumber,
         inbound: data.inbound,
+        target_speaks_first: data.targetSpeaksFirst,
         commit_message: data.commitMessage,
         observability_enabled: data.observabilityEnabled,
         authentication_method: "api_key",

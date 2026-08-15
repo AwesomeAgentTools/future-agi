@@ -42956,6 +42956,12 @@ export const OPENAPI_CONTRACT = Object.freeze({
           "description": "Whether the agent handles inbound calls",
           "type": "boolean"
         },
+        "target_speaks_first": {
+          "title": "Target speaks first",
+          "description": "Whether the target agent speaks first (greets) in a hosted voice simulation. True: the simulator waits for the target's greeting; False: the simulator opens the conversation; null: derive from inbound/outbound. Retell targets always let the simulator open (SDK limitation).",
+          "type": "boolean",
+          "x-nullable": true
+        },
         "description": {
           "title": "Description",
           "description": "Detailed description of the AI agent's purpose and capabilities",
@@ -43221,6 +43227,11 @@ export const OPENAPI_CONTRACT = Object.freeze({
           "type": "boolean",
           "default": true
         },
+        "target_speaks_first": {
+          "title": "Target speaks first",
+          "type": "boolean",
+          "x-nullable": true
+        },
         "description": {
           "title": "Description",
           "type": "string",
@@ -43431,6 +43442,11 @@ export const OPENAPI_CONTRACT = Object.freeze({
           "title": "Inbound",
           "type": "boolean"
         },
+        "target_speaks_first": {
+          "title": "Target speaks first",
+          "type": "boolean",
+          "x-nullable": true
+        },
         "knowledge_base": {
           "title": "Knowledge base",
           "type": "string",
@@ -43544,6 +43560,13 @@ export const OPENAPI_CONTRACT = Object.freeze({
           "description": "Whether the agent handles inbound calls",
           "type": "boolean",
           "readOnly": true
+        },
+        "target_speaks_first": {
+          "title": "Target speaks first",
+          "description": "Whether the target agent speaks first (greets) in a hosted voice simulation. True: the simulator waits for the target's greeting; False: the simulator opens the conversation; null: derive from inbound/outbound. Retell targets always let the simulator open (SDK limitation).",
+          "type": "boolean",
+          "readOnly": true,
+          "x-nullable": true
         },
         "description": {
           "title": "Description",
@@ -43761,6 +43784,13 @@ export const OPENAPI_CONTRACT = Object.freeze({
           "description": "Whether the agent handles inbound calls",
           "type": "boolean",
           "readOnly": true
+        },
+        "target_speaks_first": {
+          "title": "Target speaks first",
+          "description": "Whether the target agent speaks first (greets) in a hosted voice simulation. True: the simulator waits for the target's greeting; False: the simulator opens the conversation; null: derive from inbound/outbound. Retell targets always let the simulator open (SDK limitation).",
+          "type": "boolean",
+          "readOnly": true,
+          "x-nullable": true
         },
         "description": {
           "title": "Description",
@@ -44457,6 +44487,11 @@ export const OPENAPI_CONTRACT = Object.freeze({
         "inbound": {
           "title": "Inbound",
           "type": "boolean"
+        },
+        "target_speaks_first": {
+          "title": "Target speaks first",
+          "type": "boolean",
+          "x-nullable": true
         },
         "knowledge_base": {
           "title": "Knowledge base",

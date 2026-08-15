@@ -1907,3 +1907,72 @@ def test_dataset_language_none_single_multi():
     labels = list(AgentDefinition.LanguageChoices.labels)[:2]
     mixed = [{"persona": {"language": labels[0]}}, {"persona": {"language": labels[1]}}]
     assert _dataset_language(mixed) == "multi"
+    def test_target_speaks_first_toggle_overrides_direction(self):
+        """The explicit target_speaks_first toggle wins over the inbound/outbound
+        heuristic; None falls back to it; Retell stays pinned regardless."""
+        from simulate.services.hosted_runner import _voice_params
+
+        # True → wait for the target (agent_first) even for an inbound target
+        # that the heuristic would have opened simulator_first.
+        assert (
+            _voice_params("webrtc", inbound=True, target_speaks_first=True)[
+                "conversation_direction"
+            ]
+            == "agent_first"
+        )
+        # False → the simulator opens even for an outbound target.
+        assert (
+            _voice_params("webrtc", inbound=False, target_speaks_first=False)[
+                "conversation_direction"
+            ]
+            == "simulator_first"
+        )
+        # None → unchanged heuristic (inbound → simulator_first).
+        assert (
+            _voice_params("webrtc", inbound=True, target_speaks_first=None)[
+                "conversation_direction"
+            ]
+            == "simulator_first"
+        )
+        # Retell cannot greet first in the SDK → clamped even when the toggle
+        # asks for agent_first.
+        assert (
+            _voice_params(
+                "retell_webcall", inbound=False, target_speaks_first=True
+            )["conversation_direction"]
+            == "simulator_first"
+        )
+
+    def test_resolve_target_speaks_first_precedence(self):
+        """Snapshot wins over the column; strings coerce; absent → None (auto)."""
+        from types import SimpleNamespace
+
+        from simulate.services.hosted_runner import _resolve_target_speaks_first
+
+        agent_true = SimpleNamespace(target_speaks_first=True)
+        agent_none = SimpleNamespace(target_speaks_first=None)
+
+        # Snapshot overrides the column.
+        version = SimpleNamespace(
+            configuration_snapshot={"target_speaks_first": False}
+        )
+        assert _resolve_target_speaks_first(version, agent_true) is False
+
+        # String "false" must not be truthy.
+        version = SimpleNamespace(
+            configuration_snapshot={"target_speaks_first": "false"}
+        )
+        assert _resolve_target_speaks_first(version, agent_true) is False
+        version = SimpleNamespace(
+            configuration_snapshot={"target_speaks_first": "true"}
+        )
+        assert _resolve_target_speaks_first(version, agent_none) is True
+
+        # Missing in snapshot → column fallback.
+        version = SimpleNamespace(configuration_snapshot={})
+        assert _resolve_target_speaks_first(version, agent_true) is True
+
+        # Absent everywhere → None (auto: derive from inbound/outbound).
+        assert _resolve_target_speaks_first(None, agent_none) is None
+        assert _resolve_target_speaks_first(None, SimpleNamespace()) is None
+

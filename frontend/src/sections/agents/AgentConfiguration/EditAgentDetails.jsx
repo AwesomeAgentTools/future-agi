@@ -34,6 +34,7 @@ import {
   defaultAuthMethodForProvider,
   VOICE_CHAT_PROVIDERS,
   INBOUND_OUTBOUND_COPY,
+  TARGET_SPEAKS_FIRST_COPY,
   VOICE_TRANSPORT,
   VOICE_TRANSPORT_COPY,
   isLiveKitProvider,
@@ -869,7 +870,9 @@ const EditAgentDetails = ({
               value={voiceTransport}
               exclusive
               size="small"
-              onChange={(_, value) => value && setValue("voiceTransport", value)}
+              onChange={(_, value) =>
+                value && setValue("voiceTransport", value)
+              }
             >
               <ToggleButton
                 value={VOICE_TRANSPORT.WEBRTC}
@@ -1061,6 +1064,53 @@ const EditAgentDetails = ({
                 uses your own endpoint, which we can only receive calls into.
               </Typography>
             )}
+
+            <Box
+              display="flex"
+              justifyContent="space-between"
+              alignItems="center"
+              border={"1px solid"}
+              borderColor={"background.neutral"}
+              borderRadius={"8px !important"}
+              p={1.5}
+            >
+              <Box display={"flex"} flexDirection={"column"}>
+                <Typography
+                  typography="s1"
+                  fontWeight={"fontWeightMedium"}
+                  color={"text.primary"}
+                >
+                  {TARGET_SPEAKS_FIRST_COPY.title}
+                </Typography>
+                <Typography
+                  typography="s2_1"
+                  fontWeight={"fontWeightRegular"}
+                  color={"text.secondary"}
+                >
+                  {TARGET_SPEAKS_FIRST_COPY.description}
+                </Typography>
+              </Box>
+              <CustomTooltip
+                show={true}
+                title={TARGET_SPEAKS_FIRST_COPY.tooltip}
+                placement="bottom"
+                arrow
+                size="small"
+                type="black"
+                slotProps={{
+                  tooltip: { sx: { maxWidth: "200px !important" } },
+                }}
+              >
+                <Box>
+                  <SwitchField
+                    control={control}
+                    fieldName="targetSpeaksFirst"
+                    label=""
+                    labelPlacement="end"
+                  />
+                </Box>
+              </CustomTooltip>
+            </Box>
           </Stack>
         </ShowComponent>
         <ShowComponent

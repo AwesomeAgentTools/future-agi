@@ -48,6 +48,12 @@ export const getAgentFormValues = (agentDetails) => {
     contactNumber: localNumber,
     voiceTransport: transportFromContactNumber(rawContactNumber),
     inbound: snapshot.inbound ?? true,
+    // Explicit toggle when set; for legacy agents (null) fall back to the
+    // direction the inbound/outbound heuristic implied (inbound -> simulator
+    // opens -> agent does NOT speak first) so editing an old agent doesn't flip
+    // its behaviour.
+    targetSpeaksFirst:
+      snapshot.target_speaks_first ?? !(snapshot.inbound ?? true),
     commitMessage: snapshot.commit_message || "",
 
     // LiveKit fields

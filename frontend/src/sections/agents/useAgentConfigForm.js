@@ -6,11 +6,7 @@ import axios, { endpoints } from "src/utils/axios";
 import { getAgentFormValues } from "./common";
 import { useMutation } from "@tanstack/react-query";
 import logger from "src/utils/logger";
-import {
-  AGENT_TYPES,
-  isLiveKitProvider,
-  VOICE_TRANSPORT,
-} from "./constants";
+import { AGENT_TYPES, isLiveKitProvider, VOICE_TRANSPORT } from "./constants";
 
 export const useAgentConfigForm = (schema, agentDetails) => {
   const {
@@ -79,6 +75,7 @@ export const useAgentSubmit = ({
         knowledge_base: data.knowledgeBase || null,
         contact_number: data.contactNumber,
         inbound: data.inbound,
+        target_speaks_first: data.targetSpeaksFirst,
         commit_message: data.commitMessage,
         observability_enabled: data.observabilityEnabled,
         authentication_method: "api_key",
