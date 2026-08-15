@@ -29206,6 +29206,30 @@ export const SimulateApiAlkSimulateCallExecutionsResultResponse = zod.object({
 
 
 /**
+ * Non-terminal per-call status ping (currently only ``ongoing``): the
+SDK marks a pre-created PENDING row ONGOING the moment its call starts,
+so the UI shows progress instead of PENDING → terminal. PENDING-gated in
+the service, so a late ping never clobbers a result that already landed.
+ */
+export const SimulateApiAlkSimulateCallExecutionsStatusParams = zod.object({
+  "call_execution_id": zod.string()
+})
+
+export const SimulateApiAlkSimulateCallExecutionsStatusBody = zod.object({
+  "status": zod.enum(['ongoing'])
+})
+
+export const simulateApiAlkSimulateCallExecutionsStatusResponseStatusDefault = true;
+
+export const SimulateApiAlkSimulateCallExecutionsStatusResponse = zod.object({
+  "status": zod.boolean().default(simulateApiAlkSimulateCallExecutionsStatusResponseStatusDefault),
+  "result": zod.object({
+  "updated": zod.boolean()
+})
+})
+
+
+/**
  * Stand up a chat RunTest + scenario-of-record from SDK personas so an
 SDK-first run has somewhere to post — without the native UI's async
 scenario generation. See ``provision_alk_sim_run_test``.

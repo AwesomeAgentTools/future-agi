@@ -92,6 +92,23 @@ class ALKSimulateResultResponseSerializer(serializers.Serializer):
     result = ALKSimulateResultOutcomeSerializer()
 
 
+class ALKSimulateStatusUpdateSerializer(serializers.Serializer):
+    """Lightweight non-terminal status ping — e.g. a case going ONGOING the
+    moment its call starts. Deliberately carries no transcript/metrics; the
+    terminal result still arrives separately via ``result``."""
+
+    status = serializers.ChoiceField(choices=(CallExecutionStatus.ONGOING.value,))
+
+
+class ALKSimulateStatusUpdateOutcomeSerializer(serializers.Serializer):
+    updated = serializers.BooleanField()
+
+
+class ALKSimulateStatusUpdateResponseSerializer(serializers.Serializer):
+    status = serializers.BooleanField(default=True)
+    result = ALKSimulateStatusUpdateOutcomeSerializer()
+
+
 class ALKSimulateBatchCreateResultSerializer(serializers.Serializer):
     call_execution_ids = serializers.ListField(child=serializers.UUIDField())
     has_more = serializers.BooleanField()

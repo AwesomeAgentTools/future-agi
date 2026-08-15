@@ -521,6 +521,20 @@ def precreate_alk_sim_call_executions(
         return [str(call.id) for call in ordered_calls]
 
 
+def mark_alk_sim_call_ongoing(call_execution: CallExecution) -> bool:
+    """Flip a pre-created PENDING call row to ONGOING when its case starts.
+
+    A single PENDING-gated UPDATE, so it is idempotent and a late/duplicate ping
+    can never clobber a terminal result — a row already COMPLETED/FAILED/CANCELLED
+    (or already ONGOING) is left untouched. Returns whether a row transitioned.
+    """
+    updated = CallExecution.objects.filter(
+        id=call_execution.id,
+        status=CallExecution.CallStatus.PENDING,
+    ).update(status=CallExecution.CallStatus.ONGOING)
+    return bool(updated)
+
+
 def ingest_alk_sim_result(
     call_execution: CallExecution,
     organization,

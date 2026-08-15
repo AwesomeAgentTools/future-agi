@@ -32,12 +32,15 @@ from simulate.serializers.alk_simulate_ingestion import (
     ALKSimulateResultSerializer,
     ALKSimulateStartTestExecutionRequestSerializer,
     ALKSimulateStartTestExecutionResponseSerializer,
+    ALKSimulateStatusUpdateResponseSerializer,
+    ALKSimulateStatusUpdateSerializer,
 )
 from simulate.services.alk_simulate_ingestion import (
     ALKSimulateIngestionError,
     create_alk_sim_call_execution_batch,
     create_alk_sim_test_execution,
     ingest_alk_sim_result,
+    mark_alk_sim_call_ongoing,
     provision_alk_sim_run_test,
     store_alk_recording,
 )
@@ -380,3 +383,34 @@ class ALKSimulateIngestionViewSet(ViewSet):
                 "eval_dispatched": outcome.eval_dispatched,
             }
         )
+
+    @action(
+        detail=False,
+        methods=["patch"],
+        url_path=r"call-executions/(?P<call_execution_id>[0-9a-fA-F-]{36})/status",
+    )
+    @validated_request(
+        request_serializer=ALKSimulateStatusUpdateSerializer,
+        responses={
+            200: ALKSimulateStatusUpdateResponseSerializer,
+            400: ApiTextErrorResponseSerializer,
+            404: ApiTextErrorResponseSerializer,
+            500: ApiTextErrorResponseSerializer,
+        },
+        reject_unknown_fields=True,
+    )
+    def status(self, request, call_execution_id=None):
+        """Non-terminal per-call status ping (currently only ``ongoing``): the
+        SDK marks a pre-created PENDING row ONGOING the moment its call starts,
+        so the UI shows progress instead of PENDING → terminal. PENDING-gated in
+        the service, so a late ping never clobbers a result that already landed.
+        """
+        try:
+            call_execution, _ = self._call_execution_or_404(
+                call_execution_id, request
+            )
+        except Http404:
+            return self.gm.not_found("Call execution not found")
+
+        updated = mark_alk_sim_call_ongoing(call_execution)
+        return self.gm.success_response({"updated": updated})

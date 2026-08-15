@@ -15699,6 +15699,26 @@ export interface ALKSimulateResultResponseApi {
   result: ALKSimulateResultOutcomeApi;
 }
 
+export type ALKSimulateStatusUpdateApiStatus = typeof ALKSimulateStatusUpdateApiStatus[keyof typeof ALKSimulateStatusUpdateApiStatus];
+
+
+export const ALKSimulateStatusUpdateApiStatus = {
+  ongoing: 'ongoing',
+} as const;
+
+export interface ALKSimulateStatusUpdateApi {
+  status: ALKSimulateStatusUpdateApiStatus;
+}
+
+export interface ALKSimulateStatusUpdateOutcomeApi {
+  updated: boolean;
+}
+
+export interface ALKSimulateStatusUpdateResponseApi {
+  status?: boolean;
+  result: ALKSimulateStatusUpdateOutcomeApi;
+}
+
 export type ALKSimulateProvisionPersonaApiPersona = { [key: string]: unknown };
 
 export interface ALKSimulateProvisionPersonaApi {

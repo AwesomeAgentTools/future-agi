@@ -49078,6 +49078,67 @@
                 }
             ]
         },
+        "/simulate/api/alk-simulate/call-executions/{call_execution_id}/status/": {
+            "patch": {
+                "operationId": "simulate_api_alk-simulate_call-executions_status",
+                "description": "Non-terminal per-call status ping (currently only ``ongoing``): the\nSDK marks a pre-created PENDING row ONGOING the moment its call starts,\nso the UI shows progress instead of PENDING → terminal. PENDING-gated in\nthe service, so a late ping never clobbers a result that already landed.",
+                "parameters": [
+                    {
+                        "name": "data",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/ALKSimulateStatusUpdate"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ALKSimulateStatusUpdateResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiTextErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiTextErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiTextErrorResponse"
+                        }
+                    },
+                    "default": {
+                        "description": "Default error response",
+                        "schema": {
+                            "$ref": "#/definitions/ManagementAPIErrorResponse"
+                        }
+                    }
+                },
+                "tags": [
+                    "simulate"
+                ],
+                "x-runtime-request-validation": true,
+                "x-runtime-response-validation": true
+            },
+            "parameters": [
+                {
+                    "name": "call_execution_id",
+                    "in": "path",
+                    "required": true,
+                    "type": "string"
+                }
+            ]
+        },
         "/simulate/api/alk-simulate/run-tests/provision/": {
             "post": {
                 "operationId": "simulate_api_alk-simulate_run-tests_provision_run_test",
@@ -113477,6 +113538,49 @@
                 },
                 "result": {
                     "$ref": "#/definitions/ALKSimulateResultOutcome"
+                }
+            }
+        },
+        "ALKSimulateStatusUpdate": {
+            "required": [
+                "status"
+            ],
+            "type": "object",
+            "properties": {
+                "status": {
+                    "title": "Status",
+                    "type": "string",
+                    "enum": [
+                        "ongoing"
+                    ]
+                }
+            }
+        },
+        "ALKSimulateStatusUpdateOutcome": {
+            "required": [
+                "updated"
+            ],
+            "type": "object",
+            "properties": {
+                "updated": {
+                    "title": "Updated",
+                    "type": "boolean"
+                }
+            }
+        },
+        "ALKSimulateStatusUpdateResponse": {
+            "required": [
+                "result"
+            ],
+            "type": "object",
+            "properties": {
+                "status": {
+                    "title": "Status",
+                    "type": "boolean",
+                    "default": true
+                },
+                "result": {
+                    "$ref": "#/definitions/ALKSimulateStatusUpdateOutcome"
                 }
             }
         },

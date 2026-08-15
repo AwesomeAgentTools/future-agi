@@ -205,6 +205,22 @@ async def finalize_hosted_execution(input: FinalizeRunnerInput) -> str:
     if input.job_phase == "completed":
         from simulate.tasks.chat_sim import monitor_test_execution_for_chat
 
+        def _fail_unsettled_ongoing() -> None:
+            # A completed child means every result had its chance to land. A row
+            # still ONGOING started its call but never got a result (a lost
+            # result PATCH) — fail it so it can't display "ongoing" forever.
+            # PENDING rows (never started — e.g. an over-provisioned batch) are
+            # left untouched, unchanged from before this transition existed.
+            CallExecution.objects.filter(
+                test_execution_id=input.test_execution_id,
+                status=CallExecution.CallStatus.ONGOING,
+                deleted=False,
+            ).update(
+                status=CallExecution.CallStatus.FAILED,
+                completed_at=timezone.now(),
+            )
+
+        await _run_db(_fail_unsettled_ongoing)
         await _run_db(monitor_test_execution_for_chat, input.test_execution_id)
         return "rolled_up"
 
@@ -215,7 +231,10 @@ async def finalize_hosted_execution(input: FinalizeRunnerInput) -> str:
             execution.save(update_fields=["status"])
             CallExecution.objects.filter(
                 test_execution=execution,
-                status=CallExecution.CallStatus.PENDING,
+                status__in=[
+                    CallExecution.CallStatus.PENDING,
+                    CallExecution.CallStatus.ONGOING,
+                ],
                 deleted=False,
             ).update(
                 status=CallExecution.CallStatus.CANCELLED,
@@ -230,7 +249,10 @@ async def finalize_hosted_execution(input: FinalizeRunnerInput) -> str:
             execution.save(update_fields=["status"])
             CallExecution.objects.filter(
                 test_execution=execution,
-                status=CallExecution.CallStatus.PENDING,
+                status__in=[
+                    CallExecution.CallStatus.PENDING,
+                    CallExecution.CallStatus.ONGOING,
+                ],
                 deleted=False,
             ).update(
                 status=CallExecution.CallStatus.FAILED,
