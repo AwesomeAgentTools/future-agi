@@ -32,6 +32,15 @@ export const isLiveKitProvider = (provider) =>
   provider === "livekit_bridge" || provider === "livekit";
 
 /**
+ * Providers whose simulations run cases concurrently (bounded by the target's
+ * max_concurrency). LiveKit, Vapi and Retell all run over web transports that
+ * support parallel cases; only telephony (SIP) stays serial, and that's clamped
+ * server-side. Used to surface the "Max Concurrent Sessions" field.
+ */
+export const supportsConcurrency = (provider) =>
+  isLiveKitProvider(provider) || provider === "vapi" || provider === "retell";
+
+/**
  * Canonical copy for the Inbound/Outbound call toggle. Same semantic for
  * every provider — picking the right string based on provider left the
  * three forms drifting. All three forms (vapi, retell, livekit) read

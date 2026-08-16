@@ -6,7 +6,12 @@ import axios, { endpoints } from "src/utils/axios";
 import { getAgentFormValues } from "./common";
 import { useMutation } from "@tanstack/react-query";
 import logger from "src/utils/logger";
-import { AGENT_TYPES, isLiveKitProvider, VOICE_TRANSPORT } from "./constants";
+import {
+  AGENT_TYPES,
+  isLiveKitProvider,
+  supportsConcurrency,
+  VOICE_TRANSPORT,
+} from "./constants";
 
 export const useAgentConfigForm = (schema, agentDetails) => {
   const {
@@ -111,8 +116,6 @@ export const useAgentSubmit = ({
         // Parse LiveKit fields for backend
         if (isLiveKitProvider(data.provider)) {
           payload.contact_number = "";
-          payload.livekit_max_concurrency =
-            parseInt(data.livekitMaxConcurrency, 10) || 5;
           if (
             !payload.livekit_config_json ||
             (typeof payload.livekit_config_json === "string" &&
@@ -131,14 +134,24 @@ export const useAgentSubmit = ({
           }
         }
 
-        // Remove LiveKit fields for non-LiveKit providers
+        // Concurrency applies to every web provider (livekit / vapi / retell),
+        // so send it whenever the provider supports concurrent cases.
+        if (supportsConcurrency(data.provider)) {
+          payload.livekit_max_concurrency =
+            parseInt(data.livekitMaxConcurrency, 10) || 5;
+        }
+
+        // Remove LiveKit-only fields for non-LiveKit providers, keeping the
+        // shared concurrency value for vapi/retell.
         if (!isLiveKitProvider(data.provider)) {
           delete payload.livekit_url;
           delete payload.livekit_api_key;
           delete payload.livekit_api_secret;
           delete payload.livekit_agent_name;
           delete payload.livekit_config_json;
-          delete payload.livekit_max_concurrency;
+          if (!supportsConcurrency(data.provider)) {
+            delete payload.livekit_max_concurrency;
+          }
         }
 
         voiceContactNumber = payload.contact_number;

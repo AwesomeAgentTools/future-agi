@@ -5,6 +5,7 @@ from simulate.models.agent_definition import (
     AgentDefinitionAuthenticationChoices,
     AgentTypeChoices,
 )
+from simulate.temporal.constants import DEFAULT_ORG_LIMIT
 
 
 class AgentVersionCreateRequestSerializer(serializers.Serializer):
@@ -62,7 +63,9 @@ class AgentVersionCreateRequestSerializer(serializers.Serializer):
         required=False, allow_blank=True, max_length=255
     )
     livekit_config_json = serializers.JSONField(required=False, allow_null=True)
-    livekit_max_concurrency = serializers.IntegerField(required=False, min_value=1)
+    livekit_max_concurrency = serializers.IntegerField(
+        required=False, min_value=1, max_value=DEFAULT_ORG_LIMIT
+    )
 
     # Version-specific fields
     commit_message = serializers.CharField(required=False, allow_blank=True, default="")

@@ -122,7 +122,7 @@ def sync_provider_credentials(version, data: ProviderCredentialsInput):
         server_url = ""
         agent_name = ""
         config_json = None
-        max_concurrency = None
+        max_concurrency = data.livekit_max_concurrency
     else:
         provider_type = ProviderCredentials.ProviderType.VAPI
         api_key = (data.api_key or "").strip()
@@ -131,7 +131,7 @@ def sync_provider_credentials(version, data: ProviderCredentialsInput):
         server_url = ""
         agent_name = ""
         config_json = None
-        max_concurrency = None
+        max_concurrency = data.livekit_max_concurrency
 
     try:
         creds = ProviderCredentials.objects.get(agent_version=version)

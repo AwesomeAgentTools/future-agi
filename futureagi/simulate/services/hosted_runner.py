@@ -498,7 +498,7 @@ def _build_voice_job(
                 transport_kind,
                 inbound=inbound,
                 case_count=len(dataset),
-                max_concurrency=_livekit_max_concurrency(credentials),
+                max_concurrency=_target_max_concurrency(credentials),
                 max_call_minutes=_max_call_minutes(simulator_agent),
                 target_speaks_first=target_speaks_first,
             ),
@@ -806,15 +806,25 @@ def _max_call_minutes(simulator_agent) -> int:
         return _DEFAULT_MAX_CALL_MINUTES
 
 
-def _livekit_max_concurrency(credentials) -> int:
-    """Per-agent LiveKit session ceiling that bounds concurrent cases within a
-    run. Non-LiveKit targets (or missing creds) fall back to serial execution."""
-    if credentials is None or getattr(credentials, "provider_type", None) != "livekit":
+def _target_max_concurrency(credentials) -> int:
+    """Per-agent session ceiling that bounds concurrent cases within a run.
+
+    Reads the same ``ProviderCredentials.max_concurrency`` column for every
+    provider (livekit / vapi / retell), so web-call targets run cases in
+    parallel just like native LiveKit. Missing creds fall back to serial.
+    Telephony (SIP) is clamped back to 1 downstream (``_voice_params`` and the
+    engine's ``profile.is_sip``) since a run leases a single DID. The ceiling is
+    clamped to ``DEFAULT_ORG_LIMIT`` here too — serializer validation only guards
+    new writes, so a stored row above the cap would otherwise run hot."""
+    from simulate.temporal.constants import DEFAULT_ORG_LIMIT
+
+    if credentials is None:
         return 1
     try:
-        return max(1, int(getattr(credentials, "max_concurrency", 1) or 1))
+        value = max(1, int(getattr(credentials, "max_concurrency", 1) or 1))
     except (TypeError, ValueError):
         return 1
+    return min(value, DEFAULT_ORG_LIMIT)
 
 
 def _voice_params(

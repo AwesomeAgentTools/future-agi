@@ -441,6 +441,26 @@ class TestAgentVersionCreateRequestSerializer:
         assert serializer.is_valid(), serializer.errors
         assert serializer.validated_data["observability_enabled"] is True
 
+    def test_livekit_max_concurrency_capped(self):
+        # This path had no concurrency cap before it started carrying vapi/retell
+        # values; the field must reject anything above DEFAULT_ORG_LIMIT.
+        from simulate.temporal.constants import DEFAULT_ORG_LIMIT
+
+        serializer = AgentVersionCreateRequestSerializer(
+            data={"livekit_max_concurrency": DEFAULT_ORG_LIMIT + 1}
+        )
+        assert not serializer.is_valid()
+        assert "livekit_max_concurrency" in serializer.errors
+
+    def test_livekit_max_concurrency_at_cap_allowed(self):
+        from simulate.temporal.constants import DEFAULT_ORG_LIMIT
+
+        serializer = AgentVersionCreateRequestSerializer(
+            data={"livekit_max_concurrency": DEFAULT_ORG_LIMIT}
+        )
+        assert serializer.is_valid(), serializer.errors
+        assert serializer.validated_data["livekit_max_concurrency"] == DEFAULT_ORG_LIMIT
+
 
 # ============================================================================
 # TestAgentDefinitionResponseSerializer (needs DB)

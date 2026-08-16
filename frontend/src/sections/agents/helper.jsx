@@ -375,7 +375,7 @@ export const defaultAgentDefinitionValues = {
   livekitApiSecret: "",
   livekitAgentName: "",
   livekitConfigJson: "",
-  livekitMaxConcurrency: 2,
+  livekitMaxConcurrency: 5,
   _livekitCredentialsValid: false,
 };
 

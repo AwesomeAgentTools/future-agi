@@ -105,7 +105,11 @@ class AgentDefinitionCreateRequestSerializer(serializers.Serializer):
         required=False, allow_null=True, default=None
     )
     livekit_max_concurrency = serializers.IntegerField(
-        required=False, allow_null=True, default=None, min_value=1
+        required=False,
+        allow_null=True,
+        default=None,
+        min_value=1,
+        max_value=DEFAULT_ORG_LIMIT,
     )
 
     # -- Field-level validators --
@@ -342,7 +346,7 @@ class AgentDefinitionEditRequestSerializer(serializers.Serializer):
     )
     livekit_config_json = serializers.JSONField(required=False, allow_null=True)
     livekit_max_concurrency = serializers.IntegerField(
-        required=False, allow_null=True, min_value=1
+        required=False, allow_null=True, min_value=1, max_value=DEFAULT_ORG_LIMIT
     )
 
     def validate_agent_name(self, value):

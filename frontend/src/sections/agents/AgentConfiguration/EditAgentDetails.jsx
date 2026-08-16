@@ -38,6 +38,7 @@ import {
   VOICE_TRANSPORT,
   VOICE_TRANSPORT_COPY,
   isLiveKitProvider,
+  supportsConcurrency,
   validateLiveKitCredentials,
 } from "../constants";
 import { ShowComponent } from "src/components/show";
@@ -409,7 +410,7 @@ const EditAgentDetails = ({
                     setValue("livekitApiSecret", "");
                     setValue("livekitAgentName", "");
                     setValue("livekitConfigJson", {});
-                    setValue("livekitMaxConcurrency", 2);
+                    setValue("livekitMaxConcurrency", 5);
                   }
                   // "others" provider has no outbound path (user's own
                   // endpoint, nothing for us to call), so snap back to
@@ -733,6 +734,8 @@ const EditAgentDetails = ({
               multiline
               rows={6}
             />
+          </ShowComponent>
+          <ShowComponent condition={supportsConcurrency(selectedProvider)}>
             <FormTextFieldV2
               control={control}
               fieldName="livekitMaxConcurrency"

@@ -129,6 +129,39 @@ class TestSyncProviderCredentials:
         assert creds.agent_name == "test-agent"
         assert creds.max_concurrency == 10
 
+    def test_creates_vapi_credentials_with_concurrency(self, agent_version):
+        # Concurrency is generic across providers: a vapi target persists the
+        # submitted max_concurrency the same way livekit does (previously the
+        # vapi/retell branches discarded it).
+        sync_provider_credentials(
+            agent_version,
+            ProviderCredentialsInput(
+                provider="vapi",
+                api_key="sk-vapi-key",
+                assistant_id="asst_vapi",
+                livekit_max_concurrency=3,
+                provider_was_provided=True,
+            ),
+        )
+        creds = ProviderCredentials.objects.get(agent_version=agent_version)
+        assert creds.provider_type == ProviderCredentials.ProviderType.VAPI
+        assert creds.max_concurrency == 3
+
+    def test_creates_retell_credentials_with_concurrency(self, agent_version):
+        sync_provider_credentials(
+            agent_version,
+            ProviderCredentialsInput(
+                provider="retell",
+                api_key="sk-retell-key",
+                assistant_id="asst_retell",
+                livekit_max_concurrency=4,
+                provider_was_provided=True,
+            ),
+        )
+        creds = ProviderCredentials.objects.get(agent_version=agent_version)
+        assert creds.provider_type == ProviderCredentials.ProviderType.RETELL
+        assert creds.max_concurrency == 4
+
     def test_updates_existing_credentials(self, agent_version):
         sync_provider_credentials(
             agent_version,

@@ -32,7 +32,7 @@ import AgentBehaviourStepRightSection from "./CreateNewAgent/AgentBehaviourStep/
 import AgentBehaviourStep from "./CreateNewAgent/AgentBehaviourStep/AgentBehaviourStep";
 import Iconify from "src/components/iconify";
 import { LoadingButton } from "@mui/lab";
-import { AGENT_TYPES, isLiveKitProvider } from "./constants";
+import { AGENT_TYPES, isLiveKitProvider, supportsConcurrency } from "./constants";
 import { useAuthContext } from "src/auth/hooks";
 import { PERMISSIONS, RolePermission } from "src/utils/rolePermissionMapping";
 
@@ -168,8 +168,6 @@ const CreateNewAgentDefinitionView = () => {
               ? `+${data.countryCode}${data.contactNumber.trim()}`
               : data.contactNumber.trim()
             : "";
-          payload.livekit_max_concurrency =
-            parseInt(data.livekitMaxConcurrency, 10) || 5;
           payload.livekit_config_json = data.livekitConfigJson || {};
           if (typeof payload.livekit_config_json === "string") {
             try {
@@ -186,12 +184,19 @@ const CreateNewAgentDefinitionView = () => {
             ? `+${data?.countryCode}${data.contactNumber.trim()}`
             : data.contactNumber.trim();
           payload.contact_number = fullContactNumber;
-          // Clean up LiveKit fields
+          // Clean up LiveKit-only fields
           delete payload.livekit_url;
           delete payload.livekit_api_key;
           delete payload.livekit_api_secret;
           delete payload.livekit_agent_name;
           delete payload.livekit_config_json;
+        }
+        // Concurrency applies to every web provider (livekit / vapi / retell);
+        // drop it only for providers that don't run concurrent cases.
+        if (supportsConcurrency(data.provider)) {
+          payload.livekit_max_concurrency =
+            parseInt(data.livekitMaxConcurrency, 10) || 5;
+        } else {
           delete payload.livekit_max_concurrency;
         }
         delete payload.model;
