@@ -24,6 +24,7 @@ export const useAgentConfigForm = (schema, agentDetails) => {
     setValue,
     getValues,
     trigger,
+    clearErrors,
   } = useForm({
     mode: "onSubmit",
     resolver: zodResolver(schema, undefined, { mode: "async" }),
@@ -46,6 +47,7 @@ export const useAgentConfigForm = (schema, agentDetails) => {
     setValue,
     getValues,
     trigger,
+    clearErrors,
   };
 };
 
@@ -113,9 +115,10 @@ export const useAgentSubmit = ({
         delete payload.model;
         delete payload.model_details;
 
-        // Parse LiveKit fields for backend
+        // Parse LiveKit fields for backend. LiveKit supports both web (WebRTC,
+        // no number) and telephony (SIP, with number); contact_number is set
+        // above from the transport toggle, so don't force it empty here.
         if (isLiveKitProvider(data.provider)) {
-          payload.contact_number = "";
           if (
             !payload.livekit_config_json ||
             (typeof payload.livekit_config_json === "string" &&

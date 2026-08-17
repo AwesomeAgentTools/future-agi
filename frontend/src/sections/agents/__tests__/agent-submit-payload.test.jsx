@@ -86,6 +86,27 @@ describe("useAgentSubmit — voice transport payload", () => {
     expect(payload.contact_number).toBe("+14155551234");
   });
 
+  it("preserves the full number for a LiveKit telephony version", async () => {
+    const { result } = renderSubmit();
+
+    await result.current.onSubmit({
+      ...voiceAgent,
+      provider: "livekit",
+      voiceTransport: "telephony",
+      countryCode: "1",
+      contactNumber: "4155551234",
+      livekitUrl: "https://livekit.example.com",
+      livekitApiKey: "API-test",
+      livekitApiSecret: "secret",
+      livekitAgentName: "test-agent",
+      livekitConfigJson: {},
+      livekitMaxConcurrency: 5,
+    });
+
+    const [, payload] = axiosMocks.post.mock.calls[0];
+    expect(payload.contact_number).toBe("+14155551234");
+  });
+
   it("clears a saved number when switching to webrtc", async () => {
     const { result } = renderSubmit();
 

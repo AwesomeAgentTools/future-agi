@@ -62,6 +62,7 @@ const EditAgentDetails = ({
   trigger,
   setValue,
   getValues,
+  clearErrors,
 }) => {
   const { orgLimit } = useAuthContext();
   const { agentDefinitionId } = useParams();
@@ -649,7 +650,7 @@ const EditAgentDetails = ({
               required
               fullWidth
               size="small"
-              autoComplete="off"
+              autoComplete="new-password"
               error={errors && !!errors.livekitApiKey?.message}
               helperText={errors && errors.livekitApiKey?.message}
             />
@@ -836,12 +837,7 @@ const EditAgentDetails = ({
           </Box>
         </Box>
         {/* Call transport: decides whether a phone number is collected */}
-        <ShowComponent
-          condition={
-            agentType === AGENT_TYPES.VOICE &&
-            !isLiveKitProvider(selectedProvider)
-          }
-        >
+        <ShowComponent condition={agentType === AGENT_TYPES.VOICE}>
           <Box
             display="flex"
             justifyContent="space-between"
@@ -873,9 +869,13 @@ const EditAgentDetails = ({
               value={voiceTransport}
               exclusive
               size="small"
-              onChange={(_, value) =>
-                value && setValue("voiceTransport", value)
-              }
+              onChange={(_, value) => {
+                if (!value) return;
+                setValue("voiceTransport", value);
+                if (value === VOICE_TRANSPORT.WEBRTC) {
+                  clearErrors(["countryCode", "contactNumber"]);
+                }
+              }}
             >
               <ToggleButton
                 value={VOICE_TRANSPORT.WEBRTC}
@@ -896,7 +896,6 @@ const EditAgentDetails = ({
         <ShowComponent
           condition={
             agentType === AGENT_TYPES.VOICE &&
-            !isLiveKitProvider(selectedProvider) &&
             voiceTransport === VOICE_TRANSPORT.TELEPHONY
           }
         >
@@ -1180,6 +1179,7 @@ EditAgentDetails.propTypes = {
   setValue: PropTypes.func,
   getValues: PropTypes.func,
   trigger: PropTypes.func,
+  clearErrors: PropTypes.func,
 };
 
 export default EditAgentDetails;
