@@ -18,6 +18,8 @@ import type {
   ALKSimulateResultResponseApi,
   ALKSimulateStartTestExecutionRequestApi,
   ALKSimulateStartTestExecutionResponseApi,
+  ALKSimulateStatusUpdateApi,
+  ALKSimulateStatusUpdateResponseApi,
   APICallCountResponseApi,
   APICallTypeListResponseApi,
   APIKeyBulkResponseApi,
@@ -52496,6 +52498,69 @@ export const simulateApiAlkSimulateCallExecutionsResult = async (callExecutionId
     headers: { 'Content-Type': 'application/json', ...options?.headers },
     body: JSON.stringify(
       aLKSimulateResultApi,)
+  }
+);}
+
+
+
+export type simulateApiAlkSimulateCallExecutionsStatusResponse200 = {
+  data: ALKSimulateStatusUpdateResponseApi
+  status: 200
+}
+
+export type simulateApiAlkSimulateCallExecutionsStatusResponse400 = {
+  data: ApiTextErrorResponseApi
+  status: 400
+}
+
+export type simulateApiAlkSimulateCallExecutionsStatusResponse404 = {
+  data: ApiTextErrorResponseApi
+  status: 404
+}
+
+export type simulateApiAlkSimulateCallExecutionsStatusResponse500 = {
+  data: ApiTextErrorResponseApi
+  status: 500
+}
+
+export type simulateApiAlkSimulateCallExecutionsStatusResponseDefault = {
+  data: ManagementAPIErrorResponseApi
+  status: Exclude<HTTPStatusCodes, 200 | 400 | 404 | 500>
+}
+
+export type simulateApiAlkSimulateCallExecutionsStatusResponseSuccess = (simulateApiAlkSimulateCallExecutionsStatusResponse200) & {
+  headers: Headers;
+};
+export type simulateApiAlkSimulateCallExecutionsStatusResponseError = (simulateApiAlkSimulateCallExecutionsStatusResponse400 | simulateApiAlkSimulateCallExecutionsStatusResponse404 | simulateApiAlkSimulateCallExecutionsStatusResponse500 | simulateApiAlkSimulateCallExecutionsStatusResponseDefault) & {
+  headers: Headers;
+};
+
+export type simulateApiAlkSimulateCallExecutionsStatusResponse = (simulateApiAlkSimulateCallExecutionsStatusResponseSuccess | simulateApiAlkSimulateCallExecutionsStatusResponseError)
+
+export const getSimulateApiAlkSimulateCallExecutionsStatusUrl = (callExecutionId: string,) => {
+
+
+
+
+  return `/simulate/api/alk-simulate/call-executions/${callExecutionId}/status/`
+}
+
+/**
+ * Non-terminal per-call status ping (currently only ``ongoing``): the
+SDK marks a pre-created PENDING row ONGOING the moment its call starts,
+so the UI shows progress instead of PENDING → terminal. PENDING-gated in
+the service, so a late ping never clobbers a result that already landed.
+ */
+export const simulateApiAlkSimulateCallExecutionsStatus = async (callExecutionId: string,
+    aLKSimulateStatusUpdateApi: ALKSimulateStatusUpdateApi, options?: RequestInit): Promise<simulateApiAlkSimulateCallExecutionsStatusResponse> => {
+
+  return apiMutator<simulateApiAlkSimulateCallExecutionsStatusResponse>(getSimulateApiAlkSimulateCallExecutionsStatusUrl(callExecutionId),
+  {
+    ...options,
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      aLKSimulateStatusUpdateApi,)
   }
 );}
 
