@@ -6,7 +6,6 @@ import random
 
 import httpx
 import structlog
-from futureagi.ee.licensing.managed_ai import stream_chat_completion
 
 logger = structlog.get_logger(__name__)
 
