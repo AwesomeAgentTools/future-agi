@@ -69,9 +69,9 @@ vi.mock("src/api/agent-definition/agent-definition-version", () => ({
     selectedAgentId ? mocks.agentVersionsLoaded : mocks.agentVersionsEmpty,
 }));
 
-const scenarioPage = (page) => ({
-  count: 30,
-  results: Array.from({ length: 10 }, (_, i) => ({
+const scenarioPage = (page, { count = 30, size = 10 } = {}) => ({
+  count,
+  results: Array.from({ length: size }, (_, i) => ({
     id: `p${page}-s${i}`,
     name: `Scenario ${page}-${i}`,
     description: "desc",
@@ -153,6 +153,24 @@ describe("Choose Scenarios step — paging", () => {
 
     releaseScenarios({ data: scenarioPage(2) });
     expect(await screen.findByText("Scenario 2-0")).toBeInTheDocument();
+  });
+
+  it("keeps the rows-per-page control when one page covers every scenario", async () => {
+    // Raising the page size past the total used to hide the whole pagination
+    // bar — including the selector that raised it, stranding the user there.
+    mocks.get.mockImplementation((url) => {
+      if (url === "/scenarios/")
+        return Promise.resolve({
+          data: scenarioPage(1, { count: 6, size: 6 }),
+        });
+      return Promise.resolve({ data: {} });
+    });
+
+    renderPage();
+    await goToScenarioStep();
+    expect(await screen.findByText("Scenario 1-0")).toBeInTheDocument();
+
+    expect(screen.getByText(/rows per page/i)).toBeInTheDocument();
   });
 
   // Guards the fix from over-correcting: the empty state must still appear
