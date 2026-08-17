@@ -1006,6 +1006,13 @@ class TestBuildVoiceRunnerJob:
     """#149 — the voice branch maps a platform VOICE run test to a voice job
     (VoiceRunConfig shape) with the transport derived from provider + phone."""
 
+    @pytest.fixture(autouse=True)
+    def _system_livekit(self, settings):
+        # Every non-webrtc voice job runs the simulator on the platform (system)
+        # LiveKit, so the build requires LIVEKIT_URL. CI leaves it unset
+        # (settings default ""), so provide it here for the whole class.
+        settings.LIVEKIT_URL = "wss://sim.livekit.test"
+
     def _voice_agent(
         self,
         organization,
@@ -1410,13 +1417,14 @@ class TestHostedRunnerActivityHelpers:
         simulator = _voice_simulator_config([{"persona": {"language": "arabic"}}])
 
         assert simulator["stt"]["language"] == "ar"
-        # Simulator voices every persona with Cartesia Sonic-3 (multilingual), so
-        # a non-English persona is spoken natively rather than English gibberish.
-        assert simulator["tts"]["provider"] == "cartesia"
-        assert simulator["tts"]["model"] == "sonic-3"
+        # TTS is routed by language: a non-English persona uses the multilingual
+        # streaming Gemini voice (Deepgram Aura-2 is English-only), so it's spoken
+        # natively rather than as English gibberish.
+        assert simulator["tts"]["provider"] == "gemini"
+        assert simulator["tts"]["model"] == "gemini-3.1-flash-tts-preview"
 
         english = _voice_simulator_config([{"persona": {"language": "english"}}])
-        assert english["tts"]["provider"] == "cartesia"
+        assert english["tts"]["provider"] == "deepgram"
 
     def test_voice_conversation_direction_follows_agent_call_direction(self):
         from simulate.services.hosted_runner import _voice_params

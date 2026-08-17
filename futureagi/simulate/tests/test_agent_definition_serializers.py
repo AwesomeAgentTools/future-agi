@@ -496,6 +496,7 @@ class TestAgentDefinitionResponseSerializer:
             "agent_type",
             "contact_number",
             "inbound",
+            "target_speaks_first",
             "description",
             "assistant_id",
             "provider",

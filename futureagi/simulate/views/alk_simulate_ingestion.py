@@ -29,6 +29,8 @@ from simulate.serializers.alk_simulate_ingestion import (
     ALKSimulateBatchCreateResponseSerializer,
     ALKSimulateProvisionResponseSerializer,
     ALKSimulateProvisionRunTestRequestSerializer,
+    ALKSimulateRecordingUploadRequestSerializer,
+    ALKSimulateRecordingUploadResponseSerializer,
     ALKSimulateResultResponseSerializer,
     ALKSimulateResultSerializer,
     ALKSimulateStartTestExecutionRequestSerializer,
@@ -286,6 +288,15 @@ class ALKSimulateIngestionViewSet(ViewSet):
         methods=["post"],
         url_path=r"call-executions/(?P<call_execution_id>[0-9a-fA-F-]{36})/recording",
         parser_classes=[MultiPartParser],
+    )
+    @validated_request(
+        request_serializer=ALKSimulateRecordingUploadRequestSerializer,
+        responses={
+            200: ALKSimulateRecordingUploadResponseSerializer,
+            400: ApiTextErrorResponseSerializer,
+            404: ApiTextErrorResponseSerializer,
+            500: ApiTextErrorResponseSerializer,
+        },
     )
     def recording_upload(self, request, call_execution_id=None):
         """Accept a multipart audio upload and hand it to the shared voice

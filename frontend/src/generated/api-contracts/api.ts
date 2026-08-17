@@ -11,9 +11,11 @@ import type {
   AIEvalWriterResponseApi,
   AIFilterRequestApi,
   AIFilterResponseApi,
+  ALKSimulateBatchCreateRequestApi,
   ALKSimulateBatchCreateResponseApi,
   ALKSimulateProvisionResponseApi,
   ALKSimulateProvisionRunTestRequestApi,
+  ALKSimulateRecordingUploadResponseApi,
   ALKSimulateResultApi,
   ALKSimulateResultResponseApi,
   ALKSimulateStartTestExecutionRequestApi,
@@ -1022,6 +1024,7 @@ import type {
   SimulateApiAgentDefinitionOperationsListParams,
   SimulateApiAgentPromptOptimiserList200,
   SimulateApiAgentPromptOptimiserListParams,
+  SimulateApiAlkSimulateCallExecutionsRecordingUploadBody,
   SimulateApiCallExecutionsListParams,
   SimulateApiLivekitWebhookCreateBody,
   SimulateApiPersonasFieldOptions200,
@@ -52395,20 +52398,35 @@ export const simulateApiAgentPromptOptimiserTrialTrialScenarios = async (id: str
 
 
 
-export type simulateApiAlkSimulateCallExecutionsRecordingUploadResponse201 = {
-  data: void
-  status: 201
+export type simulateApiAlkSimulateCallExecutionsRecordingUploadResponse200 = {
+  data: ALKSimulateRecordingUploadResponseApi
+  status: 200
+}
+
+export type simulateApiAlkSimulateCallExecutionsRecordingUploadResponse400 = {
+  data: ApiTextErrorResponseApi
+  status: 400
+}
+
+export type simulateApiAlkSimulateCallExecutionsRecordingUploadResponse404 = {
+  data: ApiTextErrorResponseApi
+  status: 404
+}
+
+export type simulateApiAlkSimulateCallExecutionsRecordingUploadResponse500 = {
+  data: ApiTextErrorResponseApi
+  status: 500
 }
 
 export type simulateApiAlkSimulateCallExecutionsRecordingUploadResponseDefault = {
   data: ManagementAPIErrorResponseApi
-  status: Exclude<HTTPStatusCodes, 201>
+  status: Exclude<HTTPStatusCodes, 200 | 400 | 404 | 500>
 }
 
-export type simulateApiAlkSimulateCallExecutionsRecordingUploadResponseSuccess = (simulateApiAlkSimulateCallExecutionsRecordingUploadResponse201) & {
+export type simulateApiAlkSimulateCallExecutionsRecordingUploadResponseSuccess = (simulateApiAlkSimulateCallExecutionsRecordingUploadResponse200) & {
   headers: Headers;
 };
-export type simulateApiAlkSimulateCallExecutionsRecordingUploadResponseError = (simulateApiAlkSimulateCallExecutionsRecordingUploadResponseDefault) & {
+export type simulateApiAlkSimulateCallExecutionsRecordingUploadResponseError = (simulateApiAlkSimulateCallExecutionsRecordingUploadResponse400 | simulateApiAlkSimulateCallExecutionsRecordingUploadResponse404 | simulateApiAlkSimulateCallExecutionsRecordingUploadResponse500 | simulateApiAlkSimulateCallExecutionsRecordingUploadResponseDefault) & {
   headers: Headers;
 };
 
@@ -52427,14 +52445,23 @@ export const getSimulateApiAlkSimulateCallExecutionsRecordingUploadUrl = (callEx
 storage helper (``upload_audio_to_s3``). Matches the pattern the
 LiveKit and Vapi voice services already use for their recordings.
  */
-export const simulateApiAlkSimulateCallExecutionsRecordingUpload = async (callExecutionId: string, options?: RequestInit): Promise<simulateApiAlkSimulateCallExecutionsRecordingUploadResponse> => {
+export const simulateApiAlkSimulateCallExecutionsRecordingUpload = async (callExecutionId: string,
+    simulateApiAlkSimulateCallExecutionsRecordingUploadBody?: SimulateApiAlkSimulateCallExecutionsRecordingUploadBody, options?: RequestInit): Promise<simulateApiAlkSimulateCallExecutionsRecordingUploadResponse> => {
+    const formData = new FormData();
+if(simulateApiAlkSimulateCallExecutionsRecordingUploadBody?.file !== undefined) {
+ formData.append(`file`, simulateApiAlkSimulateCallExecutionsRecordingUploadBody.file);
+ }
+if(simulateApiAlkSimulateCallExecutionsRecordingUploadBody?.filename !== undefined) {
+ formData.append(`filename`, simulateApiAlkSimulateCallExecutionsRecordingUploadBody.filename);
+ }
 
   return apiMutator<simulateApiAlkSimulateCallExecutionsRecordingUploadResponse>(getSimulateApiAlkSimulateCallExecutionsRecordingUploadUrl(callExecutionId),
   {
     ...options,
     method: 'POST'
-
-
+    ,
+    body:
+      formData,
   }
 );}
 
@@ -52739,7 +52766,7 @@ target row, hand the parsed payload to
  * @summary Single view surface for all LiveKit sim ingestion HTTP endpoints.
  */
 export const simulateApiAlkSimulateTestExecutionsBatch = async (testExecutionId: string,
-    emptyRequestApi: EmptyRequestApi, options?: RequestInit): Promise<simulateApiAlkSimulateTestExecutionsBatchResponse> => {
+    aLKSimulateBatchCreateRequestApi: ALKSimulateBatchCreateRequestApi, options?: RequestInit): Promise<simulateApiAlkSimulateTestExecutionsBatchResponse> => {
 
   return apiMutator<simulateApiAlkSimulateTestExecutionsBatchResponse>(getSimulateApiAlkSimulateTestExecutionsBatchUrl(testExecutionId),
   {
@@ -52747,7 +52774,7 @@ export const simulateApiAlkSimulateTestExecutionsBatch = async (testExecutionId:
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...options?.headers },
     body: JSON.stringify(
-      emptyRequestApi,)
+      aLKSimulateBatchCreateRequestApi,)
   }
 );}
 

@@ -27206,11 +27206,23 @@ export const OPENAPI_CONTRACT = Object.freeze({
     "/simulate/api/alk-simulate/call-executions/{call_execution_id}/recording/": {
       "post": {
         "operationId": "simulate_api_alk-simulate_call-executions_recording_upload",
-        "runtimeRequestValidation": false,
-        "runtimeResponseValidation": false,
+        "runtimeRequestValidation": true,
+        "runtimeResponseValidation": true,
         "requestBody": null,
         "queryParameters": {},
         "responses": {
+          "200": {
+            "$ref": "#/definitions/ALKSimulateRecordingUploadResponse"
+          },
+          "400": {
+            "$ref": "#/definitions/ApiTextErrorResponse"
+          },
+          "404": {
+            "$ref": "#/definitions/ApiTextErrorResponse"
+          },
+          "500": {
+            "$ref": "#/definitions/ApiTextErrorResponse"
+          },
           "default": {
             "$ref": "#/definitions/ManagementAPIErrorResponse"
           }
@@ -27335,7 +27347,7 @@ export const OPENAPI_CONTRACT = Object.freeze({
         "runtimeRequestValidation": true,
         "runtimeResponseValidation": true,
         "requestBody": {
-          "$ref": "#/definitions/EmptyRequest"
+          "$ref": "#/definitions/ALKSimulateBatchCreateRequest"
         },
         "queryParameters": {},
         "responses": {
@@ -41656,6 +41668,16 @@ export const OPENAPI_CONTRACT = Object.freeze({
         }
       }
     },
+    "ALKSimulateBatchCreateRequest": {
+      "type": "object",
+      "properties": {
+        "count": {
+          "title": "Count",
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
     "ALKSimulateBatchCreateResponse": {
       "required": [
         "result"
@@ -41727,6 +41749,22 @@ export const OPENAPI_CONTRACT = Object.freeze({
           "title": "Agent name",
           "type": "string",
           "maxLength": 255
+        }
+      }
+    },
+    "ALKSimulateRecordingUploadResponse": {
+      "required": [
+        "result"
+      ],
+      "type": "object",
+      "properties": {
+        "status": {
+          "title": "Status",
+          "type": "boolean",
+          "default": true
+        },
+        "result": {
+          "$ref": "#/definitions/ALKSimulateRecordingUploadResult"
         }
       }
     },
@@ -43404,6 +43442,7 @@ export const OPENAPI_CONTRACT = Object.freeze({
         "livekit_max_concurrency": {
           "title": "Livekit max concurrency",
           "type": "integer",
+          "maximum": 5,
           "minimum": 1,
           "x-nullable": true
         }
@@ -43562,6 +43601,7 @@ export const OPENAPI_CONTRACT = Object.freeze({
         "livekit_max_concurrency": {
           "title": "Livekit max concurrency",
           "type": "integer",
+          "maximum": 5,
           "minimum": 1,
           "x-nullable": true
         }
@@ -44596,6 +44636,7 @@ export const OPENAPI_CONTRACT = Object.freeze({
         "livekit_max_concurrency": {
           "title": "Livekit max concurrency",
           "type": "integer",
+          "maximum": 5,
           "minimum": 1
         },
         "commit_message": {
@@ -76109,6 +76150,27 @@ export const OPENAPI_CONTRACT = Object.freeze({
         "persona": {
           "title": "Persona",
           "type": "object"
+        }
+      }
+    },
+    "ALKSimulateRecordingUploadResult": {
+      "required": [
+        "recording_url",
+        "object_key"
+      ],
+      "type": "object",
+      "properties": {
+        "recording_url": {
+          "title": "Recording url",
+          "type": "string",
+          "format": "uri",
+          "maxLength": 1024,
+          "minLength": 1
+        },
+        "object_key": {
+          "title": "Object key",
+          "type": "string",
+          "minLength": 1
         }
       }
     },

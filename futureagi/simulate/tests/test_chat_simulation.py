@@ -976,7 +976,7 @@ class TestStoreChatMessages:
         assert assistant_message.latency_ms == 250
 
     @patch("tfc.temporal.drop_in.decorator.close_old_connections")
-    @patch("simulate.utils.chat_simulation._run_simulate_evaluations_task.apply_async")
+    @patch("simulate.tasks.chat_sim._run_simulate_evaluations_task.apply_async")
     def test_store_messages_handles_dict_input(
         self,
         mock_eval_task,

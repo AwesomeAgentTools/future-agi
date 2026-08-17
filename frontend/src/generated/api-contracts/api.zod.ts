@@ -27704,6 +27704,7 @@ export const simulateAgentDefinitionsCreateCreateBodyDescriptionDefault = ``;
 export const simulateAgentDefinitionsCreateCreateBodyObservabilityEnabledDefault = false;
 export const simulateAgentDefinitionsCreateCreateBodyLivekitUrlMax = 500;
 
+export const simulateAgentDefinitionsCreateCreateBodyLivekitMaxConcurrencyMax = 5;
 
 
 
@@ -27739,7 +27740,7 @@ export const SimulateAgentDefinitionsCreateCreateBody = zod.object({
   "livekit_config_json": zod.object({
 
 }).passthrough().optional(),
-  "livekit_max_concurrency": zod.number().min(1).optional()
+  "livekit_max_concurrency": zod.number().min(1).max(simulateAgentDefinitionsCreateCreateBodyLivekitMaxConcurrencyMax).optional()
 })
 
 
@@ -27822,6 +27823,7 @@ export const simulateAgentDefinitionsEditUpdateBodyAgentNameMax = 255;
 
 export const simulateAgentDefinitionsEditUpdateBodyLivekitUrlMax = 500;
 
+export const simulateAgentDefinitionsEditUpdateBodyLivekitMaxConcurrencyMax = 5;
 
 
 
@@ -27854,7 +27856,7 @@ export const SimulateAgentDefinitionsEditUpdateBody = zod.object({
   "livekit_config_json": zod.object({
 
 }).passthrough().optional(),
-  "livekit_max_concurrency": zod.number().min(1).optional()
+  "livekit_max_concurrency": zod.number().min(1).max(simulateAgentDefinitionsEditUpdateBodyLivekitMaxConcurrencyMax).optional()
 })
 
 
@@ -27956,6 +27958,7 @@ export const simulateAgentDefinitionsVersionsCreateCreateBodyLivekitApiSecretMax
 
 export const simulateAgentDefinitionsVersionsCreateCreateBodyLivekitAgentNameMax = 255;
 
+export const simulateAgentDefinitionsVersionsCreateCreateBodyLivekitMaxConcurrencyMax = 5;
 
 export const simulateAgentDefinitionsVersionsCreateCreateBodyCommitMessageDefault = ``;
 export const simulateAgentDefinitionsVersionsCreateCreateBodyObservabilityEnabledDefault = false;
@@ -27985,7 +27988,7 @@ export const SimulateAgentDefinitionsVersionsCreateCreateBody = zod.object({
   "livekit_config_json": zod.object({
 
 }).passthrough().optional(),
-  "livekit_max_concurrency": zod.number().min(1).optional(),
+  "livekit_max_concurrency": zod.number().min(1).max(simulateAgentDefinitionsVersionsCreateCreateBodyLivekitMaxConcurrencyMax).optional(),
   "commit_message": zod.string().default(simulateAgentDefinitionsVersionsCreateCreateBodyCommitMessageDefault),
   "observability_enabled": zod.boolean().default(simulateAgentDefinitionsVersionsCreateCreateBodyObservabilityEnabledDefault)
 })
@@ -29171,6 +29174,25 @@ export const SimulateApiAlkSimulateCallExecutionsRecordingUploadParams = zod.obj
   "call_execution_id": zod.string()
 })
 
+export const SimulateApiAlkSimulateCallExecutionsRecordingUploadBody = zod.object({
+  "file": zod.instanceof(File),
+  "filename": zod.string().optional()
+})
+
+export const simulateApiAlkSimulateCallExecutionsRecordingUploadResponseStatusDefault = true;
+export const simulateApiAlkSimulateCallExecutionsRecordingUploadResponseResultRecordingUrlMax = 1024;
+
+
+
+
+export const SimulateApiAlkSimulateCallExecutionsRecordingUploadResponse = zod.object({
+  "status": zod.boolean().default(simulateApiAlkSimulateCallExecutionsRecordingUploadResponseStatusDefault),
+  "result": zod.object({
+  "recording_url": zod.string().url().min(1).max(simulateApiAlkSimulateCallExecutionsRecordingUploadResponseResultRecordingUrlMax),
+  "object_key": zod.string().min(1)
+})
+})
+
 
 /**
  * Views here are intentionally minimal: they resolve the tenant-scoped
@@ -29363,8 +29385,11 @@ export const SimulateApiAlkSimulateTestExecutionsBatchParams = zod.object({
   "test_execution_id": zod.string()
 })
 
-export const SimulateApiAlkSimulateTestExecutionsBatchBody = zod.object({
 
+
+
+export const SimulateApiAlkSimulateTestExecutionsBatchBody = zod.object({
+  "count": zod.number().min(1).optional()
 })
 
 export const simulateApiAlkSimulateTestExecutionsBatchResponseStatusDefault = true;

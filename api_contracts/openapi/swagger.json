@@ -48988,10 +48988,45 @@
             "post": {
                 "operationId": "simulate_api_alk-simulate_call-executions_recording_upload",
                 "description": "Accept a multipart audio upload and hand it to the shared voice\nstorage helper (``upload_audio_to_s3``). Matches the pattern the\nLiveKit and Vapi voice services already use for their recordings.",
-                "parameters": [],
+                "parameters": [
+                    {
+                        "name": "file",
+                        "in": "formData",
+                        "required": true,
+                        "type": "file"
+                    },
+                    {
+                        "name": "filename",
+                        "in": "formData",
+                        "required": false,
+                        "type": "string",
+                        "maxLength": 200
+                    }
+                ],
                 "responses": {
-                    "201": {
-                        "description": ""
+                    "200": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ALKSimulateRecordingUploadResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiTextErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiTextErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "",
+                        "schema": {
+                            "$ref": "#/definitions/ApiTextErrorResponse"
+                        }
                     },
                     "default": {
                         "description": "Default error response",
@@ -49005,7 +49040,9 @@
                 ],
                 "tags": [
                     "simulate"
-                ]
+                ],
+                "x-runtime-request-validation": true,
+                "x-runtime-response-validation": true
             },
             "parameters": [
                 {
@@ -49266,7 +49303,7 @@
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/EmptyRequest"
+                            "$ref": "#/definitions/ALKSimulateBatchCreateRequest"
                         }
                     }
                 ],
@@ -110634,6 +110671,7 @@
                 "livekit_max_concurrency": {
                     "title": "Livekit max concurrency",
                     "type": "integer",
+                    "maximum": 5,
                     "minimum": 1,
                     "x-nullable": true
                 }
@@ -111052,6 +111090,7 @@
                 "livekit_max_concurrency": {
                     "title": "Livekit max concurrency",
                     "type": "integer",
+                    "maximum": 5,
                     "minimum": 1,
                     "x-nullable": true
                 }
@@ -111288,6 +111327,7 @@
                 "livekit_max_concurrency": {
                     "title": "Livekit max concurrency",
                     "type": "integer",
+                    "maximum": 5,
                     "minimum": 1
                 },
                 "commit_message": {
@@ -113379,6 +113419,43 @@
                 }
             }
         },
+        "ALKSimulateRecordingUploadResult": {
+            "required": [
+                "recording_url",
+                "object_key"
+            ],
+            "type": "object",
+            "properties": {
+                "recording_url": {
+                    "title": "Recording url",
+                    "type": "string",
+                    "format": "uri",
+                    "maxLength": 1024,
+                    "minLength": 1
+                },
+                "object_key": {
+                    "title": "Object key",
+                    "type": "string",
+                    "minLength": 1
+                }
+            }
+        },
+        "ALKSimulateRecordingUploadResponse": {
+            "required": [
+                "result"
+            ],
+            "type": "object",
+            "properties": {
+                "status": {
+                    "title": "Status",
+                    "type": "boolean",
+                    "default": true
+                },
+                "result": {
+                    "$ref": "#/definitions/ALKSimulateRecordingUploadResult"
+                }
+            }
+        },
         "ALKSimulateTranscriptSegment": {
             "required": [
                 "speaker_role",
@@ -113809,6 +113886,16 @@
                 },
                 "result": {
                     "$ref": "#/definitions/ALKSimulateStartTestExecutionResult"
+                }
+            }
+        },
+        "ALKSimulateBatchCreateRequest": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "title": "Count",
+                    "type": "integer",
+                    "minimum": 1
                 }
             }
         },

@@ -14312,7 +14312,10 @@ export interface AgentDefinitionCreateRequestApi {
   livekit_api_secret?: string;
   livekit_agent_name?: string;
   livekit_config_json?: AgentDefinitionCreateRequestApiLivekitConfigJson;
-  /** @minimum 1 */
+  /**
+     * @minimum 1
+     * @maximum 5
+     */
   livekit_max_concurrency?: number;
 }
 
@@ -14542,7 +14545,10 @@ export interface AgentDefinitionEditRequestApi {
   livekit_api_secret?: string;
   livekit_agent_name?: string;
   livekit_config_json?: AgentDefinitionEditRequestApiLivekitConfigJson;
-  /** @minimum 1 */
+  /**
+     * @minimum 1
+     * @maximum 5
+     */
   livekit_max_concurrency?: number;
 }
 
@@ -14648,7 +14654,10 @@ export interface AgentVersionCreateRequestApi {
   /** @maxLength 255 */
   livekit_agent_name?: string;
   livekit_config_json?: AgentVersionCreateRequestApiLivekitConfigJson;
-  /** @minimum 1 */
+  /**
+     * @minimum 1
+     * @maximum 5
+     */
   livekit_max_concurrency?: number;
   commit_message?: string;
   observability_enabled?: boolean;
@@ -15628,6 +15637,21 @@ export interface AgentPromptOptimiserTrialScenariosResponseApi {
   result: AgentPromptOptimiserTrialScenariosResultApi;
 }
 
+export interface ALKSimulateRecordingUploadResultApi {
+  /**
+     * @minLength 1
+     * @maxLength 1024
+     */
+  recording_url: string;
+  /** @minLength 1 */
+  object_key: string;
+}
+
+export interface ALKSimulateRecordingUploadResponseApi {
+  status?: boolean;
+  result: ALKSimulateRecordingUploadResultApi;
+}
+
 export type ALKSimulateResultApiStatus = typeof ALKSimulateResultApiStatus[keyof typeof ALKSimulateResultApiStatus];
 
 
@@ -15788,6 +15812,11 @@ export interface ALKSimulateStartTestExecutionResultApi {
 export interface ALKSimulateStartTestExecutionResponseApi {
   status?: boolean;
   result: ALKSimulateStartTestExecutionResultApi;
+}
+
+export interface ALKSimulateBatchCreateRequestApi {
+  /** @minimum 1 */
+  count?: number;
 }
 
 export interface ALKSimulateBatchCreateResultApi {
@@ -26046,6 +26075,11 @@ export type SimulateApiAgentPromptOptimiserList200 = {
   next?: string;
   previous?: string;
   results: AgentPromptOptimiserRunListApi[];
+};
+
+export type SimulateApiAlkSimulateCallExecutionsRecordingUploadBody = {
+  file: Blob;
+  filename?: string;
 };
 
 export type SimulateApiCallExecutionsListParams = {

@@ -1612,8 +1612,9 @@ class TestBuildTranscriptData:
         from simulate.models import CallTranscript
         from simulate.temporal.activities.xl import _build_transcript_data
 
-        # VAPI inbound (the resolver's default) maps "user" to tested_agent
-        # and "assistant" to simulator; seed accordingly.
+        # No provider_call_data ⇒ the resolver falls back to VAPI and defaults
+        # to OUTBOUND (its direction default on missing metadata), which maps
+        # "user" to the simulator (customer) and "assistant" to the tested agent.
         CallTranscript.objects.create(
             call_execution=call_execution,
             speaker_role=CallTranscript.SpeakerRole.USER,
@@ -1631,8 +1632,8 @@ class TestBuildTranscriptData:
 
         result = _build_transcript_data(call_execution)
 
-        assert "agent: Hello, how can I help?" in result["transcript"]
-        assert "customer: I need help with my order." in result["transcript"]
+        assert "customer: Hello, how can I help?" in result["transcript"]
+        assert "agent: I need help with my order." in result["transcript"]
 
     @pytest.mark.django_db(transaction=True)
     def test_build_transcript_data_no_transcripts(self, call_execution):
