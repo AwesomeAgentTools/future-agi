@@ -248,7 +248,6 @@ const CreateRunTestPage = ({ open, onClose }) => {
       return response.data;
     },
     enabled: !!formData?.agentType,
-    keepPreviousData: true,
   });
 
   // Extract scenarios data
@@ -1030,7 +1029,10 @@ const CreateRunTestPage = ({ open, onClose }) => {
       case 1:
         return (
           <>
-            {filteredScenarios.length === 0 && debouncedSearch === "" ? (
+            {!isLoadingScenarios &&
+            !scenariosError &&
+            filteredScenarios.length === 0 &&
+            debouncedSearch === "" ? (
               <EmptyLayout
                 title="Add your first scenario"
                 description="Create scenarios and experiments to evaluate your application across different test cases and conditions."
