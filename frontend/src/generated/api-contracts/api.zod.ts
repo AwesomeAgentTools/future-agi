@@ -27704,7 +27704,7 @@ export const simulateAgentDefinitionsCreateCreateBodyDescriptionDefault = ``;
 export const simulateAgentDefinitionsCreateCreateBodyObservabilityEnabledDefault = false;
 export const simulateAgentDefinitionsCreateCreateBodyLivekitUrlMax = 500;
 
-export const simulateAgentDefinitionsCreateCreateBodyLivekitMaxConcurrencyMax = 5;
+export const simulateAgentDefinitionsCreateCreateBodyLivekitMaxConcurrencyMax = 25;
 
 
 
@@ -27823,7 +27823,7 @@ export const simulateAgentDefinitionsEditUpdateBodyAgentNameMax = 255;
 
 export const simulateAgentDefinitionsEditUpdateBodyLivekitUrlMax = 500;
 
-export const simulateAgentDefinitionsEditUpdateBodyLivekitMaxConcurrencyMax = 5;
+export const simulateAgentDefinitionsEditUpdateBodyLivekitMaxConcurrencyMax = 25;
 
 
 
@@ -27958,7 +27958,7 @@ export const simulateAgentDefinitionsVersionsCreateCreateBodyLivekitApiSecretMax
 
 export const simulateAgentDefinitionsVersionsCreateCreateBodyLivekitAgentNameMax = 255;
 
-export const simulateAgentDefinitionsVersionsCreateCreateBodyLivekitMaxConcurrencyMax = 5;
+export const simulateAgentDefinitionsVersionsCreateCreateBodyLivekitMaxConcurrencyMax = 25;
 
 export const simulateAgentDefinitionsVersionsCreateCreateBodyCommitMessageDefault = ``;
 export const simulateAgentDefinitionsVersionsCreateCreateBodyObservabilityEnabledDefault = false;

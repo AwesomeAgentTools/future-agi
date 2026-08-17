@@ -110671,7 +110671,7 @@
                 "livekit_max_concurrency": {
                     "title": "Livekit max concurrency",
                     "type": "integer",
-                    "maximum": 5,
+                    "maximum": 25,
                     "minimum": 1,
                     "x-nullable": true
                 }
@@ -111090,7 +111090,7 @@
                 "livekit_max_concurrency": {
                     "title": "Livekit max concurrency",
                     "type": "integer",
-                    "maximum": 5,
+                    "maximum": 25,
                     "minimum": 1,
                     "x-nullable": true
                 }
@@ -111327,7 +111327,7 @@
                 "livekit_max_concurrency": {
                     "title": "Livekit max concurrency",
                     "type": "integer",
-                    "maximum": 5,
+                    "maximum": 25,
                     "minimum": 1
                 },
                 "commit_message": {
