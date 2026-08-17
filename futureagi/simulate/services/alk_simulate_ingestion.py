@@ -418,15 +418,22 @@ def create_alk_sim_test_execution(
 def create_alk_sim_call_execution_batch(
     test_execution: TestExecution,
     *,
+    count: int | None = None,
     batch_size: int = DEFAULT_BATCH_SIZE,
 ) -> BatchCreateResult:
-    """Claim up to ``batch_size + 1`` rows for an ALK runner batch.
+    """Claim rows for an ALK runner batch.
 
     Hosted executions pre-create unclaimed PENDING rows so the UI can render
     immediately. SDK-first executions have no rows yet. This function supports
     both: it adopts unclaimed rows and creates only missing rows, preserving the
     existing paginated ``call_execution_ids`` contract without duplicates.
+
+    An explicit ``count`` selects at most that exact number of remaining rows.
+    When omitted, the legacy ``batch_size + 1`` behavior is preserved.
     """
+    if count is not None and count < 1:
+        raise ALKSimulateIngestionError("count must be at least 1")
+
     with transaction.atomic():
         locked_execution = TestExecution.objects.select_for_update().get(
             id=test_execution.id
@@ -459,7 +466,7 @@ def create_alk_sim_call_execution_batch(
                 "have been processed."
             )
 
-        batch_limit = batch_size + 1
+        batch_limit = count if count is not None else batch_size + 1
         selected = available[:batch_limit]
         adopted: list[CallExecution] = []
         new_calls: list[CallExecution] = []
@@ -1010,6 +1017,12 @@ def _apply_conversation_metrics(call_execution: CallExecution) -> None:
         role = _TRANSCRIPT_ROLE_TO_METRIC_ROLE.get(t.speaker_role)
         if role is None:
             continue
+        # A trailing target turn captured from LiveKit's text stream can be
+        # retained for display without having audio timestamps. Its synthetic
+        # zero-duration position preserves ordering, but must not fabricate an
+        # agent-latency sample.
+        if role == "bot" and (t.end_time_ms or 0) <= (t.start_time_ms or 0):
+            continue
         start_s = (t.start_time_ms or 0) / 1000.0
         end_s = (t.end_time_ms or 0) / 1000.0 if t.end_time_ms else None
         messages.append(
@@ -1048,6 +1061,22 @@ def _apply_conversation_metrics(call_execution: CallExecution) -> None:
     )
 
     detailed_data = dict(metrics.detailed_data or {})
+    full_metric_roles = [
+        role
+        for transcript in transcripts
+        if (role := _TRANSCRIPT_ROLE_TO_METRIC_ROLE.get(transcript.speaker_role))
+        is not None
+    ]
+    full_user_count = full_metric_roles.count("user")
+    full_bot_count = full_metric_roles.count("bot")
+    detailed_data.update(
+        {
+            "message_count": len(full_metric_roles),
+            "turn_count": full_bot_count,
+            "user_message_count": full_user_count,
+            "bot_message_count": full_bot_count,
+        }
+    )
 
     # Preserve csat_score across recomputes — CSAT is written by a later task
     # into conversation_metrics_data; a second (idempotent) ingest must not
@@ -1069,7 +1098,7 @@ def _apply_conversation_metrics(call_execution: CallExecution) -> None:
             detailed_data["total_tokens"] = token_usage["total_tokens"]
 
     if call_execution.message_count is None:
-        call_execution.message_count = len(messages)
+        call_execution.message_count = len(full_metric_roles)
     call_execution.conversation_metrics_data = detailed_data
 
     # Backfill duration from transcript span when the SDK payload carried no

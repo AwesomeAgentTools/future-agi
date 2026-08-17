@@ -344,6 +344,62 @@ class TestBatchCreate:
         assert call.scenario_id == scenario.id
         assert call.call_metadata["external_runner"] == "alk"
 
+    def test_batch_count_is_exact_and_has_more_is_accurate(
+        self, auth_client, run_test, scenario
+    ):
+        second_scenario = Scenarios.objects.create(
+            name="Second ALK Ingestion Scenario",
+            description="Second scenario for ALK batch tests",
+            source="test",
+            scenario_type=Scenarios.ScenarioTypes.DATASET,
+            organization=run_test.organization,
+            workspace=run_test.workspace,
+            agent_definition=run_test.agent_definition,
+            simulator_agent=run_test.simulator_agent,
+            status=StatusType.COMPLETED.value,
+        )
+        run_test.scenarios.add(second_scenario)
+
+        start = auth_client.post(
+            f"{ALK_BASE}/run-tests/{run_test.id}/test-executions/",
+            {},
+            format="json",
+        )
+        test_execution_id = start.json()["result"]["test_execution_id"]
+
+        first = auth_client.post(
+            f"{ALK_BASE}/test-executions/{test_execution_id}/batch/",
+            {"count": 1},
+            format="json",
+        )
+        assert first.status_code == 200, first.content
+        assert len(first.json()["result"]["call_execution_ids"]) == 1
+        assert first.json()["result"]["has_more"] is True
+
+        second = auth_client.post(
+            f"{ALK_BASE}/test-executions/{test_execution_id}/batch/",
+            {"count": 1},
+            format="json",
+        )
+        assert second.status_code == 200, second.content
+        assert len(second.json()["result"]["call_execution_ids"]) == 1
+        assert second.json()["result"]["has_more"] is False
+
+    def test_batch_rejects_non_positive_count(self, auth_client, run_test):
+        start = auth_client.post(
+            f"{ALK_BASE}/run-tests/{run_test.id}/test-executions/",
+            {},
+            format="json",
+        )
+        test_execution_id = start.json()["result"]["test_execution_id"]
+
+        response = auth_client.post(
+            f"{ALK_BASE}/test-executions/{test_execution_id}/batch/",
+            {"count": 0},
+            format="json",
+        )
+        assert response.status_code == 400
+
     def test_second_batch_has_nothing_to_create(self, auth_client, run_test):
         te_id, _ = _start_and_batch(auth_client, run_test)
         second = auth_client.post(

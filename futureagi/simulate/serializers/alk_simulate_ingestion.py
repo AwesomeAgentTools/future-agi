@@ -115,6 +115,10 @@ class ALKSimulateBatchCreateResultSerializer(serializers.Serializer):
     batched_scenarios = serializers.ListField(child=serializers.UUIDField())
 
 
+class ALKSimulateBatchCreateRequestSerializer(serializers.Serializer):
+    count = serializers.IntegerField(required=False, min_value=1)
+
+
 class ALKSimulateBatchCreateResponseSerializer(serializers.Serializer):
     status = serializers.BooleanField(default=True)
     result = ALKSimulateBatchCreateResultSerializer()

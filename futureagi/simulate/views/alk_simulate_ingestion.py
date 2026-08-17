@@ -25,6 +25,7 @@ from accounts.authentication import APIKeyAuthentication
 from simulate.authentication import InternalServiceAuthentication
 from simulate.models import CallExecution, RunTest, SimulatorAgent, TestExecution
 from simulate.serializers.alk_simulate_ingestion import (
+    ALKSimulateBatchCreateRequestSerializer,
     ALKSimulateBatchCreateResponseSerializer,
     ALKSimulateProvisionResponseSerializer,
     ALKSimulateProvisionRunTestRequestSerializer,
@@ -45,10 +46,7 @@ from simulate.services.alk_simulate_ingestion import (
     store_alk_recording,
 )
 from tfc.utils.api_contracts import validated_request
-from tfc.utils.api_serializers import (
-    ApiTextErrorResponseSerializer,
-    EmptyRequestSerializer,
-)
+from tfc.utils.api_serializers import ApiTextErrorResponseSerializer
 from tfc.utils.general_methods import GeneralMethods
 
 logger = structlog.get_logger(__name__)
@@ -245,7 +243,7 @@ class ALKSimulateIngestionViewSet(ViewSet):
         url_path=r"test-executions/(?P<test_execution_id>[0-9a-fA-F-]{36})/batch",
     )
     @validated_request(
-        request_serializer=EmptyRequestSerializer,
+        request_serializer=ALKSimulateBatchCreateRequestSerializer,
         responses={
             200: ALKSimulateBatchCreateResponseSerializer,
             400: ApiTextErrorResponseSerializer,
@@ -261,7 +259,9 @@ class ALKSimulateIngestionViewSet(ViewSet):
             return self.gm.not_found("Test execution not found")
 
         try:
-            result = create_alk_sim_call_execution_batch(test_execution)
+            result = create_alk_sim_call_execution_batch(
+                test_execution, count=request.validated_data.get("count")
+            )
         except ALKSimulateIngestionError as e:
             return self.gm.bad_request(str(e))
         except Exception:
