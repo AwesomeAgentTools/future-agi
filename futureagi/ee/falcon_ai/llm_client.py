@@ -141,15 +141,14 @@ class FalconLLMClient:
                 yield chunk
 
     async def _stream_managed(self, messages, tools=None):
-        from ee.licensing.managed_ai import chat_completion, response_content
+        from ee.licensing.managed_ai import stream_chat_completion
 
         payload = {
             "model": self.model,
             "messages": messages,
-            "tools": tools or [],
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
-            "stream": False,
+            "stream": True,
             "stream_options": {"include_usage": True},
         }
         if tools:
