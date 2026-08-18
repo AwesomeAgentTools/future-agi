@@ -125,3 +125,91 @@ func TestStoreConcurrency(t *testing.T) {
 
 	// Should not panic or race (run with -race flag)
 }
+
+func privacyConfig(pattern string) *OrgConfig {
+	return &OrgConfig{Privacy: &PrivacyConfig{
+		Enabled:  true,
+		Mode:     "patterns",
+		Patterns: []*RedactPatternConfig{{Name: "test", Pattern: pattern}},
+	}}
+}
+
+// The redactor cache lives on the store so that no config-change path can
+// forget to drop it. A stale redactor means content is exported using an org's
+// previous patterns after it tightened them, which is a privacy failure rather
+// than a staleness annoyance — so every mutator is covered here.
+func TestStoreRedactorInvalidatedOnEveryConfigChange(t *testing.T) {
+	const orgID = "org-1"
+
+	redactsWith := func(t *testing.T, s *Store, secret string) bool {
+		t.Helper()
+		r := s.Redactor(orgID)
+		if r == nil {
+			t.Fatal("no redactor for an org with privacy enabled")
+		}
+		return r.Redact("value "+secret) != "value "+secret
+	}
+
+	t.Run("Set", func(t *testing.T) {
+		s := NewStore()
+		s.Set(orgID, privacyConfig("alpha"))
+		if !redactsWith(t, s, "alpha") {
+			t.Fatal("initial pattern not applied")
+		}
+		s.Set(orgID, privacyConfig("beta"))
+		if !redactsWith(t, s, "beta") {
+			t.Error("Set did not drop the stale redactor")
+		}
+	})
+
+	t.Run("MergeBulk", func(t *testing.T) {
+		s := NewStore()
+		s.Set(orgID, privacyConfig("alpha"))
+		_ = redactsWith(t, s, "alpha") // prime the cache
+		s.MergeBulk(map[string]*OrgConfig{orgID: privacyConfig("beta")},
+			map[string]struct{}{orgID: {}})
+		if !redactsWith(t, s, "beta") {
+			t.Error("MergeBulk did not drop the stale redactor")
+		}
+	})
+
+	// LoadBulk replaces every config and fires no onChange, so a cache living
+	// in a plugin behind that callback would never hear about this one.
+	t.Run("LoadBulk", func(t *testing.T) {
+		s := NewStore()
+		s.Set(orgID, privacyConfig("alpha"))
+		_ = redactsWith(t, s, "alpha")
+		s.LoadBulk(map[string]*OrgConfig{orgID: privacyConfig("beta")})
+		if !redactsWith(t, s, "beta") {
+			t.Error("LoadBulk did not drop the stale redactor")
+		}
+	})
+
+	t.Run("Delete", func(t *testing.T) {
+		s := NewStore()
+		s.Set(orgID, privacyConfig("alpha"))
+		_ = redactsWith(t, s, "alpha")
+		s.Delete(orgID)
+		if r := s.Redactor(orgID); r != nil {
+			t.Error("redactor survived the org being deleted")
+		}
+	})
+}
+
+func TestStoreRedactorAbsentWithoutPrivacyConfig(t *testing.T) {
+	s := NewStore()
+	if r := s.Redactor("unknown-org"); r != nil {
+		t.Error("unknown org should have no redactor")
+	}
+	s.Set("org-2", &OrgConfig{})
+	if r := s.Redactor("org-2"); r != nil {
+		t.Error("org without privacy config should have no redactor")
+	}
+	s.Set("org-3", &OrgConfig{Privacy: &PrivacyConfig{Enabled: false}})
+	if r := s.Redactor("org-3"); r != nil {
+		t.Error("org with privacy disabled should have no redactor")
+	}
+	if r := s.Redactor(""); r != nil {
+		t.Error("empty org id should have no redactor")
+	}
+}

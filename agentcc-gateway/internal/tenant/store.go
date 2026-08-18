@@ -6,16 +6,25 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/futureagi/agentcc-gateway/internal/privacy"
 )
 
 // Store is a thread-safe in-memory store for per-org gateway configurations.
 // It maps organization IDs to their merged OrgConfig. All methods are safe
 // for concurrent use.
 type Store struct {
-	mu          sync.RWMutex
-	configs     map[string]*OrgConfig
-	configHash  map[string][32]byte      // SHA-256 of serialized config per org
-	onChange    func(orgID string)        // optional callback fired when an org config changes
+	mu         sync.RWMutex
+	configs    map[string]*OrgConfig
+	configHash map[string][32]byte // SHA-256 of serialized config per org
+	onChange   func(orgID string)  // optional callback fired when an org config changes
+
+	// redactors caches the per-org privacy.Redactor built from configs.
+	// It lives here rather than in the plugins that use it so that every
+	// path which changes a config also drops the stale redactor — a missed
+	// invalidation would mean redacting with an org's previous patterns
+	// after it tightened them.
+	redactors sync.Map // orgID -> *privacy.Redactor
 }
 
 // NewStore creates a new empty tenant config store.
@@ -49,6 +58,7 @@ func (s *Store) Set(orgID string, cfg *OrgConfig) {
 	s.configs[orgID] = cfg
 	s.configHash[orgID] = hashConfig(cfg)
 	s.mu.Unlock()
+	s.redactors.Delete(orgID)
 }
 
 // Delete removes the org config for the given org ID.
@@ -57,6 +67,7 @@ func (s *Store) Delete(orgID string) {
 	delete(s.configs, orgID)
 	delete(s.configHash, orgID)
 	s.mu.Unlock()
+	s.redactors.Delete(orgID)
 }
 
 // GetAll returns a copy of all org configs.
@@ -86,14 +97,18 @@ func (s *Store) LoadBulk(configs map[string]*OrgConfig) {
 	for k, v := range configs {
 		s.configs[k] = v
 	}
+	// LoadBulk replaces every config and deliberately fires no onChange, so
+	// nothing downstream would otherwise learn these redactors are stale.
+	s.redactors.Clear()
 }
 
 // MergeBulk merges successfully parsed org configs into the store.
-// - Orgs in parsedConfigs are added or updated.
-// - Orgs present in the control plane response (allOrgIDs) but NOT in
-//   parsedConfigs failed to parse — their existing store entries are preserved.
-// - Orgs in the store that are NOT in allOrgIDs were removed from the control
-//   plane — they are deleted from the store.
+//   - Orgs in parsedConfigs are added or updated.
+//   - Orgs present in the control plane response (allOrgIDs) but NOT in
+//     parsedConfigs failed to parse — their existing store entries are preserved.
+//   - Orgs in the store that are NOT in allOrgIDs were removed from the control
+//     plane — they are deleted from the store.
+//
 // Fires the onChange callback for each org that was added, updated, or removed.
 func (s *Store) MergeBulk(parsedConfigs map[string]*OrgConfig, allOrgIDs map[string]struct{}) {
 	s.mu.Lock()
@@ -124,12 +139,57 @@ func (s *Store) MergeBulk(parsedConfigs map[string]*OrgConfig, allOrgIDs map[str
 	cb := s.onChange
 	s.mu.Unlock()
 
+	for _, orgID := range changed {
+		s.redactors.Delete(orgID)
+	}
+
 	// Fire onChange outside the lock to avoid deadlocks with downstream caches.
 	if cb != nil {
 		for _, orgID := range changed {
 			cb(orgID)
 		}
 	}
+}
+
+// Redactor returns the privacy redactor for an org, or nil when the org has no
+// privacy config or none is enabled. Built on first use and cached until the
+// org's config changes.
+//
+// Every sink that exports request or response content must redact through this
+// — the request-log webhook and exported trace spans alike — or one of them
+// becomes a way around a privacy policy the operator configured.
+func (s *Store) Redactor(orgID string) *privacy.Redactor {
+	if s == nil || orgID == "" {
+		return nil
+	}
+	if v, ok := s.redactors.Load(orgID); ok {
+		r, _ := v.(*privacy.Redactor)
+		return r
+	}
+
+	cfg := s.Get(orgID)
+	if cfg == nil || cfg.Privacy == nil || !cfg.Privacy.Enabled {
+		return nil
+	}
+
+	patterns := make([]privacy.PatternConfig, 0, len(cfg.Privacy.Patterns))
+	for _, pat := range cfg.Privacy.Patterns {
+		if pat != nil && pat.Pattern != "" {
+			patterns = append(patterns, privacy.PatternConfig{Name: pat.Name, Pattern: pat.Pattern})
+		}
+	}
+
+	mode := cfg.Privacy.Mode
+	if mode == "" {
+		mode = privacy.ModePatterns
+	}
+	redactor := privacy.New(mode, patterns)
+
+	// LoadOrStore, not Store: a concurrent invalidation between Get and here
+	// would otherwise be overwritten by this now-stale build.
+	actual, _ := s.redactors.LoadOrStore(orgID, redactor)
+	r, _ := actual.(*privacy.Redactor)
+	return r
 }
 
 // hashConfig returns a SHA-256 hash of the JSON-serialized config.

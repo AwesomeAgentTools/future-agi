@@ -582,6 +582,8 @@ func main() {
 		slog.Info("alerting enabled", "rules", alertManager.RuleCount())
 	}
 
+	// The logging plugin is deliberately absent here: its redactor cache moved
+	// onto tenantStore, which invalidates itself on every config change.
 	if onOrgConfigChange != nil {
 		prev := onOrgConfigChange
 		onOrgConfigChange = func(orgID string) {
@@ -589,17 +591,11 @@ func main() {
 			if alertingPlugin != nil {
 				alertingPlugin.InvalidateOrg(orgID)
 			}
-			if loggingPlugin != nil {
-				loggingPlugin.InvalidateOrg(orgID)
-			}
 		}
-	} else if alertingPlugin != nil || loggingPlugin != nil || ipaclPlugin != nil {
+	} else if alertingPlugin != nil || ipaclPlugin != nil {
 		onOrgConfigChange = func(orgID string) {
 			if alertingPlugin != nil {
 				alertingPlugin.InvalidateOrg(orgID)
-			}
-			if loggingPlugin != nil {
-				loggingPlugin.InvalidateOrg(orgID)
 			}
 			if ipaclPlugin != nil {
 				ipaclPlugin.InvalidateOrg(orgID)

@@ -3,7 +3,6 @@ package logging
 import (
 	"context"
 	"log/slog"
-	"sync"
 
 	"github.com/futureagi/agentcc-gateway/internal/config"
 	"github.com/futureagi/agentcc-gateway/internal/models"
@@ -14,12 +13,11 @@ import (
 
 // Plugin is a post-response pipeline plugin that asynchronously logs trace records.
 type Plugin struct {
-	emitter      *TraceEmitter
-	flusher      *LogFlusher
-	cfg          config.RequestLoggingConfig
-	redactor     *privacy.Redactor
-	tenantStore  *tenant.Store
-	orgRedactors sync.Map
+	emitter     *TraceEmitter
+	flusher     *LogFlusher
+	cfg         config.RequestLoggingConfig
+	redactor    *privacy.Redactor
+	tenantStore *tenant.Store
 }
 
 // New creates a new logging plugin.
@@ -81,7 +79,7 @@ func (p *Plugin) ProcessResponse(_ context.Context, rc *models.RequestContext) p
 	}
 
 	// Check per-org privacy config from tenant store for richer redaction (custom patterns).
-	orgRedactor := p.getOrgRedactor(rc)
+	orgRedactor := p.tenantStore.Redactor(rc.Metadata[tenant.MetadataKeyOrgID])
 
 	// Apply redaction: org redactor (with org patterns) takes priority over global.
 	// The flag goes on the record, not on rc: this runs inside the parallel
@@ -111,53 +109,6 @@ func markRedacted(record *TraceRecord) {
 		record.Metadata = make(map[string]string, 1)
 	}
 	record.Metadata["privacy_redacted"] = "true"
-}
-
-// getOrgRedactor returns a per-org privacy redactor if the org has privacy config.
-func (p *Plugin) getOrgRedactor(rc *models.RequestContext) *privacy.Redactor {
-	if p.tenantStore == nil {
-		return nil
-	}
-	orgID := rc.Metadata[tenant.MetadataKeyOrgID]
-	if orgID == "" {
-		return nil
-	}
-	orgCfg := p.tenantStore.Get(orgID)
-	if orgCfg == nil || orgCfg.Privacy == nil || !orgCfg.Privacy.Enabled {
-		return nil
-	}
-
-	// Check cache first.
-	if v, ok := p.orgRedactors.Load(orgID); ok {
-		return v.(*privacy.Redactor)
-	}
-
-	// Build redactor from org patterns.
-	patterns := make([]privacy.PatternConfig, 0, len(orgCfg.Privacy.Patterns))
-	for _, pat := range orgCfg.Privacy.Patterns {
-		if pat != nil && pat.Pattern != "" {
-			patterns = append(patterns, privacy.PatternConfig{
-				Name:    pat.Name,
-				Pattern: pat.Pattern,
-			})
-		}
-	}
-
-	mode := orgCfg.Privacy.Mode
-	if mode == "" {
-		mode = privacy.ModePatterns
-	}
-	redactor := privacy.New(mode, patterns)
-	p.orgRedactors.Store(orgID, redactor)
-	return redactor
-}
-
-// InvalidateOrg removes the cached per-org redactor so updated privacy config is rebuilt.
-func (p *Plugin) InvalidateOrg(orgID string) {
-	if p == nil || orgID == "" {
-		return
-	}
-	p.orgRedactors.Delete(orgID)
 }
 
 // Close drains buffered trace records and stops workers.
