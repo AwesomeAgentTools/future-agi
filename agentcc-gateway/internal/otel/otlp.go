@@ -182,8 +182,9 @@ func (e *OTLPExporter) Shutdown() error {
 func (e *OTLPExporter) Dropped() int64 { return e.dropped.Load() }
 
 // flush sends one batch. Retry semantics match the request-log flusher:
-// transport failures and 5xx are re-queued until otlpMaxRetries consecutive
-// failures, 4xx is dropped immediately because retrying cannot help.
+// transport failures, 5xx and 429 are re-queued until otlpMaxRetries
+// consecutive failures; every other 4xx is dropped immediately because
+// retrying sends the same bytes to the same complaint.
 func (e *OTLPExporter) flush() {
 	e.mu.Lock()
 	if len(e.buffer) == 0 {
@@ -196,7 +197,10 @@ func (e *OTLPExporter) flush() {
 
 	body, err := proto.Marshal(e.encode(spans))
 	if err != nil {
-		slog.Error("otlp exporter: marshal failed", "error", err, "count", len(spans))
+		// The batch is gone: count it, or the one drop path that takes out
+		// spans which were themselves fine stays invisible to Dropped().
+		e.dropped.Add(int64(len(spans)))
+		slog.Error("otlp exporter: marshal failed, dropping batch", "error", err, "count", len(spans))
 		return
 	}
 
@@ -230,6 +234,10 @@ func (e *OTLPExporter) flush() {
 		slog.Error("otlp exporter: collector rejected the credentials, dropping spans — check otel.headers",
 			"status", resp.StatusCode, "count", len(spans), "url", e.url,
 			"header_names", headerNames(e.headers))
+	case resp.StatusCode == http.StatusTooManyRequests:
+		// Overloaded, not wrong. Retryable by spec; the flush interval is the
+		// backoff, and otlpMaxRetries still bounds how long we hold the batch.
+		e.retry(spans, "collector rate limited", slog.Int("status", resp.StatusCode))
 	case resp.StatusCode >= 400:
 		// Malformed payload or wrong endpoint — a retry sends the same bytes.
 		e.mu.Lock()

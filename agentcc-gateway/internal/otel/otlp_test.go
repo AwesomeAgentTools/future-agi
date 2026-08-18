@@ -489,6 +489,63 @@ func TestOTLPExporterDropsClientErrorsImmediately(t *testing.T) {
 	_ = e.Shutdown()
 }
 
+func TestOTLPExporterRetriesRateLimits(t *testing.T) {
+	// A collector under load answers 429; the batch is still perfectly good.
+	c := newCollector(t, func(n int) int {
+		if n == 1 {
+			return http.StatusTooManyRequests
+		}
+		return http.StatusOK
+	})
+	e, err := NewOTLPExporter(OTLPOptions{Endpoint: c.URL, ServiceName: "svc", Resource: nil})
+	if err != nil {
+		t.Fatalf("NewOTLPExporter: %v", err)
+	}
+
+	if err := e.Export([]*Span{testSpan()}); err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	e.flush() // 429 — re-queued, not dropped with the rest of the 4xx family
+	if e.Dropped() != 0 {
+		t.Fatalf("a 429 dropped spans instead of re-queuing: dropped=%d", e.Dropped())
+	}
+	e.flush()
+
+	if got := c.requestCount(); got != 2 {
+		t.Fatalf("collector saw %d requests, want 2", got)
+	}
+	if n := len(c.batches[1]); n != 1 {
+		t.Fatalf("retry carried %d spans, want the original 1", n)
+	}
+	_ = e.Shutdown()
+}
+
+// An unencodable span takes its whole batch with it — proto.Marshal fails the
+// message, not the field. Nothing can be sent, but the loss has to show up in
+// Dropped(), which exists precisely so a silent hole is visible.
+func TestOTLPExporterCountsABatchLostToEncoding(t *testing.T) {
+	c := newCollector(t, func(int) int { return http.StatusOK })
+	e, err := NewOTLPExporter(OTLPOptions{Endpoint: c.URL, ServiceName: "svc", Resource: nil})
+	if err != nil {
+		t.Fatalf("NewOTLPExporter: %v", err)
+	}
+
+	bad := testSpan()
+	bad.Attributes["broken"] = "\xff\xfe" // not valid UTF-8; proto strings must be
+	if err := e.Export([]*Span{testSpan(), bad}); err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	e.flush()
+
+	if got := c.requestCount(); got != 0 {
+		t.Fatalf("collector saw %d requests, want 0 — the batch cannot encode", got)
+	}
+	if e.Dropped() != 2 {
+		t.Fatalf("Dropped() = %d, want 2 — the whole batch was lost", e.Dropped())
+	}
+	_ = e.Shutdown()
+}
+
 func TestOTLPExporterShutdownIsIdempotent(t *testing.T) {
 	c := newCollector(t, nil)
 	e, err := NewOTLPExporter(OTLPOptions{Endpoint: c.URL, ServiceName: "svc", Resource: nil})
