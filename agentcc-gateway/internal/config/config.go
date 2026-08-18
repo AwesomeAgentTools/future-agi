@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -757,9 +758,18 @@ type AuditSinkConfig struct {
 type OTelConfig struct {
 	Enabled     bool              `yaml:"enabled" json:"enabled"`
 	ServiceName string            `yaml:"service_name" json:"service_name"`
-	Exporter    string            `yaml:"exporter" json:"exporter"` // "stdout"
+	Exporter    string            `yaml:"exporter" json:"exporter"` // "stdout" | "otlp"
 	SampleRate  float64           `yaml:"sample_rate" json:"sample_rate"`
 	Attributes  map[string]string `yaml:"attributes" json:"attributes"`
+
+	// Endpoint is the OTLP collector base URL, e.g. "http://otel-collector:4318".
+	// Required when Exporter is "otlp". "/v1/traces" is appended when the URL
+	// carries no path of its own.
+	Endpoint string `yaml:"endpoint" json:"endpoint"`
+
+	// Protocol selects the OTLP transport. Only "http/protobuf" is supported;
+	// empty means "http/protobuf".
+	Protocol string `yaml:"protocol" json:"protocol"`
 }
 
 // PrometheusConfig controls the Prometheus metrics endpoint.
@@ -1096,7 +1106,41 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("logging.level must be one of debug, info, warn, error; got %q", c.Logging.Level)
 	}
 
+	if err := c.validateOTel(); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+// validateOTel checks the OTLP exporter settings. Misconfiguration here is
+// caught at startup rather than silently degrading to stdout, because a
+// collector that never receives spans looks identical to a quiet gateway.
+func (c *Config) validateOTel() error {
+	if !c.OTel.Enabled {
+		return nil
+	}
+	if strings.ToLower(c.OTel.Exporter) != "otlp" {
+		return nil
+	}
+	if c.OTel.Endpoint == "" {
+		return fmt.Errorf("otel.endpoint is required when otel.exporter is %q", "otlp")
+	}
+	u, err := url.Parse(c.OTel.Endpoint)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return fmt.Errorf("otel.endpoint must be an absolute http(s) URL, got %q", c.OTel.Endpoint)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("otel.endpoint scheme must be http or https, got %q", u.Scheme)
+	}
+	switch strings.ToLower(c.OTel.Protocol) {
+	case "", "http/protobuf":
+		return nil
+	case "grpc", "http/json":
+		return fmt.Errorf("otel.protocol %q is not supported; use \"http/protobuf\"", c.OTel.Protocol)
+	default:
+		return fmt.Errorf("otel.protocol must be \"http/protobuf\", got %q", c.OTel.Protocol)
+	}
 }
 
 func (c *Config) validateLicenseAuth() error {
