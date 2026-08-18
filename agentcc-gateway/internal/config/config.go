@@ -775,6 +775,13 @@ type OTelConfig struct {
 	// this way, so write credentials as ${VAR} and keep them in the
 	// environment rather than in this file.
 	Headers map[string]string `yaml:"headers" json:"-"`
+
+	// IncludeBodies attaches the prompt and completion to each span. Off by
+	// default: it sends user content to the collector, and it is a separate
+	// decision from logging.request_logging.include_bodies because the two
+	// go to different places and are signed off separately. Content is
+	// redacted with the org's privacy config exactly as the request log is.
+	IncludeBodies bool `yaml:"include_bodies" json:"include_bodies"`
 }
 
 // PrometheusConfig controls the Prometheus metrics endpoint.

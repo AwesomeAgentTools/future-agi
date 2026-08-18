@@ -475,6 +475,11 @@ logging:
 #   headers:                           # hosted collectors authenticate here;
 #     X-Api-Key: "${FI_API_KEY}"       # keep credentials in the environment,
 #     X-Secret-Key: "${FI_SECRET_KEY}" # not in this file
+#   include_bodies: false              # attach prompt + completion to each span
+#                                      # (input.value / output.value). Off by
+#                                      # default: it sends user content to the
+#                                      # collector. Redacted with the same
+#                                      # privacy config as the request log.
 #   sample_rate: 0.1                   # 10% of requests
 #   attributes:                        # emitted as OTLP resource attributes
 #     environment: "production"

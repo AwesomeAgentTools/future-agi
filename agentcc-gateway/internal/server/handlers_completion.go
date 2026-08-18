@@ -355,14 +355,17 @@ func (h *Handlers) handleCompletionStream(ctx context.Context, w http.ResponseWr
 
 	// Track last usage from stream chunks for post-plugin cost/credits tracking.
 	var lastUsage *models.Usage
+	capture := newStreamCapture(h.captureStreamContent)
 
 	// finalizeStream populates rc.Response with accumulated usage and runs
 	// post-plugins (cost, credits, logging). Must be called before every return.
 	finalizeStream := func(detach bool) {
 		rc.Response = &models.ChatCompletionResponse{
-			Model: rc.ResolvedModel,
-			Usage: lastUsage,
+			Object: "chat.completion",
+			Model:  rc.ResolvedModel,
+			Usage:  lastUsage,
 		}
+		capture.applyTo(rc.Response)
 		pluginCtx := ctx
 		if detach {
 			pluginCtx = context.Background()
@@ -384,6 +387,7 @@ func (h *Handlers) handleCompletionStream(ctx context.Context, w http.ResponseWr
 			if chunk.Usage != nil {
 				lastUsage = chunk.Usage
 			}
+			capture.observe(chunk)
 
 			// Convert chat chunk to legacy completion chunk.
 			completionChunk := models.CompletionStreamChunkFromChat(chunk)

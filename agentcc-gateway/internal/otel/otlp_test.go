@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -668,4 +669,102 @@ func TestHeaderNamesExcludesValues(t *testing.T) {
 			t.Fatal("headerNames leaked a credential value")
 		}
 	}
+}
+
+func spanWithBody(bytes int) *Span {
+	s := testSpan()
+	s.SetAttribute("input.value", strings.Repeat("x", bytes))
+	return s
+}
+
+// Spans carrying prompts are orders of magnitude larger than ordinary ones, so
+// a count-only ceiling lets the queue grow to hundreds of megabytes while a
+// collector is unreachable.
+func TestOTLPExporterQueueBoundedByBytes(t *testing.T) {
+	e, err := NewOTLPExporter(OTLPOptions{Endpoint: "http://127.0.0.1:1/v1/traces", ServiceName: "svc"})
+	if err != nil {
+		t.Fatalf("NewOTLPExporter: %v", err)
+	}
+	defer e.Shutdown()
+
+	// Well under the span-count ceiling, well over the byte ceiling.
+	const each = 1 << 20
+	spans := make([]*Span, 0, 128)
+	for i := 0; i < 128; i++ {
+		spans = append(spans, spanWithBody(each))
+	}
+	if err := e.Export(spans); err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+
+	e.mu.Lock()
+	queued, queuedBytes := len(e.buffer), e.bufferBytes
+	e.mu.Unlock()
+
+	if queued == len(spans) {
+		t.Error("byte ceiling never applied — the whole batch was queued")
+	}
+	if queuedBytes > otlpMaxQueueBytes {
+		t.Errorf("queued %d bytes, over the %d ceiling", queuedBytes, otlpMaxQueueBytes)
+	}
+	if e.Dropped() == 0 {
+		t.Error("dropped spans not counted")
+	}
+}
+
+// An oversized batch is split locally rather than posted and rejected: a 413
+// costs a round trip to learn something the exporter can measure itself.
+func TestOTLPExporterSplitsOversizedPayload(t *testing.T) {
+	c := newCollector(t, nil)
+	e, err := NewOTLPExporter(OTLPOptions{Endpoint: c.URL, ServiceName: "svc"})
+	if err != nil {
+		t.Fatalf("NewOTLPExporter: %v", err)
+	}
+
+	// Four spans of 3 MiB: one batch would exceed the 8 MiB payload limit.
+	spans := []*Span{spanWithBody(3 << 20), spanWithBody(3 << 20), spanWithBody(3 << 20), spanWithBody(3 << 20)}
+	e.mu.Lock()
+	e.buffer = append(e.buffer, spans...)
+	e.mu.Unlock()
+	e.flush()
+
+	if got := c.requestCount(); got < 2 {
+		t.Fatalf("collector saw %d requests, want the batch split across at least 2", got)
+	}
+	if got := len(c.allSpans()); got != len(spans) {
+		t.Errorf("collector received %d spans, want all %d", got, len(spans))
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i, h := range c.headers {
+		if h.Get("Content-Type") != otlpContentType {
+			t.Errorf("split request %d lost its content type", i)
+		}
+	}
+	if e.Dropped() != 0 {
+		t.Errorf("splitting dropped %d spans", e.Dropped())
+	}
+	_ = e.Shutdown()
+}
+
+// A body large enough to make one span unsendable is dropped alone, not
+// retried forever and not taking a batch with it.
+func TestOTLPExporterDropsSingleOversizedSpan(t *testing.T) {
+	c := newCollector(t, nil)
+	e, err := NewOTLPExporter(OTLPOptions{Endpoint: c.URL, ServiceName: "svc"})
+	if err != nil {
+		t.Fatalf("NewOTLPExporter: %v", err)
+	}
+	e.mu.Lock()
+	e.buffer = append(e.buffer, spanWithBody(otlpMaxBodyBytes+(1<<20)))
+	e.mu.Unlock()
+	e.flush()
+
+	if got := c.requestCount(); got != 0 {
+		t.Errorf("posted %d oversized requests, want 0", got)
+	}
+	if e.Dropped() != 1 {
+		t.Errorf("Dropped() = %d, want 1", e.Dropped())
+	}
+	_ = e.Shutdown()
 }

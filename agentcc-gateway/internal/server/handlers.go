@@ -44,6 +44,10 @@ type Handlers struct {
 	maxBodySize    int64
 	defaultTimeout time.Duration
 
+	// captureStreamContent reassembles streamed completions so post-plugins
+	// see the text. Set when a sink is configured to record bodies.
+	captureStreamContent bool
+
 	// Streaming guardrail support.
 	guardrailEngine    *guardrails.Engine
 	policyStore        *policy.Store
@@ -201,6 +205,10 @@ func (h *Handlers) resolveProviderWithOrgFallback(ctx context.Context, rc *model
 	}
 	return provider, nil
 }
+
+// SetCaptureStreamContent enables reassembly of streamed completions. Off by
+// default: without a sink that records bodies, the assembly is wasted work.
+func (h *Handlers) SetCaptureStreamContent(v bool) { h.captureStreamContent = v }
 
 // NewHandlers creates a Handlers instance.
 func NewHandlers(registry *providers.Registry, engine *pipeline.Engine, maxBodySize int64, defaultTimeout time.Duration, failover *routing.Failover, modelFallbacks *routing.ModelFallbacks, conditionalRouter *routing.ConditionalRouter, healthMonitor *routing.HealthMonitor, modelTimeouts map[string]time.Duration, mirror *routing.Mirror, guardrailEngine *guardrails.Engine, policyStore *policy.Store, streamGuardrailCfg config.StreamingGuardrailConfig, mdbPtr *atomic.Pointer[modeldb.ModelDB], tenantStore *tenant.Store, orgProviderCache *providers.OrgProviderCache, keyStore *authpkg.KeyStore) *Handlers {
@@ -1560,6 +1568,7 @@ func (h *Handlers) handleStream(ctx context.Context, w http.ResponseWriter, rc *
 	var lastUsage *models.Usage
 	var streamID string
 	var streamCreated int64
+	capture := newStreamCapture(h.captureStreamContent)
 
 	// finalizeStream populates rc.Response with accumulated usage and runs
 	// post-plugins (cost, credits, logging, otel, prometheus). Must be called
@@ -1567,9 +1576,13 @@ func (h *Handlers) handleStream(ctx context.Context, w http.ResponseWriter, rc *
 	// a background context so post-plugins run even after client disconnect.
 	finalizeStream := func(detach bool) *models.StreamChunk {
 		rc.Response = &models.ChatCompletionResponse{
-			Model: rc.ResolvedModel,
-			Usage: lastUsage, // nil is OK — means provider didn't send usage
+			ID:      streamID,
+			Object:  "chat.completion",
+			Created: streamCreated,
+			Model:   rc.ResolvedModel,
+			Usage:   lastUsage, // nil is OK — means provider didn't send usage
 		}
+		capture.applyTo(rc.Response)
 		pluginCtx := ctx
 		if detach {
 			pluginCtx = context.Background()
@@ -1616,6 +1629,7 @@ func (h *Handlers) handleStream(ctx context.Context, w http.ResponseWriter, rc *
 			if chunk.Usage != nil {
 				lastUsage = chunk.Usage
 			}
+			capture.observe(chunk)
 
 			if streamChecker != nil {
 				if res := streamChecker.ProcessChunk(streamCtx, chunk); res.Blocked {
@@ -1678,6 +1692,7 @@ func (h *Handlers) handleStream(ctx context.Context, w http.ResponseWriter, rc *
 			if chunk.Usage != nil {
 				lastUsage = chunk.Usage
 			}
+			capture.observe(chunk)
 
 			// Run streaming guardrail check.
 			if streamChecker != nil {

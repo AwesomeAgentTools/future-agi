@@ -14,6 +14,8 @@ import (
 	"github.com/futureagi/agentcc-gateway/internal/models"
 	otelpkg "github.com/futureagi/agentcc-gateway/internal/otel"
 	"github.com/futureagi/agentcc-gateway/internal/pipeline"
+	"github.com/futureagi/agentcc-gateway/internal/privacy"
+	"github.com/futureagi/agentcc-gateway/internal/tenant"
 )
 
 // Plugin is a pipeline plugin that creates OTel-compatible trace spans and records metrics.
@@ -24,6 +26,12 @@ type Plugin struct {
 	enabled     bool
 	serviceName string
 	attributes  map[string]string
+
+	// Body capture: off unless configured, and redacted through the same
+	// per-org privacy config the request log uses.
+	includeBodies bool
+	redactor      *privacy.Redactor
+	tenantStore   *tenant.Store
 
 	// spans stores in-flight spans keyed by request ID.
 	spans sync.Map
@@ -68,15 +76,27 @@ func New(cfg config.OTelConfig) *Plugin {
 		serviceName = "agentcc-gateway"
 	}
 
+	if cfg.Enabled && cfg.IncludeBodies {
+		slog.Warn("otel body capture is enabled — prompts and completions will be sent to the trace collector")
+	}
+
 	return &Plugin{
-		exporter:    exp,
-		metrics:     &otelpkg.Metrics{},
-		sampleRate:  sampleRate,
-		enabled:     cfg.Enabled,
-		serviceName: serviceName,
-		attributes:  cfg.Attributes,
+		exporter:      exp,
+		metrics:       &otelpkg.Metrics{},
+		sampleRate:    sampleRate,
+		enabled:       cfg.Enabled,
+		serviceName:   serviceName,
+		attributes:    cfg.Attributes,
+		includeBodies: cfg.Enabled && cfg.IncludeBodies,
 	}
 }
+
+// SetRedactor sets the gateway-wide redactor, used when an org has no privacy
+// config of its own.
+func (p *Plugin) SetRedactor(r *privacy.Redactor) { p.redactor = r }
+
+// SetTenantStore supplies per-org privacy configuration.
+func (p *Plugin) SetTenantStore(s *tenant.Store) { p.tenantStore = s }
 
 // NewWithExporter creates a plugin with a specific exporter (for testing).
 func NewWithExporter(exp otelpkg.SpanExporter, sampleRate float64, enabled bool) *Plugin {
@@ -242,6 +262,10 @@ func (p *Plugin) ProcessResponse(_ context.Context, rc *models.RequestContext) p
 	if len(rc.Errors) > 0 {
 		span.SetError(rc.Errors[0].Error())
 		p.metrics.ErrorCount.Add(1)
+	}
+
+	if p.includeBodies {
+		p.attachBodies(span, rc)
 	}
 
 	span.End()

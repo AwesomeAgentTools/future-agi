@@ -29,6 +29,10 @@ const (
 	// scopeName identifies the instrumentation that produced these spans.
 	scopeName = "github.com/futureagi/agentcc-gateway"
 
+	// spanSizeOverhead approximates the fixed cost of a span (ids, name,
+	// timestamps, status) when estimating payload size.
+	spanSizeOverhead = 256
+
 	// resourceAttrPrefix marks span attributes that are really resource-level.
 	// They are emitted on the OTLP Resource instead and skipped on the span.
 	resourceAttrPrefix = "resource."
@@ -38,6 +42,16 @@ const (
 	otlpMaxQueue      = 4096             // hard ceiling; spans past it are dropped
 	otlpHTTPTimeout   = 10 * time.Second // per-request budget for the collector
 	otlpMaxRetries    = 3                // consecutive failures before dropping a batch
+
+	// Spans carrying prompts and completions are unbounded in a way ordinary
+	// telemetry is not — a single one can be megabytes — so the queue and the
+	// batch are bounded by bytes as well as by count. Without this, 4096
+	// queued spans of a few hundred KB each is close to a gigabyte of heap
+	// while a collector is unreachable, and one flush is far past any
+	// collector's request limit.
+	otlpMaxBatchBytes = 4 << 20  // flush once the buffer is roughly this big
+	otlpMaxQueueBytes = 64 << 20 // hard ceiling on queued span content
+	otlpMaxBodyBytes  = 8 << 20  // split a marshalled batch above this
 )
 
 // OTLPExporter ships spans to an OpenTelemetry collector over OTLP/HTTP with
@@ -56,6 +70,7 @@ type OTLPExporter struct {
 
 	mu               sync.Mutex
 	buffer           []*Span
+	bufferBytes      int
 	consecutiveFails int
 
 	dropped atomic.Int64
@@ -139,23 +154,31 @@ func (e *OTLPExporter) Export(spans []*Span) error {
 	}
 
 	e.mu.Lock()
-	room := otlpMaxQueue - len(e.buffer)
-	if room <= 0 {
-		e.mu.Unlock()
-		total := e.dropped.Add(int64(len(spans)))
+	var accepted, acceptedBytes, dropped int
+	for _, s := range spans {
+		size := spanSize(s)
+		if len(e.buffer)+accepted >= otlpMaxQueue || e.bufferBytes+acceptedBytes+size > otlpMaxQueueBytes {
+			dropped = len(spans) - accepted
+			break
+		}
+		accepted++
+		acceptedBytes += size
+	}
+	e.buffer = append(e.buffer, spans[:accepted]...)
+	e.bufferBytes += acceptedBytes
+	full := len(e.buffer) >= otlpBatchSize || e.bufferBytes >= otlpMaxBatchBytes
+	queuedBytes := e.bufferBytes
+	e.mu.Unlock()
+
+	if dropped > 0 {
+		total := e.dropped.Add(int64(dropped))
 		slog.Warn("otlp exporter: queue full, dropping spans",
-			"dropped", len(spans), "dropped_total", total)
+			"dropped", dropped, "queued", accepted,
+			"queued_bytes", queuedBytes, "dropped_total", total)
+	}
+	if accepted == 0 {
 		return nil
 	}
-	if len(spans) > room {
-		total := e.dropped.Add(int64(len(spans) - room))
-		slog.Warn("otlp exporter: queue full, dropping excess spans",
-			"queued", room, "dropped", len(spans)-room, "dropped_total", total)
-		spans = spans[:room]
-	}
-	e.buffer = append(e.buffer, spans...)
-	full := len(e.buffer) >= otlpBatchSize
-	e.mu.Unlock()
 
 	if full {
 		go e.flush()
@@ -193,14 +216,36 @@ func (e *OTLPExporter) flush() {
 	}
 	spans := e.buffer
 	e.buffer = make([]*Span, 0, otlpBatchSize)
+	e.bufferBytes = 0
 	e.mu.Unlock()
 
+	e.send(spans)
+}
+
+// send marshals and posts one batch, halving it if the encoded payload is over
+// otlpMaxBodyBytes. Splitting locally beats learning the same thing from a 413:
+// it costs no round trip and does not depend on the collector reporting the
+// limit correctly.
+func (e *OTLPExporter) send(spans []*Span) {
 	body, err := proto.Marshal(e.encode(spans))
 	if err != nil {
 		// The batch is gone: count it, or the one drop path that takes out
 		// spans which were themselves fine stays invisible to Dropped().
 		e.dropped.Add(int64(len(spans)))
 		slog.Error("otlp exporter: marshal failed, dropping batch", "error", err, "count", len(spans))
+		return
+	}
+
+	if len(body) > otlpMaxBodyBytes {
+		if len(spans) == 1 {
+			e.dropped.Add(1)
+			slog.Error("otlp exporter: single span exceeds the payload limit, dropping",
+				"bytes", len(body), "limit", otlpMaxBodyBytes)
+			return
+		}
+		mid := len(spans) / 2
+		e.send(spans[:mid])
+		e.send(spans[mid:])
 		return
 	}
 
@@ -284,6 +329,9 @@ func (e *OTLPExporter) retry(spans []*Span, reason string, attr slog.Attr) {
 	}
 	// Failed spans go to the front so the oldest telemetry still leaves first.
 	e.buffer = append(spans, e.buffer...)
+	for _, s := range spans {
+		e.bufferBytes += spanSize(s)
+	}
 	e.mu.Unlock()
 
 	if dropped > 0 {
@@ -367,6 +415,25 @@ func encodeSpan(s *Span) *tracepb.Span {
 	}
 
 	return pb
+}
+
+// spanSize estimates a span's contribution to the encoded payload. Only the
+// attribute values can be large, so a rough sum of those plus a fixed overhead
+// is enough to keep the queue and the batch bounded.
+func spanSize(s *Span) int {
+	if s == nil {
+		return 0
+	}
+	size := spanSizeOverhead
+	for k, v := range s.Attributes {
+		size += len(k)
+		if str, ok := v.(string); ok {
+			size += len(str)
+		} else {
+			size += 8
+		}
+	}
+	return size
 }
 
 // normalizeID turns an arbitrary identifier into the fixed-width byte ID that

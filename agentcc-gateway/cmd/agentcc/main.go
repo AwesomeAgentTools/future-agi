@@ -535,15 +535,17 @@ func main() {
 	// Create logging plugin.
 	loggingPlugin := loggingplugin.New(cfg.Logging.RequestLogging, tenantStore)
 
-	// Attach privacy redactor if enabled.
+	// Attach privacy redactor if enabled. Kept in scope because every sink
+	// that exports request or response content redacts through it.
+	var globalRedactor *privacy.Redactor
 	if cfg.Privacy.Enabled {
 		patterns := make([]privacy.PatternConfig, len(cfg.Privacy.Patterns))
 		for i, p := range cfg.Privacy.Patterns {
 			patterns[i] = privacy.PatternConfig{Name: p.Name, Pattern: p.Pattern}
 		}
-		redactor := privacy.New(cfg.Privacy.Mode, patterns)
-		loggingPlugin.SetRedactor(redactor)
-		slog.Info("privacy mode enabled", "mode", cfg.Privacy.Mode, "patterns", redactor.PatternCount())
+		globalRedactor = privacy.New(cfg.Privacy.Mode, patterns)
+		loggingPlugin.SetRedactor(globalRedactor)
+		slog.Info("privacy mode enabled", "mode", cfg.Privacy.Mode, "patterns", globalRedactor.PatternCount())
 	}
 
 	plugins = append(plugins, loggingPlugin)
@@ -615,6 +617,8 @@ func main() {
 	var otelPlugin *otelplugin.Plugin
 	if cfg.OTel.Enabled {
 		otelPlugin = otelplugin.New(cfg.OTel)
+		otelPlugin.SetTenantStore(tenantStore)
+		otelPlugin.SetRedactor(globalRedactor)
 		plugins = append(plugins, otelPlugin)
 		slog.Info("otel enabled", "exporter", cfg.OTel.Exporter, "sample_rate", cfg.OTel.SampleRate)
 	}
