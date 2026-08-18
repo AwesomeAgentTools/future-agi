@@ -102,6 +102,12 @@ type RequestContext struct {
 
 	// Per-org model fallback chains: model → ordered fallback models.
 	OrgModelFallbacks map[string][]string
+
+	// CustomMetadataKeys lists the Metadata keys that came from the caller's
+	// x-agentcc-metadata header. Metadata also holds ~120 internal keys written
+	// by plugins, so this is the only reliable way to tell caller-supplied
+	// dimensions apart from gateway internals when exporting telemetry.
+	CustomMetadataKeys []string
 }
 
 type RequestFlags struct {
@@ -164,6 +170,7 @@ func (rc *RequestContext) Release() {
 	rc.OrgModelFallbacks = nil
 	rc.GuardrailResults = rc.GuardrailResults[:0]
 	rc.RequestHeaders = nil
+	rc.CustomMetadataKeys = rc.CustomMetadataKeys[:0]
 
 	// Reuse maps by clearing them (keeps allocated memory).
 	for k := range rc.Metadata {

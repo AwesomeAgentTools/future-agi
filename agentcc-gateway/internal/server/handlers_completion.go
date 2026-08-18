@@ -75,15 +75,7 @@ func (h *Handlers) TextCompletion(w http.ResponseWriter, r *http.Request) {
 
 	// Extract Agentcc metadata from headers (with security key blocklist).
 	if meta := r.Header.Get("x-agentcc-metadata"); meta != "" {
-		var m map[string]string
-		if err := json.Unmarshal([]byte(meta), &m); err == nil {
-			for k, v := range m {
-				if isBlockedMetadataKey(k) {
-					continue
-				}
-				rc.Metadata[k] = v
-			}
-		}
+		parseMetadataHeader(meta, rc)
 	}
 	if sid := r.Header.Get("x-agentcc-session-id"); sid != "" {
 		if len(sid) > maxSessionIDLen {

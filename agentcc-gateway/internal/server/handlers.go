@@ -866,15 +866,7 @@ func (h *Handlers) ChatCompletion(w http.ResponseWriter, r *http.Request) {
 
 	// Extract Agentcc metadata from headers (with security key blocklist).
 	if meta := r.Header.Get("x-agentcc-metadata"); meta != "" {
-		var m map[string]string
-		if err := json.Unmarshal([]byte(meta), &m); err == nil {
-			for k, v := range m {
-				if isBlockedMetadataKey(k) {
-					continue
-				}
-				rc.Metadata[k] = v
-			}
-		}
+		parseMetadataHeader(meta, rc)
 	}
 	if sid := r.Header.Get("x-agentcc-session-id"); sid != "" {
 		if len(sid) > maxSessionIDLen {
@@ -1877,6 +1869,24 @@ func splitCSV(s string) []string {
 		}
 	}
 	return result
+}
+
+// parseMetadataHeader parses the x-agentcc-metadata JSON header into the request
+// context. Security-sensitive keys are blocked to prevent client-side injection.
+// Accepted keys are recorded on the context so telemetry can distinguish them
+// from the metadata plugins write themselves.
+func parseMetadataHeader(meta string, rc *models.RequestContext) {
+	var m map[string]string
+	if err := json.Unmarshal([]byte(meta), &m); err != nil {
+		return
+	}
+	for k, v := range m {
+		if isBlockedMetadataKey(k) {
+			continue
+		}
+		rc.Metadata[k] = v
+		rc.CustomMetadataKeys = append(rc.CustomMetadataKeys, k)
+	}
 }
 
 // isBlockedMetadataKey returns true for metadata keys that must not be
