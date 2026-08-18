@@ -770,6 +770,11 @@ type OTelConfig struct {
 	// Protocol selects the OTLP transport. Only "http/protobuf" is supported;
 	// empty means "http/protobuf".
 	Protocol string `yaml:"protocol" json:"protocol"`
+
+	// Headers are sent on every OTLP request. Hosted collectors authenticate
+	// this way, so write credentials as ${VAR} and keep them in the
+	// environment rather than in this file.
+	Headers map[string]string `yaml:"headers" json:"-"`
 }
 
 // PrometheusConfig controls the Prometheus metrics endpoint.
@@ -1132,6 +1137,17 @@ func (c *Config) validateOTel() error {
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return fmt.Errorf("otel.endpoint scheme must be http or https, got %q", u.Scheme)
+	}
+	// An empty header value is almost always an unset ${VAR}. Sending it
+	// blindly means the collector 401s and every span is silently discarded,
+	// which is indistinguishable from a gateway with no traffic.
+	for k, v := range c.OTel.Headers {
+		if k == "" {
+			return fmt.Errorf("otel.headers has an entry with an empty name")
+		}
+		if v == "" {
+			return fmt.Errorf("otel.headers[%q] is empty; if it references an environment variable, that variable is not set", k)
+		}
 	}
 	switch strings.ToLower(c.OTel.Protocol) {
 	case "", "http/protobuf":

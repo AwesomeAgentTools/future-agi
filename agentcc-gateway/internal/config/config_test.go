@@ -93,6 +93,24 @@ func TestValidate(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "otlp headers accepted",
+			modify: func(c *Config) {
+				c.OTel = OTelConfig{Enabled: true, Exporter: "otlp", Endpoint: "http://otel-collector:4318",
+					Headers: map[string]string{"X-Api-Key": "k"}}
+			},
+			wantErr: false,
+		},
+		{
+			// An unset ${VAR} expands to empty; sending it means a 401 and every
+			// span silently discarded, which looks exactly like an idle gateway.
+			name: "otlp header with an empty value is rejected",
+			modify: func(c *Config) {
+				c.OTel = OTelConfig{Enabled: true, Exporter: "otlp", Endpoint: "http://otel-collector:4318",
+					Headers: map[string]string{"X-Api-Key": ""}}
+			},
+			wantErr: true,
+		},
+		{
 			name: "otlp exporter rejects grpc protocol",
 			modify: func(c *Config) {
 				c.OTel = OTelConfig{Enabled: true, Exporter: "otlp", Endpoint: "http://otel-collector:4318", Protocol: "grpc"}

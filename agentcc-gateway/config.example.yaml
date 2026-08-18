@@ -472,10 +472,19 @@ logging:
 #   endpoint: "http://otel-collector:4318"   # required for otlp; /v1/traces is
 #                                            # appended when the URL has no path
 #   protocol: "http/protobuf"          # the only supported OTLP transport
+#   headers:                           # hosted collectors authenticate here;
+#     X-Api-Key: "${FI_API_KEY}"       # keep credentials in the environment,
+#     X-Secret-Key: "${FI_SECRET_KEY}" # not in this file
 #   sample_rate: 0.1                   # 10% of requests
 #   attributes:                        # emitted as OTLP resource attributes
 #     environment: "production"
 #     region: "us-east-1"
+#
+# Exporting to the FutureAGI platform: point endpoint at
+# https://api.futureagi.com/v1/traces, authenticate with X-Api-Key/X-Secret-Key,
+# and set project_name (plus project_type: "observe") under attributes — the
+# platform reads those resource attributes to decide which project the spans
+# land in, and creates it on first use.
 #
 # Spans are queued and flushed in the background, so an unreachable collector
 # never adds latency to a request. The gateway's own x-agentcc-trace-id travels

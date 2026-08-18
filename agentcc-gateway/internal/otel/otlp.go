@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -51,6 +52,7 @@ type OTLPExporter struct {
 	url      string
 	client   *http.Client
 	resource *resourcepb.Resource
+	headers  map[string]string
 
 	mu               sync.Mutex
 	buffer           []*Span
@@ -63,24 +65,48 @@ type OTLPExporter struct {
 	stopOnce sync.Once
 }
 
-// NewOTLPExporter creates an exporter posting to endpoint and starts its
-// background flusher. serviceName and attrs become OTLP resource attributes.
-func NewOTLPExporter(endpoint, serviceName string, attrs map[string]string) (*OTLPExporter, error) {
-	u, err := url.Parse(endpoint)
+// OTLPOptions configures an OTLPExporter. Resource and Headers are both
+// string maps, so they are named rather than positional.
+type OTLPOptions struct {
+	// Endpoint is the collector base URL. "/v1/traces" is appended when it
+	// carries no path of its own.
+	Endpoint string
+
+	// ServiceName becomes the service.name resource attribute.
+	ServiceName string
+
+	// Resource holds additional OTLP resource attributes.
+	Resource map[string]string
+
+	// Headers are sent on every export request. Hosted collectors
+	// authenticate this way; values are credentials and are never logged.
+	Headers map[string]string
+}
+
+// NewOTLPExporter creates an exporter posting to opts.Endpoint and starts its
+// background flusher.
+func NewOTLPExporter(opts OTLPOptions) (*OTLPExporter, error) {
+	u, err := url.Parse(opts.Endpoint)
 	if err != nil {
-		return nil, fmt.Errorf("otlp endpoint %q: %w", endpoint, err)
+		return nil, fmt.Errorf("otlp endpoint %q: %w", opts.Endpoint, err)
 	}
 	if u.Scheme == "" || u.Host == "" {
-		return nil, fmt.Errorf("otlp endpoint %q must be an absolute http(s) URL", endpoint)
+		return nil, fmt.Errorf("otlp endpoint %q must be an absolute http(s) URL", opts.Endpoint)
 	}
 	if u.Path == "" || u.Path == "/" {
 		u.Path = otlpTracesPath
 	}
 
+	headers := make(map[string]string, len(opts.Headers))
+	for k, v := range opts.Headers {
+		headers[k] = v
+	}
+
 	e := &OTLPExporter{
 		url:      u.String(),
 		client:   &http.Client{Timeout: otlpHTTPTimeout},
-		resource: buildResource(serviceName, attrs),
+		resource: buildResource(opts.ServiceName, opts.Resource),
+		headers:  headers,
 		buffer:   make([]*Span, 0, otlpBatchSize),
 		stopCh:   make(chan struct{}),
 		doneCh:   make(chan struct{}),
@@ -180,6 +206,9 @@ func (e *OTLPExporter) flush() {
 		return
 	}
 	req.Header.Set("Content-Type", otlpContentType)
+	for k, v := range e.headers {
+		req.Header.Set(k, v)
+	}
 
 	resp, err := e.client.Do(req)
 	if err != nil {
@@ -191,6 +220,16 @@ func (e *OTLPExporter) flush() {
 	switch {
 	case resp.StatusCode >= 500:
 		e.retry(spans, "collector server error", slog.Int("status", resp.StatusCode))
+	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+		// Called out separately: every span will be discarded for as long as
+		// the credential is wrong, and nothing else in the gateway looks broken.
+		e.mu.Lock()
+		e.consecutiveFails = 0
+		e.mu.Unlock()
+		e.dropped.Add(int64(len(spans)))
+		slog.Error("otlp exporter: collector rejected the credentials, dropping spans — check otel.headers",
+			"status", resp.StatusCode, "count", len(spans), "url", e.url,
+			"header_names", headerNames(e.headers))
 	case resp.StatusCode >= 400:
 		// Malformed payload or wrong endpoint — a retry sends the same bytes.
 		e.mu.Lock()
@@ -338,6 +377,17 @@ func normalizeID(id string, size int) []byte {
 	}
 	sum := sha256.Sum256([]byte(id))
 	return sum[:size]
+}
+
+// headerNames lists configured header names for diagnostics. Names only —
+// the values are credentials and must never reach a log.
+func headerNames(headers map[string]string) []string {
+	names := make([]string, 0, len(headers))
+	for k := range headers {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func buildResource(serviceName string, attrs map[string]string) *resourcepb.Resource {

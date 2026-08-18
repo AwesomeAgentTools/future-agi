@@ -36,7 +36,12 @@ func New(cfg config.OTelConfig) *Plugin {
 	case "stdout", "":
 		exp = otelpkg.NewStdoutExporter(os.Stdout)
 	case "otlp":
-		otlp, err := otelpkg.NewOTLPExporter(cfg.Endpoint, cfg.ServiceName, cfg.Attributes)
+		otlp, err := otelpkg.NewOTLPExporter(otelpkg.OTLPOptions{
+			Endpoint:    cfg.Endpoint,
+			ServiceName: cfg.ServiceName,
+			Resource:    cfg.Attributes,
+			Headers:     cfg.Headers,
+		})
 		if err != nil {
 			// Config.Validate rejects a bad endpoint at startup, so reaching
 			// here means the gateway would otherwise trace into a void.
@@ -45,7 +50,8 @@ func New(cfg config.OTelConfig) *Plugin {
 			exp = otelpkg.NewStdoutExporter(os.Stdout)
 			break
 		}
-		slog.Info("otlp trace export enabled", "endpoint", cfg.Endpoint)
+		slog.Info("otlp trace export enabled",
+			"endpoint", cfg.Endpoint, "headers", len(cfg.Headers))
 		exp = otlp
 	default:
 		slog.Warn("unknown otel exporter, falling back to stdout", "exporter", cfg.Exporter)
