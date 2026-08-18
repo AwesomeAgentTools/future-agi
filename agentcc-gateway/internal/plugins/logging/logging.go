@@ -84,12 +84,15 @@ func (p *Plugin) ProcessResponse(_ context.Context, rc *models.RequestContext) p
 	orgRedactor := p.getOrgRedactor(rc)
 
 	// Apply redaction: org redactor (with org patterns) takes priority over global.
+	// The flag goes on the record, not on rc: this runs inside the parallel
+	// post-plugin window where rc is read-only, and the record was already
+	// copied above — so marking rc could never have reached the emitted log.
 	if orgRedactor != nil && orgRedactor.ShouldRedact() && record.RequestBody != nil {
 		record = redactRecord(record, orgRedactor, mode)
-		rc.SetMetadata("privacy_redacted", "true")
+		markRedacted(&record)
 	} else if p.redactor != nil && p.redactor.ShouldRedact() && record.RequestBody != nil {
 		record = redactRecord(record, p.redactor, mode)
-		rc.SetMetadata("privacy_redacted", "true")
+		markRedacted(&record)
 	}
 
 	p.emitter.Emit(record)
@@ -99,6 +102,15 @@ func (p *Plugin) ProcessResponse(_ context.Context, rc *models.RequestContext) p
 	}
 
 	return pipeline.ResultContinue()
+}
+
+// markRedacted records on the log record that its bodies were redacted.
+// buildRecord leaves Metadata nil when the request carried none.
+func markRedacted(record *TraceRecord) {
+	if record.Metadata == nil {
+		record.Metadata = make(map[string]string, 1)
+	}
+	record.Metadata["privacy_redacted"] = "true"
 }
 
 // getOrgRedactor returns a per-org privacy redactor if the org has privacy config.

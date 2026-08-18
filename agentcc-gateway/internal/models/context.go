@@ -59,7 +59,15 @@ type RequestContext struct {
 	Timings       map[string]time.Duration
 	Errors        []error
 
-	// mu protects Timings and Metadata during parallel post-plugin execution.
+	// mu serializes writes to Timings and Metadata between the goroutines that
+	// legitimately write them — handlers, pre-plugins, sequential post-plugins,
+	// streaming callbacks.
+	//
+	// It does NOT make the parallel post-plugin window safe, and must not be
+	// relied on for that: those plugins read both maps directly, so any write
+	// during that window is a concurrent map read/write and a runtime fatal,
+	// mutex or no mutex. The window is read-only by contract — see
+	// pipeline.PostParallel.
 	mu sync.Mutex
 
 	// RequestHeaders stores the original HTTP request headers for logging.
