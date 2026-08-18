@@ -95,20 +95,26 @@ async def run_hosted_sdk_job(input: RunHostedJobInput) -> RunHostedJobOutput:
     # slots are occupied.
     await _acquire_child_slot()
 
-    # Scratch holds only job.json + status.jsonl; the run artifacts
-    # (report/events/submission) go to a durable, absolute run root OUTSIDE the
-    # scratch so a failed run leaves evidence (§9.2 preserve crash artifacts).
-    work_dir = tempfile.mkdtemp(prefix=f"alk-runner-{input.job_id}-")
-    run_root = os.path.join(_runs_base(), input.job_id)
-    os.makedirs(run_root, exist_ok=True)
-    job_path = os.path.join(work_dir, "job.json")
-    status_path = os.path.join(work_dir, "status.jsonl")
-
     # SIP is the only mode that touches the DID pool (mirrors the native
     # _needs_phone gate). Lease before spawning, inject the slot into the job,
     # release in finally. Web/chat never lease.
     did_slot = None
     try:
+        # Scratch + run-root setup can fail (disk full, bad ALK_RUNNER_RUN_ROOT).
+        # Keep it INSIDE the try so the finally still releases the child slot
+        # rather than leaking it — otherwise repeated setup failures exhaust the
+        # semaphore and every later job blocks forever. (Acquire stays outside so
+        # a cancel mid-acquire can't over-release a slot it never took.)
+        #
+        # Scratch holds only job.json + status.jsonl; the run artifacts
+        # (report/events/submission) go to a durable, absolute run root OUTSIDE the
+        # scratch so a failed run leaves evidence (§9.2 preserve crash artifacts).
+        work_dir = tempfile.mkdtemp(prefix=f"alk-runner-{input.job_id}-")
+        run_root = os.path.join(_runs_base(), input.job_id)
+        os.makedirs(run_root, exist_ok=True)
+        job_path = os.path.join(work_dir, "job.json")
+        status_path = os.path.join(work_dir, "status.jsonl")
+
         if input.mode == "voice_sip":
             did_slot = await _acquire_did_slot(input.job_id)
             if did_slot:
@@ -269,8 +275,39 @@ def _runs_base() -> str:
     )
 
 
+_CHILD_ENV_DENY_EXACT = frozenset(
+    {
+        "INTERNAL_API_SECRET",
+        "SECRET_KEY",
+        "DJANGO_SECRET_KEY",
+        "DATABASE_URL",
+        "PGPASSWORD",
+    }
+)
+_CHILD_ENV_DENY_PREFIXES = (
+    "POSTGRES_",
+    "PGBOUNCER_",
+    "TEMPORAL_",
+    "CELERY_",
+    "RABBITMQ_",
+    "REDIS_",
+    "CLICKHOUSE_",
+)
+
+
+def _is_backend_only_secret(key: str) -> bool:
+    return key in _CHILD_ENV_DENY_EXACT or key.startswith(_CHILD_ENV_DENY_PREFIXES)
+
+
 def _child_environment(job: dict[str, Any]) -> dict[str, str]:
-    env = dict(os.environ)
+    # Copy the worker env MINUS backend-only secrets the SDK child never needs
+    # (DB creds, the internal API secret — the child instead receives that by
+    # ref below via _SINK_ENV_BY_PURPOSE — plus Temporal/Celery/broker/cache
+    # creds). A strict allowlist is the stronger posture but risks omitting a
+    # provider/LiveKit var the child depends on; the denylist closes the named
+    # leak without that breakage risk. TODO: tighten to an allowlist once the
+    # child's required env is enumerated.
+    env = {k: v for k, v in os.environ.items() if not _is_backend_only_secret(k)}
     # Child cwd is a mkdtemp dir; absolutize a relative key path so it resolves.
     creds = env.get("GOOGLE_APPLICATION_CREDENTIALS")
     if creds and not os.path.isabs(creds):

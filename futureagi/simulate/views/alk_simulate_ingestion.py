@@ -13,6 +13,8 @@ backend never touches the bytes).
 
 from __future__ import annotations
 
+import os
+
 import structlog
 from django.http import Http404
 from django.shortcuts import get_object_or_404
@@ -50,6 +52,17 @@ from simulate.services.alk_simulate_ingestion import (
 from tfc.utils.api_contracts import validated_request
 from tfc.utils.api_serializers import ApiTextErrorResponseSerializer
 from tfc.utils.general_methods import GeneralMethods
+
+# Reject oversized recording uploads before reading them into memory (the read
+# holds ~3x the file resident, and FILE_UPLOAD_MAX_MEMORY_SIZE is 1 GB). The
+# default covers the model's max call (max_call_duration_in_minutes ≤ 180): an
+# 8 kHz 16-bit WAV is ~1 MB/min mono, ~2 MB/min stereo, so 180 min ≈ 345 MB.
+# Env-tunable for higher sample rates. NOTE: the proper DoS fix is to stream the
+# upload straight to storage (uploaded.chunks()) rather than read() it whole —
+# deferred; this ceiling bounds the blast radius in the meantime.
+_MAX_RECORDING_UPLOAD_BYTES = (
+    int(os.getenv("ALK_MAX_RECORDING_UPLOAD_MB", "512")) * 1024 * 1024
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -314,6 +327,12 @@ class ALKSimulateIngestionViewSet(ViewSet):
                 "recording upload requires a 'file' multipart field"
             )
 
+        size = getattr(uploaded, "size", None)
+        if size is not None and size > _MAX_RECORDING_UPLOAD_BYTES:
+            return self.gm.bad_request(
+                f"recording exceeds the {_MAX_RECORDING_UPLOAD_BYTES // (1024 * 1024)} MB limit"
+            )
+
         try:
             audio_bytes = uploaded.read()
         except Exception:
@@ -417,9 +436,7 @@ class ALKSimulateIngestionViewSet(ViewSet):
         the service, so a late ping never clobbers a result that already landed.
         """
         try:
-            call_execution, _ = self._call_execution_or_404(
-                call_execution_id, request
-            )
+            call_execution, _ = self._call_execution_or_404(call_execution_id, request)
         except Http404:
             return self.gm.not_found("Call execution not found")
 

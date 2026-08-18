@@ -47,6 +47,22 @@ logger = structlog.get_logger(__name__)
 
 DEFAULT_BATCH_SIZE = 9
 _ALK_BATCH_CLAIMED_KEY = "alk_batch_claimed"
+# Bookkeeping keys the backend owns inside ``call_metadata``. A result PATCH
+# merges caller-supplied ``call_metadata`` caller-wins, so the caller must not be
+# able to set these — otherwise a PATCH could release a claimed row
+# (``alk_batch_claimed``) or re-trigger cost deduction / CSAT dispatch.
+_RESERVED_CALL_METADATA_KEYS = frozenset(
+    {
+        _ALK_BATCH_CLAIMED_KEY,
+        "cost_deducted",
+        "csat_dispatched",
+        # Eval/CSAT idempotency guards + failure diagnostics the backend owns;
+        # a caller flipping these could suppress or re-trigger eval dispatch.
+        "eval_started",
+        "eval_dispatch_failed",
+        "csat_dispatch_failed",
+    }
+)
 
 _STATUS_MAP = {
     "completed": CallExecution.CallStatus.COMPLETED,
@@ -803,8 +819,15 @@ def _apply_payload(call_execution: CallExecution, payload: dict[str, Any]) -> No
         call_execution.provider_call_data = existing
 
     if payload.get("call_metadata"):
+        # Caller-wins merge, so drop the backend-owned bookkeeping keys first —
+        # the caller must not release a claimed row or reset cost/CSAT flags.
+        incoming = {
+            k: v
+            for k, v in payload["call_metadata"].items()
+            if k not in _RESERVED_CALL_METADATA_KEYS
+        }
         merged = call_execution.call_metadata or {}
-        merged.update(payload["call_metadata"])
+        merged.update(incoming)
         call_execution.call_metadata = merged
 
     segments = payload.get("transcript") or []
@@ -833,31 +856,41 @@ def _apply_payload(call_execution: CallExecution, payload: dict[str, Any]) -> No
         _deduct_alk_sim_cost_once(call_execution)
         return
 
-    if (
-        segments
-        and not CallTranscript.objects.filter(call_execution=call_execution).exists()
-    ):
-        CallTranscript.objects.bulk_create(
-            [
-                CallTranscript(
-                    call_execution=call_execution,
-                    speaker_role=seg["speaker_role"],
-                    content=seg["content"],
-                    start_time_ms=seg.get("start_time_ms") or 0,
-                    end_time_ms=seg.get("end_time_ms") or 0,
-                    confidence_score=(
-                        seg["confidence_score"]
-                        if seg.get("confidence_score") is not None
-                        else 1.0
-                    ),
-                )
-                for seg in segments
-            ]
-        )
-        call_execution.transcript_available = True
+    # Atomic so a failure in _apply_conversation_metrics (whose first statement
+    # is a bare ee.voice import) rolls back the transcript bulk_create — without
+    # it the row is left with transcripts written but status still PENDING and no
+    # recovery path. Scoped to the voice mutation only: the chat branch returned
+    # above, so its synchronous CSAT LLM call is never held in a transaction, and
+    # _apply_conversation_metrics is pure computation (no network) so the lock
+    # window stays short.
+    with transaction.atomic():
+        if (
+            segments
+            and not CallTranscript.objects.filter(
+                call_execution=call_execution
+            ).exists()
+        ):
+            CallTranscript.objects.bulk_create(
+                [
+                    CallTranscript(
+                        call_execution=call_execution,
+                        speaker_role=seg["speaker_role"],
+                        content=seg["content"],
+                        start_time_ms=seg.get("start_time_ms") or 0,
+                        end_time_ms=seg.get("end_time_ms") or 0,
+                        confidence_score=(
+                            seg["confidence_score"]
+                            if seg.get("confidence_score") is not None
+                            else 1.0
+                        ),
+                    )
+                    for seg in segments
+                ]
+            )
+            call_execution.transcript_available = True
 
-    _apply_conversation_metrics(call_execution)
-    call_execution.save()
+        _apply_conversation_metrics(call_execution)
+        call_execution.save()
     _deduct_alk_sim_cost_once(call_execution)
 
 
