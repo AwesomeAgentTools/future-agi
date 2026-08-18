@@ -293,6 +293,7 @@ services:
       <<: *backend-env
       SERVICE_TYPE: temporal-worker
       TEMPORAL_TASK_QUEUE: simulation_runner
+      TEMPORAL_ALL_QUEUES: "false"
       ALK_RUNNER_PYTHON: ${ALK_RUNNER_PYTHON:-/opt/alk-venv/bin/python}
       ALK_RUNNER_MAX_CONCURRENCY: ${ALK_RUNNER_MAX_CONCURRENCY:-4}
       SIMULATOR_CONVERSATION_DIRECTION: ${SIMULATOR_CONVERSATION_DIRECTION:-simulator_first}
