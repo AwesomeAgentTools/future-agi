@@ -1,8 +1,10 @@
 package tenant
 
 import (
+	"fmt"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestStoreGetSetDelete(t *testing.T) {
@@ -194,6 +196,47 @@ func TestStoreRedactorInvalidatedOnEveryConfigChange(t *testing.T) {
 			t.Error("redactor survived the org being deleted")
 		}
 	})
+}
+
+// A redactor built from a config the store has already replaced must never
+// reach the cache. Invalidation cannot fix this after the fact: the delete runs
+// while nothing is cached, so it hits nothing, and the stale build lands after
+// it and stays until some unrelated write to the same org.
+//
+// The many-pattern config is the point — it makes the build slow enough that
+// Set reliably lands inside the window a released lock would open. -race does
+// not flag this: both the configs map and the cache are synchronized, it is the
+// gap between them that is wrong.
+func TestStoreRedactorNeverCachesAConfigTheStoreHasReplaced(t *testing.T) {
+	const orgID = "org-1"
+
+	slow := &OrgConfig{Privacy: &PrivacyConfig{Enabled: true, Mode: "patterns"}}
+	for i := 0; i < 400; i++ {
+		slow.Privacy.Patterns = append(slow.Privacy.Patterns,
+			&RedactPatternConfig{Name: fmt.Sprintf("p%d", i), Pattern: fmt.Sprintf("alpha%d[0-9a-f]+", i)})
+	}
+
+	s := NewStore()
+	s.Set(orgID, slow)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		s.Redactor(orgID) // reads the config, then compiles 400 patterns
+	}()
+
+	time.Sleep(2 * time.Millisecond) // let the build get past reading the config
+	s.Set(orgID, privacyConfig("beta"))
+	wg.Wait()
+
+	r := s.Redactor(orgID)
+	if r == nil {
+		t.Fatal("no redactor after the config was replaced")
+	}
+	if got := r.Redact("value beta"); got == "value beta" {
+		t.Errorf("cached a redactor built from the replaced config: %q left unredacted", got)
+	}
 }
 
 func TestStoreRedactorAbsentWithoutPrivacyConfig(t *testing.T) {

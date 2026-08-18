@@ -24,7 +24,11 @@ type Store struct {
 	// path which changes a config also drops the stale redactor — a missed
 	// invalidation would mean redacting with an org's previous patterns
 	// after it tightened them.
-	redactors sync.Map // orgID -> *privacy.Redactor
+	//
+	// Guarded by mu, like configs. A separately synchronized cache is not
+	// enough: a build that reads a config, loses the CPU, and stores after an
+	// invalidation has already run caches a redactor older than the store.
+	redactors map[string]*privacy.Redactor
 }
 
 // NewStore creates a new empty tenant config store.
@@ -32,6 +36,7 @@ func NewStore() *Store {
 	return &Store{
 		configs:    make(map[string]*OrgConfig),
 		configHash: make(map[string][32]byte),
+		redactors:  make(map[string]*privacy.Redactor),
 	}
 }
 
@@ -57,8 +62,8 @@ func (s *Store) Set(orgID string, cfg *OrgConfig) {
 	s.mu.Lock()
 	s.configs[orgID] = cfg
 	s.configHash[orgID] = hashConfig(cfg)
+	delete(s.redactors, orgID)
 	s.mu.Unlock()
-	s.redactors.Delete(orgID)
 }
 
 // Delete removes the org config for the given org ID.
@@ -66,8 +71,8 @@ func (s *Store) Delete(orgID string) {
 	s.mu.Lock()
 	delete(s.configs, orgID)
 	delete(s.configHash, orgID)
+	delete(s.redactors, orgID)
 	s.mu.Unlock()
-	s.redactors.Delete(orgID)
 }
 
 // GetAll returns a copy of all org configs.
@@ -99,7 +104,7 @@ func (s *Store) LoadBulk(configs map[string]*OrgConfig) {
 	}
 	// LoadBulk replaces every config and deliberately fires no onChange, so
 	// nothing downstream would otherwise learn these redactors are stale.
-	s.redactors.Clear()
+	clear(s.redactors)
 }
 
 // MergeBulk merges successfully parsed org configs into the store.
@@ -136,12 +141,12 @@ func (s *Store) MergeBulk(parsedConfigs map[string]*OrgConfig, allOrgIDs map[str
 		s.configHash[orgID] = newHash
 	}
 
+	for _, orgID := range changed {
+		delete(s.redactors, orgID)
+	}
+
 	cb := s.onChange
 	s.mu.Unlock()
-
-	for _, orgID := range changed {
-		s.redactors.Delete(orgID)
-	}
 
 	// Fire onChange outside the lock to avoid deadlocks with downstream caches.
 	if cb != nil {
@@ -162,14 +167,29 @@ func (s *Store) Redactor(orgID string) *privacy.Redactor {
 	if s == nil || orgID == "" {
 		return nil
 	}
-	if v, ok := s.redactors.Load(orgID); ok {
-		r, _ := v.(*privacy.Redactor)
-		return r
+	s.mu.RLock()
+	cached, hit := s.redactors[orgID]
+	enabled := redactionEnabled(s.configs[orgID])
+	s.mu.RUnlock()
+	if hit {
+		return cached
+	}
+	// Nothing to build, so nothing to cache either — orgs without privacy
+	// stay off the write lock entirely.
+	if !enabled {
+		return nil
 	}
 
-	cfg := s.Get(orgID)
-	if cfg == nil || cfg.Privacy == nil || !cfg.Privacy.Enabled {
-		return nil
+	// The build holds the write lock: releasing it to compile the patterns is
+	// what lets an invalidation slip in front of the store below.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if r, ok := s.redactors[orgID]; ok {
+		return r
+	}
+	cfg := s.configs[orgID]
+	if !redactionEnabled(cfg) {
+		return nil // disabled while this call was waiting for the lock
 	}
 
 	patterns := make([]privacy.PatternConfig, 0, len(cfg.Privacy.Patterns))
@@ -184,12 +204,13 @@ func (s *Store) Redactor(orgID string) *privacy.Redactor {
 		mode = privacy.ModePatterns
 	}
 	redactor := privacy.New(mode, patterns)
+	s.redactors[orgID] = redactor
+	return redactor
+}
 
-	// LoadOrStore, not Store: a concurrent invalidation between Get and here
-	// would otherwise be overwritten by this now-stale build.
-	actual, _ := s.redactors.LoadOrStore(orgID, redactor)
-	r, _ := actual.(*privacy.Redactor)
-	return r
+// redactionEnabled reports whether a config asks for any redaction at all.
+func redactionEnabled(cfg *OrgConfig) bool {
+	return cfg != nil && cfg.Privacy != nil && cfg.Privacy.Enabled
 }
 
 // hashConfig returns a SHA-256 hash of the JSON-serialized config.
