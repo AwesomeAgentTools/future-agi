@@ -25,9 +25,7 @@ const TestRunsView = () => {
     testData?.agent_version?.configuration_snapshot?.agent_type ??
     testData?.agentVersion?.configurationSnapshot?.agentType;
   const sourceType = testData?.source_type ?? testData?.sourceType;
-  const showSdk =
-    executionsCount === 0 &&
-    [AGENT_TYPES.CHAT, AGENT_TYPES.VOICE].includes(agentType);
+  const showSdk = executionsCount === 0 && agentType === AGENT_TYPES.CHAT;
 
   return (
     <Box
