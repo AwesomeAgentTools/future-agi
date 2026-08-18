@@ -6,6 +6,7 @@ import (
 
 	"github.com/futureagi/agentcc-gateway/internal/models"
 	otelpkg "github.com/futureagi/agentcc-gateway/internal/otel"
+	"github.com/futureagi/agentcc-gateway/internal/payloads"
 	"github.com/futureagi/agentcc-gateway/internal/privacy"
 	"github.com/futureagi/agentcc-gateway/internal/tenant"
 )
@@ -29,18 +30,37 @@ func (p *Plugin) attachBodies(span *otelpkg.Span, rc *models.RequestContext) {
 		mode = orgMode
 	}
 
+	in, out := bodyJSON(rc)
+	if in != "" {
+		setBodyAttr(span, "input", prepareBody(in, redactor, mode))
+	}
+	if out != "" {
+		setBodyAttr(span, "output", prepareBody(out, redactor, mode))
+	}
+}
+
+// bodyJSON renders whatever this request was — chat, embedding, image, audio,
+// OCR, rerank, search — into request and response JSON. Non-chat endpoints go
+// through the same builder the request log uses, so a span and a log row of
+// the same request never disagree about what was sent.
+func bodyJSON(rc *models.RequestContext) (in, out string) {
+	if req, resp := payloads.ForEndpoint(rc); req != nil || resp != nil {
+		return string(req), string(resp)
+	}
+
 	if rc.Request != nil {
 		if v, ok := encodeBody(rc.Request); ok {
-			setBodyAttr(span, "input", prepareBody(v, redactor, mode))
+			in = v
 		}
 	}
 	// A streamed response with no choices is the pre-assembly husk; exporting
 	// it would claim an empty completion rather than an absent one.
 	if resp := rc.Response; resp != nil && len(resp.Choices) > 0 {
 		if v, ok := encodeBody(resp); ok {
-			setBodyAttr(span, "output", prepareBody(v, redactor, mode))
+			out = v
 		}
 	}
+	return in, out
 }
 
 // preparedBody is a body ready to go on a span.
@@ -58,6 +78,9 @@ type preparedBody struct {
 // exported. Redacting the complete text first means a match is replaced whole,
 // and truncation only ever removes already-safe content.
 func prepareBody(v string, r *privacy.Redactor, mode string) preparedBody {
+	// Inline images and audio go first: removing them outright is safer than
+	// redacting them, and it leaves far less text for the patterns to scan.
+	v = payloads.ElideInlineData(v)
 	v = redact(v, r, mode)
 
 	if len(v) <= maxBodyAttrBytes {

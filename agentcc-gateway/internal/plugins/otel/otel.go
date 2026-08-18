@@ -264,6 +264,11 @@ func (p *Plugin) ProcessResponse(_ context.Context, rc *models.RequestContext) p
 		p.metrics.ErrorCount.Add(1)
 	}
 
+	// Dimensions for non-chat endpoints. Unlike bodies these are small and
+	// carry no user content beyond what the request already declares, so they
+	// are not gated on include_bodies.
+	p.attachEndpointAttributes(span, rc)
+
 	if p.includeBodies {
 		p.attachBodies(span, rc)
 	}

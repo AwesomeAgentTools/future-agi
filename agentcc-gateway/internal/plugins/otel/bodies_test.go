@@ -168,3 +168,226 @@ func TestBodiesSkipEmptyStreamingResponse(t *testing.T) {
 		t.Error("input should still be captured")
 	}
 }
+
+// Multimodal endpoints must carry content too. An image span with no prompt is
+// exactly as useless as a chat span with no prompt.
+func TestBodiesCoverMultimodalEndpoints(t *testing.T) {
+	tests := []struct {
+		endpoint string
+		setup    func(*models.RequestContext)
+		wantIn   string
+		wantOut  string
+	}{
+		{
+			endpoint: "image",
+			setup: func(rc *models.RequestContext) {
+				rc.ImageRequest = &models.ImageRequest{Model: "dall-e-3", Prompt: "a red bicycle"}
+				rc.ImageResponse = &models.ImageResponse{Data: []models.ImageData{{URL: "https://img/1.png"}}}
+			},
+			wantIn:  "a red bicycle",
+			wantOut: "https://img/1.png",
+		},
+		{
+			endpoint: "embedding",
+			setup: func(rc *models.RequestContext) {
+				rc.EmbeddingRequest = &models.EmbeddingRequest{Model: "te-3", Input: json.RawMessage(`"embed me"`)}
+				rc.EmbeddingResponse = &models.EmbeddingResponse{Object: "list", Model: "te-3"}
+			},
+			wantIn:  "embed me",
+			wantOut: "list",
+		},
+		{
+			endpoint: "rerank",
+			setup: func(rc *models.RequestContext) {
+				rc.RerankRequest = &models.RerankRequest{Query: "best bicycle", Documents: []string{"doc"}}
+			},
+			wantIn: "best bicycle",
+		},
+		{
+			endpoint: "ocr",
+			setup: func(rc *models.RequestContext) {
+				rc.OCRResponse = &models.OCRResponse{Pages: []models.OCRPage{{Markdown: "# Invoice"}}}
+			},
+			wantOut: "# Invoice",
+		},
+		{
+			endpoint: "speech",
+			setup: func(rc *models.RequestContext) {
+				rc.SpeechRequest = &models.SpeechRequest{Model: "tts-1", Input: "read this aloud", Voice: "alloy"}
+			},
+			wantIn:  "read this aloud",
+			wantOut: "binary",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.endpoint, func(t *testing.T) {
+			p, _ := bodyPlugin(t, true)
+			rc := newTestRC()
+			rc.EndpointType = tt.endpoint
+			rc.Request, rc.Response = nil, nil
+			tt.setup(rc)
+
+			attrs := runOnce(p, rc)
+			if tt.wantIn != "" {
+				in, _ := attrs["input.value"].(string)
+				if !strings.Contains(in, tt.wantIn) {
+					t.Errorf("input.value = %q, want it to contain %q", in, tt.wantIn)
+				}
+			}
+			if tt.wantOut != "" {
+				out, _ := attrs["output.value"].(string)
+				if !strings.Contains(out, tt.wantOut) {
+					t.Errorf("output.value = %q, want it to contain %q", out, tt.wantOut)
+				}
+			}
+		})
+	}
+}
+
+// Binary payloads must be described, never carried: one base64 image would
+// blow the per-attribute cap on its own and tell a reviewer nothing.
+func TestBodiesElideBinaryPayloads(t *testing.T) {
+	big := strings.Repeat("A", 500000)
+	p, _ := bodyPlugin(t, true)
+	rc := newTestRC()
+	rc.EndpointType = "image"
+	rc.Request, rc.Response = nil, nil
+	rc.ImageRequest = &models.ImageRequest{Prompt: "a cat"}
+	rc.ImageResponse = &models.ImageResponse{Data: []models.ImageData{{B64JSON: big}}}
+
+	attrs := runOnce(p, rc)
+	out, _ := attrs["output.value"].(string)
+	if strings.Contains(out, big) {
+		t.Fatal("base64 image was exported on the span")
+	}
+	if !strings.Contains(out, "b64_json_bytes") {
+		t.Error("elided image should still report its size")
+	}
+	if attrs["agentcc.output_truncated"] == true {
+		t.Error("eliding should have kept the payload well under the cap")
+	}
+}
+
+// The convention has first-class attributes for these endpoints. Emitting them
+// is what makes an image or audio span filterable by prompt, size or transcript
+// instead of only greppable inside input.value.
+func TestEndpointAttributesUseTheConvention(t *testing.T) {
+	n := 2
+	dims := 1536
+	topN := 5
+
+	tests := []struct {
+		name     string
+		setup    func(*models.RequestContext)
+		endpoint string
+		want     map[string]interface{}
+	}{
+		{
+			name:     "image",
+			endpoint: "image",
+			setup: func(rc *models.RequestContext) {
+				rc.ImageRequest = &models.ImageRequest{
+					Prompt: "a red bicycle", Size: "1024x1024", Quality: "hd", Style: "vivid",
+					ResponseFormat: "url", N: &n,
+				}
+				rc.ImageResponse = &models.ImageResponse{Data: []models.ImageData{
+					{URL: "https://img/1.png", RevisedPrompt: "a red racing bicycle"},
+					{URL: "https://img/2.png"},
+				}}
+			},
+			want: map[string]interface{}{
+				"gen_ai.image.prompt":         "a red bicycle",
+				"gen_ai.image.size":           "1024x1024",
+				"gen_ai.image.quality":        "hd",
+				"gen_ai.image.style":          "vivid",
+				"gen_ai.image.count":          2,
+				"gen_ai.image.output_urls":    "https://img/1.png,https://img/2.png",
+				"gen_ai.image.revised_prompt": "a red racing bicycle",
+			},
+		},
+		{
+			name:     "embedding",
+			endpoint: "embedding",
+			setup: func(rc *models.RequestContext) {
+				rc.EmbeddingRequest = &models.EmbeddingRequest{Dimensions: &dims}
+			},
+			want: map[string]interface{}{"gen_ai.embeddings.dimension.count": 1536},
+		},
+		{
+			name:     "rerank",
+			endpoint: "rerank",
+			setup: func(rc *models.RequestContext) {
+				rc.RerankRequest = &models.RerankRequest{Query: "best bicycle", Model: "rerank-1", TopN: &topN}
+			},
+			want: map[string]interface{}{
+				"gen_ai.reranker.query": "best bicycle",
+				"gen_ai.reranker.model": "rerank-1",
+				"gen_ai.reranker.top_n": 5,
+			},
+		},
+		{
+			name:     "speech",
+			endpoint: "speech",
+			setup: func(rc *models.RequestContext) {
+				rc.SpeechRequest = &models.SpeechRequest{Input: "read this aloud", Voice: "alloy"}
+			},
+			want: map[string]interface{}{"gen_ai.audio.transcript": "read this aloud"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Not gated on include_bodies: these are dimensions, not content.
+			p, _ := bodyPlugin(t, false)
+			rc := newTestRC()
+			rc.EndpointType = tt.endpoint
+			rc.Request, rc.Response = nil, nil
+			tt.setup(rc)
+
+			attrs := runOnce(p, rc)
+			for k, want := range tt.want {
+				if got := attrs[k]; got != want {
+					t.Errorf("%s = %v (%T), want %v", k, got, got, want)
+				}
+			}
+		})
+	}
+}
+
+// Inline base64 in chat content is the vision case: there is no separate field
+// to leave it in, so carrying it would truncate the prompt away with it.
+func TestInlineImageDataElidedFromChat(t *testing.T) {
+	b64 := strings.Repeat("QUJD", 100000) // ~400 KB
+	p, _ := bodyPlugin(t, true)
+	rc := newTestRC()
+	content, _ := json.Marshal([]map[string]any{
+		{"type": "text", "text": "what is in this picture?"},
+		{"type": "image_url", "image_url": map[string]string{"url": "data:image/png;base64," + b64}},
+	})
+	rc.Request.Messages = []models.Message{{Role: "user", Content: content}}
+	rc.Response = nil
+
+	attrs := runOnce(p, rc)
+	in, _ := attrs["input.value"].(string)
+
+	if strings.Contains(in, b64) {
+		t.Fatal("base64 image carried into the span")
+	}
+	if !strings.Contains(in, "what is in this picture?") {
+		t.Error("the prompt was lost — elision should protect it, not replace it")
+	}
+	if !strings.Contains(in, "data:image/png;base64,<elided") {
+		t.Errorf("elision marker missing: %s", in[:min(len(in), 300)])
+	}
+	if attrs["agentcc.input_truncated"] == true {
+		t.Error("eliding should have kept the body under the cap")
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
