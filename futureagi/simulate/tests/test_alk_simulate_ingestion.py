@@ -1554,7 +1554,7 @@ class TestHostedRunnerActivityHelpers:
 
         child_env = _child_environment(job)
 
-        assert child_env["FI_INTERNAL_API_SECRET"] == "shared-service-secret"
+        assert child_env["FI_INTERNAL_SUBMIT_SECRET"] == "shared-service-secret"
 
     def test_waiting_for_child_slot_heartbeats(self, monkeypatch):
         import asyncio
@@ -1971,6 +1971,7 @@ def test_dataset_language_none_single_multi():
     labels = list(AgentDefinition.LanguageChoices.labels)[:2]
     mixed = [{"persona": {"language": labels[0]}}, {"persona": {"language": labels[1]}}]
     assert _dataset_language(mixed) == "multi"
+
     def test_target_speaks_first_toggle_overrides_direction(self):
         """The explicit target_speaks_first toggle wins over the inbound/outbound
         heuristic; None falls back to it; Retell stays pinned regardless."""
@@ -2001,9 +2002,9 @@ def test_dataset_language_none_single_multi():
         # Retell cannot greet first in the SDK → clamped even when the toggle
         # asks for agent_first.
         assert (
-            _voice_params(
-                "retell_webcall", inbound=False, target_speaks_first=True
-            )["conversation_direction"]
+            _voice_params("retell_webcall", inbound=False, target_speaks_first=True)[
+                "conversation_direction"
+            ]
             == "simulator_first"
         )
 
@@ -2017,9 +2018,7 @@ def test_dataset_language_none_single_multi():
         agent_none = SimpleNamespace(target_speaks_first=None)
 
         # Snapshot overrides the column.
-        version = SimpleNamespace(
-            configuration_snapshot={"target_speaks_first": False}
-        )
+        version = SimpleNamespace(configuration_snapshot={"target_speaks_first": False})
         assert _resolve_target_speaks_first(version, agent_true) is False
 
         # String "false" must not be truthy.
@@ -2039,4 +2038,3 @@ def test_dataset_language_none_single_multi():
         # Absent everywhere → None (auto: derive from inbound/outbound).
         assert _resolve_target_speaks_first(None, agent_none) is None
         assert _resolve_target_speaks_first(None, SimpleNamespace()) is None
-

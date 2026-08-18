@@ -43,7 +43,7 @@ _child_semaphore = asyncio.Semaphore(_MAX_CONCURRENCY)
 _SINK_ENV_BY_PURPOSE = {
     "api_key": "FI_API_KEY",
     "secret_key": "FI_SECRET_KEY",
-    "internal_api_secret": "FI_INTERNAL_API_SECRET",
+    "internal_api_secret": "FI_INTERNAL_SUBMIT_SECRET",
 }
 _CHILD_SLOT_HEARTBEAT_SECONDS = float(
     os.getenv("ALK_RUNNER_SLOT_HEARTBEAT_SECONDS", "20")
