@@ -391,3 +391,116 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+// The trace viewer renders a conversation from these flattened keys, not from
+// input.value. Without them a vision request displays as text with the image
+// silently missing.
+func TestMessageAttributesRenderable(t *testing.T) {
+	p, _ := bodyPlugin(t, true)
+	rc := newTestRC()
+	content, _ := json.Marshal([]map[string]any{
+		{"type": "text", "text": "what colour is this?"},
+		{"type": "image_url", "image_url": map[string]string{"url": "https://img/bike.png"}},
+	})
+	rc.Request.Messages = []models.Message{{Role: "user", Content: content}}
+	out, _ := json.Marshal("it is red")
+	rc.Response.Choices = []models.Choice{{Message: models.Message{Role: "assistant", Content: out}}}
+
+	attrs := runOnce(p, rc)
+	want := map[string]interface{}{
+		"llm.input_messages.0.message.role":                                 "user",
+		"llm.input_messages.0.message.contents.0.message_content.type":      "text",
+		"llm.input_messages.0.message.contents.0.message_content.text":      "what colour is this?",
+		"llm.input_messages.0.message.contents.1.message_content.type":      "image_url",
+		"llm.input_messages.0.message.contents.1.message_content.image.url": "https://img/bike.png",
+		"llm.output_messages.0.message.role":                                "assistant",
+		"llm.output_messages.0.message.content":                             "it is red",
+	}
+	for k, v := range want {
+		if got := attrs[k]; got != v {
+			t.Errorf("%s = %v, want %v", k, got, v)
+		}
+	}
+}
+
+// A plain text message emits flat content, which is what the viewer expects
+// for the common case.
+func TestMessageAttributesFlatForPlainText(t *testing.T) {
+	p, _ := bodyPlugin(t, true)
+	rc := newTestRC()
+	c, _ := json.Marshal("just text")
+	rc.Request.Messages = []models.Message{{Role: "user", Content: c}}
+	rc.Response = nil
+
+	attrs := runOnce(p, rc)
+	if attrs["llm.input_messages.0.message.content"] != "just text" {
+		t.Errorf("flat content = %v", attrs["llm.input_messages.0.message.content"])
+	}
+	if _, ok := attrs["llm.input_messages.0.message.contents.0.message_content.text"]; ok {
+		t.Error("emitted structured parts for plain text; the viewer would ignore them anyway")
+	}
+}
+
+// An image too large to carry is described rather than dropped, and only the
+// flat summary is emitted — the viewer prefers it over structured parts, so
+// sending both would hide the parts and risk the crash that shape once caused.
+func TestMessageAttributesMaskOversizedImage(t *testing.T) {
+	p, _ := bodyPlugin(t, true)
+	rc := newTestRC()
+	huge := "data:image/png;base64," + strings.Repeat("A", maxInlineImageBytes+1000)
+	content, _ := json.Marshal([]map[string]any{
+		{"type": "text", "text": "describe this"},
+		{"type": "image_url", "image_url": map[string]string{"url": huge}},
+	})
+	rc.Request.Messages = []models.Message{{Role: "user", Content: content}}
+	rc.Response = nil
+
+	attrs := runOnce(p, rc)
+	flat, _ := attrs["llm.input_messages.0.message.content"].(string)
+	if !strings.Contains(flat, "describe this") {
+		t.Errorf("prompt lost from the masked summary: %q", flat)
+	}
+	if !strings.Contains(flat, "[image: image/png") {
+		t.Errorf("image not described: %q", flat)
+	}
+	if strings.Contains(flat, strings.Repeat("A", 100)) {
+		t.Error("oversized image carried anyway")
+	}
+	if v, ok := attrs["llm.input_messages.0.message.contents.1.message_content.image.url"]; ok {
+		t.Errorf("structured part emitted alongside the flat summary: %v", v)
+	}
+}
+
+// These attributes carry the same user content input.value does, so they must
+// go through the same redaction — otherwise they are a way around it.
+func TestMessageAttributesRedacted(t *testing.T) {
+	p, _ := bodyPlugin(t, true)
+	p.SetRedactor(privacy.New("patterns", []privacy.PatternConfig{{Name: "pw", Pattern: "hunter2"}}))
+
+	rc := newTestRC()
+	c, _ := json.Marshal("my password is hunter2")
+	rc.Request.Messages = []models.Message{{Role: "user", Content: c}}
+	out, _ := json.Marshal("your password is hunter2")
+	rc.Response.Choices = []models.Choice{{Message: models.Message{Role: "assistant", Content: out}}}
+
+	attrs := runOnce(p, rc)
+	if in, _ := attrs["llm.input_messages.0.message.content"].(string); strings.Contains(in, "hunter2") {
+		t.Errorf("input message not redacted: %q", in)
+	}
+	if o, _ := attrs["llm.output_messages.0.message.content"].(string); strings.Contains(o, "hunter2") {
+		t.Errorf("output message not redacted: %q", o)
+	}
+}
+
+func TestMessageAttributesAbsentUnlessEnabled(t *testing.T) {
+	p, _ := bodyPlugin(t, false)
+	rc := newTestRC()
+	c, _ := json.Marshal("just text")
+	rc.Request.Messages = []models.Message{{Role: "user", Content: c}}
+
+	for k := range runOnce(p, rc) {
+		if strings.HasPrefix(k, "llm.input_messages") || strings.HasPrefix(k, "llm.output_messages") {
+			t.Errorf("message attribute %q emitted with include_bodies off", k)
+		}
+	}
+}

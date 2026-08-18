@@ -30,6 +30,8 @@ func (p *Plugin) attachBodies(span *otelpkg.Span, rc *models.RequestContext) {
 		mode = orgMode
 	}
 
+	p.attachMessages(span, rc, redactor, mode)
+
 	in, out := bodyJSON(rc)
 	if in != "" {
 		setBodyAttr(span, "input", prepareBody(in, redactor, mode))
