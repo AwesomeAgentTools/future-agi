@@ -3,6 +3,7 @@ package otel
 import (
 	"encoding/json"
 	"log/slog"
+	"unicode/utf8"
 
 	"github.com/futureagi/agentcc-gateway/internal/models"
 	otelpkg "github.com/futureagi/agentcc-gateway/internal/otel"
@@ -88,7 +89,16 @@ func prepareBody(v string, r *privacy.Redactor, mode string) preparedBody {
 	if len(v) <= maxBodyAttrBytes {
 		return preparedBody{value: v}
 	}
-	return preparedBody{value: v[:maxBodyAttrBytes], originalBytes: len(v), truncated: true}
+	// Walk back to a rune boundary. Slicing by byte index can end the string
+	// mid-rune, and an OTLP attribute is a proto string: proto.Marshal rejects
+	// the whole message rather than the offending field, so a single body cut
+	// through a multi-byte character would take its entire batch of unrelated
+	// spans with it. Non-ASCII prompts are not an edge case.
+	cut := maxBodyAttrBytes
+	for cut > 0 && !utf8.RuneStart(v[cut]) {
+		cut--
+	}
+	return preparedBody{value: v[:cut], originalBytes: len(v), truncated: true}
 }
 
 // redactorFor prefers the org's redactor over the gateway-wide one, matching

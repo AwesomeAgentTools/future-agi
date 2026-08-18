@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/futureagi/agentcc-gateway/internal/config"
 	"github.com/futureagi/agentcc-gateway/internal/models"
@@ -126,6 +127,30 @@ func TestBodiesRedactBeforeTruncate(t *testing.T) {
 	}
 	if len(got.value) > maxBodyAttrBytes {
 		t.Errorf("value length %d exceeds the cap %d", len(got.value), maxBodyAttrBytes)
+	}
+}
+
+// Truncation cuts by byte index, so on a non-ASCII body the cap can land in
+// the middle of a character. An OTLP attribute is a proto string and
+// proto.Marshal fails the whole message on invalid UTF-8, so that one body
+// would take its entire batch of unrelated spans with it. The other truncation
+// tests use ASCII filler, which is exactly why they cannot see this.
+func TestBodiesTruncateOnARuneBoundary(t *testing.T) {
+	// Shift the content by one byte at a time: one of these puts a multi-byte
+	// character across the cap no matter where the cap happens to sit.
+	for pad := 0; pad < 3; pad++ {
+		body := strings.Repeat("a", pad) + strings.Repeat("héllo wörld ☃", maxBodyAttrBytes)
+		got := prepareBody(body, nil, "")
+
+		if !got.truncated {
+			t.Fatalf("pad=%d: body of %d bytes was not truncated", pad, len(body))
+		}
+		if len(got.value) > maxBodyAttrBytes {
+			t.Errorf("pad=%d: value length %d exceeds the cap %d", pad, len(got.value), maxBodyAttrBytes)
+		}
+		if !utf8.ValidString(got.value) {
+			t.Errorf("pad=%d: truncation left invalid UTF-8; the batch this span joins cannot be marshalled", pad)
+		}
 	}
 }
 

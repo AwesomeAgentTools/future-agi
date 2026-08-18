@@ -322,16 +322,28 @@ func (e *OTLPExporter) retry(spans []*Span, reason string, attr slog.Attr) {
 			"reason", reason, "dropped", len(spans))
 		return
 	}
-	dropped := 0
-	if len(spans) > room {
-		dropped = len(spans) - room
+	total := len(spans)
+	if total > room {
 		spans = spans[:room]
 	}
+	// The byte ceiling binds on re-enqueue as well. Export enforces it on the
+	// way in, so a failed batch coming back is the one path that could push the
+	// queue past the memory bound it exists to hold.
+	kept, keptBytes := 0, 0
+	for _, s := range spans {
+		size := spanSize(s)
+		if e.bufferBytes+keptBytes+size > otlpMaxQueueBytes {
+			break
+		}
+		keptBytes += size
+		kept++
+	}
+	spans = spans[:kept]
+	dropped := total - kept
+
 	// Failed spans go to the front so the oldest telemetry still leaves first.
 	e.buffer = append(spans, e.buffer...)
-	for _, s := range spans {
-		e.bufferBytes += spanSize(s)
-	}
+	e.bufferBytes += keptBytes
 	e.mu.Unlock()
 
 	if dropped > 0 {

@@ -3,6 +3,7 @@ package otel
 import (
 	"encoding/hex"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -545,6 +546,46 @@ func TestOTLPExporterCountsABatchLostToEncoding(t *testing.T) {
 		t.Fatalf("Dropped() = %d, want 2 — the whole batch was lost", e.Dropped())
 	}
 	_ = e.Shutdown()
+}
+
+// A batch coming back from a failed send is the one path into the queue that
+// does not go through Export, so the byte ceiling has to be enforced here too
+// or a retry can push the queue past the bound that caps its memory.
+func TestOTLPExporterRetryHoldsTheByteCeiling(t *testing.T) {
+	c := newCollector(t, func(int) int { return http.StatusOK })
+	e, err := NewOTLPExporter(OTLPOptions{Endpoint: c.URL, ServiceName: "svc", Resource: nil})
+	if err != nil {
+		t.Fatalf("NewOTLPExporter: %v", err)
+	}
+	defer func() { _ = e.Shutdown() }()
+
+	big := func() *Span {
+		s := NewSpan("chat_completion", "svc")
+		s.SetAttribute("input.value", strings.Repeat("x", 4096))
+		s.End()
+		return s
+	}
+
+	// Park the queue just under the ceiling, with room for one of these spans.
+	e.mu.Lock()
+	e.bufferBytes = otlpMaxQueueBytes - spanSize(big())
+	e.mu.Unlock()
+
+	e.retry([]*Span{big(), big(), big()}, "test", slog.String("k", "v"))
+
+	e.mu.Lock()
+	queued, bytes := len(e.buffer), e.bufferBytes
+	e.mu.Unlock()
+
+	if bytes > otlpMaxQueueBytes {
+		t.Errorf("bufferBytes = %d, over the %d ceiling", bytes, otlpMaxQueueBytes)
+	}
+	if queued != 1 {
+		t.Errorf("re-enqueued %d spans, want the 1 that fits", queued)
+	}
+	if e.Dropped() != 2 {
+		t.Errorf("Dropped() = %d, want the 2 that did not fit", e.Dropped())
+	}
 }
 
 func TestOTLPExporterShutdownIsIdempotent(t *testing.T) {
