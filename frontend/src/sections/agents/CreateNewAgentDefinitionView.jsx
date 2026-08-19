@@ -32,7 +32,7 @@ import AgentBehaviourStepRightSection from "./CreateNewAgent/AgentBehaviourStep/
 import AgentBehaviourStep from "./CreateNewAgent/AgentBehaviourStep/AgentBehaviourStep";
 import Iconify from "src/components/iconify";
 import { LoadingButton } from "@mui/lab";
-import { AGENT_TYPES, isLiveKitProvider, supportsConcurrency } from "./constants";
+import { AGENT_TYPES, isLiveKitProvider } from "./constants";
 import { useAuthContext } from "src/auth/hooks";
 import { PERMISSIONS, RolePermission } from "src/utils/rolePermissionMapping";
 
@@ -70,10 +70,7 @@ const CreateNewAgentDefinitionView = () => {
     const requiredFields = {
       0: ["agentType", "agentName", "languages"],
       1: ["provider"],
-      // Phone number is optional for all voice providers: empty ⇒ web
-      // (WebRTC), provided ⇒ telephony (PSTN). Partial/invalid input is still
-      // caught by the field-level zod validation.
-      2: ["description", "commitMessage"],
+      2: ["description", "countryCode", "contactNumber", "commitMessage"],
     };
 
     if (isLiveKitProvider(provider)) {
@@ -83,6 +80,8 @@ const CreateNewAgentDefinitionView = () => {
         "livekitApiSecret",
         "livekitAgentName",
       );
+      // LiveKit doesn't need contact number
+      requiredFields[2] = ["description", "commitMessage"];
     } else if (provider === "others") {
       if (authenticationMethod === "basicAuth") {
         requiredFields[1].push("username", "password");
@@ -140,7 +139,6 @@ const CreateNewAgentDefinitionView = () => {
         // country_code: data.countryCode,
         contact_number: data.contactNumber,
         inbound: data.inbound,
-        target_speaks_first: data.targetSpeaksFirst,
         commit_message: data.commitMessage,
         observability_enabled: data.observabilityEnabled,
         authentication_method: "api_key",
@@ -161,13 +159,10 @@ const CreateNewAgentDefinitionView = () => {
       // Only process and include voice-specific fields for voice agents
       if (data.agentType === AGENT_TYPES.VOICE) {
         if (isLiveKitProvider(data.provider)) {
-          // LiveKit supports web (WebRTC, no number) and telephony (SIP, with
-          // number). Send the phone only when the user provided one.
-          payload.contact_number = data.contactNumber?.trim()
-            ? data.countryCode
-              ? `+${data.countryCode}${data.contactNumber.trim()}`
-              : data.contactNumber.trim()
-            : "";
+          // LiveKit: no phone number needed, ensure config is a dict
+          payload.contact_number = "";
+          payload.livekit_max_concurrency =
+            parseInt(data.livekitMaxConcurrency, 10) || 5;
           payload.livekit_config_json = data.livekitConfigJson || {};
           if (typeof payload.livekit_config_json === "string") {
             try {
@@ -184,19 +179,12 @@ const CreateNewAgentDefinitionView = () => {
             ? `+${data?.countryCode}${data.contactNumber.trim()}`
             : data.contactNumber.trim();
           payload.contact_number = fullContactNumber;
-          // Clean up LiveKit-only fields
+          // Clean up LiveKit fields
           delete payload.livekit_url;
           delete payload.livekit_api_key;
           delete payload.livekit_api_secret;
           delete payload.livekit_agent_name;
           delete payload.livekit_config_json;
-        }
-        // Concurrency applies to every web provider (livekit / vapi / retell);
-        // drop it only for providers that don't run concurrent cases.
-        if (supportsConcurrency(data.provider)) {
-          payload.livekit_max_concurrency =
-            parseInt(data.livekitMaxConcurrency, 10) || 5;
-        } else {
           delete payload.livekit_max_concurrency;
         }
         delete payload.model;

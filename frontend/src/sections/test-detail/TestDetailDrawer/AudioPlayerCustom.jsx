@@ -82,7 +82,6 @@ export const StereoMultiTrackPlayer = ({
   height = 70,
   onInstance,
   isInbound = false,
-  provider = null,
 }) => {
   const theme = useTheme();
   // Speaker palette — matches the TranscriptView timeline strip / talk
@@ -99,7 +98,7 @@ export const StereoMultiTrackPlayer = ({
     customerUrl: stereoCustomer,
     loading: stereoLoading,
     error: stereoError,
-  } = useStereoChannels(recordings?.stereo || "", isInbound, provider);
+  } = useStereoChannels(recordings?.stereo || "", isInbound);
 
   // Use stereo-split channels when available, fall back to separate mono files
   const useStereo =
@@ -112,10 +111,7 @@ export const StereoMultiTrackPlayer = ({
   // neither be filled nor tell the speakers apart, and the player only becomes
   // ready once every track loads. Hand it to the single-track bar instead.
   const combinedOnly =
-    !useStereo &&
-    !assistantUrl &&
-    !customerUrl &&
-    Boolean(recordings?.combined);
+    !useStereo && !assistantUrl && !customerUrl && Boolean(recordings?.combined);
 
   const trackUrls = useMemo(
     () => [
@@ -173,7 +169,6 @@ StereoMultiTrackPlayer.propTypes = {
   height: PropTypes.number,
   onInstance: PropTypes.func,
   isInbound: PropTypes.bool,
-  provider: PropTypes.string,
 };
 
 const AudioPlayerCustom = ({ data, onInstance }) => {
@@ -190,7 +185,6 @@ const AudioPlayerCustom = ({ data, onInstance }) => {
       data?.call_type ||
       ""
     ).toLowerCase() === "inbound";
-  const provider = data?.provider || data?.call_metadata?.provider || null;
   if (isCallInProgress) {
     return (
       <Box sx={{ height: 200 }}>
@@ -222,7 +216,6 @@ const AudioPlayerCustom = ({ data, onInstance }) => {
         id={data?.id}
         onInstance={onInstance}
         isInbound={isInbound}
-        provider={provider}
       />
     );
   }
@@ -259,7 +252,6 @@ const AudioPlayerCustom = ({ data, onInstance }) => {
         id={data?.id}
         onInstance={onInstance}
         isInbound={isInbound}
-        provider={provider}
       />
     );
   }

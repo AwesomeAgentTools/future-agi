@@ -5,7 +5,7 @@
 export const OPENAPI_CONTRACT = Object.freeze({
   "generatedFrom": "api_contracts/openapi/swagger.json",
   "swaggerVersion": "2.0",
-  "endpointCount": 984,
+  "endpointCount": 978,
   "endpoints": {
     "/accounts/2fa/recovery-codes/": {
       "get": {
@@ -27203,172 +27203,6 @@ export const OPENAPI_CONTRACT = Object.freeze({
         }
       }
     },
-    "/simulate/api/alk-simulate/call-executions/{call_execution_id}/recording/": {
-      "post": {
-        "operationId": "simulate_api_alk-simulate_call-executions_recording_upload",
-        "runtimeRequestValidation": true,
-        "runtimeResponseValidation": true,
-        "requestBody": null,
-        "queryParameters": {},
-        "responses": {
-          "200": {
-            "$ref": "#/definitions/ALKSimulateRecordingUploadResponse"
-          },
-          "400": {
-            "$ref": "#/definitions/ApiTextErrorResponse"
-          },
-          "404": {
-            "$ref": "#/definitions/ApiTextErrorResponse"
-          },
-          "500": {
-            "$ref": "#/definitions/ApiTextErrorResponse"
-          },
-          "default": {
-            "$ref": "#/definitions/ManagementAPIErrorResponse"
-          }
-        }
-      }
-    },
-    "/simulate/api/alk-simulate/call-executions/{call_execution_id}/result/": {
-      "patch": {
-        "operationId": "simulate_api_alk-simulate_call-executions_result",
-        "runtimeRequestValidation": true,
-        "runtimeResponseValidation": true,
-        "requestBody": {
-          "$ref": "#/definitions/ALKSimulateResult"
-        },
-        "queryParameters": {},
-        "responses": {
-          "200": {
-            "$ref": "#/definitions/ALKSimulateResultResponse"
-          },
-          "400": {
-            "$ref": "#/definitions/ApiTextErrorResponse"
-          },
-          "404": {
-            "$ref": "#/definitions/ApiTextErrorResponse"
-          },
-          "500": {
-            "$ref": "#/definitions/ApiTextErrorResponse"
-          },
-          "default": {
-            "$ref": "#/definitions/ManagementAPIErrorResponse"
-          }
-        }
-      }
-    },
-    "/simulate/api/alk-simulate/call-executions/{call_execution_id}/status/": {
-      "patch": {
-        "operationId": "simulate_api_alk-simulate_call-executions_status",
-        "runtimeRequestValidation": true,
-        "runtimeResponseValidation": true,
-        "requestBody": {
-          "$ref": "#/definitions/ALKSimulateStatusUpdate"
-        },
-        "queryParameters": {},
-        "responses": {
-          "200": {
-            "$ref": "#/definitions/ALKSimulateStatusUpdateResponse"
-          },
-          "400": {
-            "$ref": "#/definitions/ApiTextErrorResponse"
-          },
-          "404": {
-            "$ref": "#/definitions/ApiTextErrorResponse"
-          },
-          "500": {
-            "$ref": "#/definitions/ApiTextErrorResponse"
-          },
-          "default": {
-            "$ref": "#/definitions/ManagementAPIErrorResponse"
-          }
-        }
-      }
-    },
-    "/simulate/api/alk-simulate/run-tests/provision/": {
-      "post": {
-        "operationId": "simulate_api_alk-simulate_run-tests_provision_run_test",
-        "runtimeRequestValidation": true,
-        "runtimeResponseValidation": true,
-        "requestBody": {
-          "$ref": "#/definitions/ALKSimulateProvisionRunTestRequest"
-        },
-        "queryParameters": {},
-        "responses": {
-          "200": {
-            "$ref": "#/definitions/ALKSimulateProvisionResponse"
-          },
-          "400": {
-            "$ref": "#/definitions/ApiTextErrorResponse"
-          },
-          "404": {
-            "$ref": "#/definitions/ApiTextErrorResponse"
-          },
-          "500": {
-            "$ref": "#/definitions/ApiTextErrorResponse"
-          },
-          "default": {
-            "$ref": "#/definitions/ManagementAPIErrorResponse"
-          }
-        }
-      }
-    },
-    "/simulate/api/alk-simulate/run-tests/{run_test_id}/test-executions/": {
-      "post": {
-        "operationId": "simulate_api_alk-simulate_run-tests_start_test_execution",
-        "runtimeRequestValidation": true,
-        "runtimeResponseValidation": true,
-        "requestBody": {
-          "$ref": "#/definitions/ALKSimulateStartTestExecutionRequest"
-        },
-        "queryParameters": {},
-        "responses": {
-          "200": {
-            "$ref": "#/definitions/ALKSimulateStartTestExecutionResponse"
-          },
-          "400": {
-            "$ref": "#/definitions/ApiTextErrorResponse"
-          },
-          "404": {
-            "$ref": "#/definitions/ApiTextErrorResponse"
-          },
-          "500": {
-            "$ref": "#/definitions/ApiTextErrorResponse"
-          },
-          "default": {
-            "$ref": "#/definitions/ManagementAPIErrorResponse"
-          }
-        }
-      }
-    },
-    "/simulate/api/alk-simulate/test-executions/{test_execution_id}/batch/": {
-      "post": {
-        "operationId": "simulate_api_alk-simulate_test-executions_batch",
-        "runtimeRequestValidation": true,
-        "runtimeResponseValidation": true,
-        "requestBody": {
-          "$ref": "#/definitions/ALKSimulateBatchCreateRequest"
-        },
-        "queryParameters": {},
-        "responses": {
-          "200": {
-            "$ref": "#/definitions/ALKSimulateBatchCreateResponse"
-          },
-          "400": {
-            "$ref": "#/definitions/ApiTextErrorResponse"
-          },
-          "404": {
-            "$ref": "#/definitions/ApiTextErrorResponse"
-          },
-          "500": {
-            "$ref": "#/definitions/ApiTextErrorResponse"
-          },
-          "default": {
-            "$ref": "#/definitions/ManagementAPIErrorResponse"
-          }
-        }
-      }
-    },
     "/simulate/api/call-executions/": {
       "get": {
         "operationId": "simulate_api_call-executions_list",
@@ -28628,7 +28462,10 @@ export const OPENAPI_CONTRACT = Object.freeze({
         },
         "responses": {
           "200": {
-            "$ref": "#/definitions/RunTestListPaginatedResponse"
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/RunTestResponse"
+            }
           },
           "500": {
             "$ref": "#/definitions/RunTestErrorResponse"
@@ -41668,264 +41505,6 @@ export const OPENAPI_CONTRACT = Object.freeze({
         }
       }
     },
-    "ALKSimulateBatchCreateRequest": {
-      "type": "object",
-      "properties": {
-        "count": {
-          "title": "Count",
-          "type": "integer",
-          "minimum": 1
-        }
-      }
-    },
-    "ALKSimulateBatchCreateResponse": {
-      "required": [
-        "result"
-      ],
-      "type": "object",
-      "properties": {
-        "status": {
-          "title": "Status",
-          "type": "boolean",
-          "default": true
-        },
-        "result": {
-          "$ref": "#/definitions/ALKSimulateBatchCreateResult"
-        }
-      }
-    },
-    "ALKSimulateProvisionResponse": {
-      "required": [
-        "result"
-      ],
-      "type": "object",
-      "properties": {
-        "status": {
-          "title": "Status",
-          "type": "boolean",
-          "default": true
-        },
-        "result": {
-          "$ref": "#/definitions/ALKSimulateProvisionResult"
-        }
-      }
-    },
-    "ALKSimulateProvisionRunTestRequest": {
-      "required": [
-        "name"
-      ],
-      "type": "object",
-      "properties": {
-        "name": {
-          "title": "Name",
-          "type": "string",
-          "maxLength": 255,
-          "minLength": 1
-        },
-        "description": {
-          "title": "Description",
-          "type": "string"
-        },
-        "personas": {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/ALKSimulateProvisionPersona"
-          }
-        },
-        "scenario_ids": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "format": "uuid"
-          }
-        },
-        "agent_definition_id": {
-          "title": "Agent definition id",
-          "type": "string",
-          "format": "uuid",
-          "x-nullable": true
-        },
-        "agent_name": {
-          "title": "Agent name",
-          "type": "string",
-          "maxLength": 255
-        }
-      }
-    },
-    "ALKSimulateRecordingUploadResponse": {
-      "required": [
-        "result"
-      ],
-      "type": "object",
-      "properties": {
-        "status": {
-          "title": "Status",
-          "type": "boolean",
-          "default": true
-        },
-        "result": {
-          "$ref": "#/definitions/ALKSimulateRecordingUploadResult"
-        }
-      }
-    },
-    "ALKSimulateResult": {
-      "required": [
-        "status"
-      ],
-      "type": "object",
-      "properties": {
-        "status": {
-          "title": "Status",
-          "type": "string",
-          "enum": [
-            "completed",
-            "failed",
-            "cancelled"
-          ]
-        },
-        "started_at": {
-          "title": "Started at",
-          "type": "string",
-          "format": "date-time",
-          "x-nullable": true
-        },
-        "ended_at": {
-          "title": "Ended at",
-          "type": "string",
-          "format": "date-time",
-          "x-nullable": true
-        },
-        "duration_seconds": {
-          "title": "Duration seconds",
-          "type": "integer",
-          "minimum": 0,
-          "x-nullable": true
-        },
-        "ended_reason": {
-          "title": "Ended reason",
-          "type": "string",
-          "maxLength": 10000
-        },
-        "error_message": {
-          "title": "Error message",
-          "type": "string"
-        },
-        "call_summary": {
-          "title": "Call summary",
-          "type": "string"
-        },
-        "transcript": {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/ALKSimulateTranscriptSegment"
-          }
-        },
-        "recording_url": {
-          "title": "Recording url",
-          "type": "string",
-          "format": "uri",
-          "maxLength": 500
-        },
-        "stereo_recording_url": {
-          "title": "Stereo recording url",
-          "type": "string",
-          "format": "uri",
-          "maxLength": 500
-        },
-        "costs": {
-          "$ref": "#/definitions/ALKSimulateCostBreakdown"
-        },
-        "provider_call_data": {
-          "title": "Provider call data",
-          "type": "object"
-        },
-        "call_metadata": {
-          "title": "Call metadata",
-          "type": "object"
-        }
-      }
-    },
-    "ALKSimulateResultResponse": {
-      "required": [
-        "result"
-      ],
-      "type": "object",
-      "properties": {
-        "status": {
-          "title": "Status",
-          "type": "boolean",
-          "default": true
-        },
-        "result": {
-          "$ref": "#/definitions/ALKSimulateResultOutcome"
-        }
-      }
-    },
-    "ALKSimulateStartTestExecutionRequest": {
-      "type": "object",
-      "properties": {
-        "scenario_ids": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "format": "uuid"
-          }
-        },
-        "simulator_agent_id": {
-          "title": "Simulator agent id",
-          "type": "string",
-          "format": "uuid",
-          "x-nullable": true
-        }
-      }
-    },
-    "ALKSimulateStartTestExecutionResponse": {
-      "required": [
-        "result"
-      ],
-      "type": "object",
-      "properties": {
-        "status": {
-          "title": "Status",
-          "type": "boolean",
-          "default": true
-        },
-        "result": {
-          "$ref": "#/definitions/ALKSimulateStartTestExecutionResult"
-        }
-      }
-    },
-    "ALKSimulateStatusUpdate": {
-      "required": [
-        "status"
-      ],
-      "type": "object",
-      "properties": {
-        "status": {
-          "title": "Status",
-          "type": "string",
-          "enum": [
-            "ongoing"
-          ]
-        }
-      }
-    },
-    "ALKSimulateStatusUpdateResponse": {
-      "required": [
-        "result"
-      ],
-      "type": "object",
-      "properties": {
-        "status": {
-          "title": "Status",
-          "type": "boolean",
-          "default": true
-        },
-        "result": {
-          "$ref": "#/definitions/ALKSimulateStatusUpdateOutcome"
-        }
-      }
-    },
     "APICallCountResponse": {
       "required": [
         "status",
@@ -43053,12 +42632,6 @@ export const OPENAPI_CONTRACT = Object.freeze({
           "description": "Whether the agent handles inbound calls",
           "type": "boolean"
         },
-        "target_speaks_first": {
-          "title": "Target speaks first",
-          "description": "Whether the target agent speaks first (greets) in a hosted voice simulation. True: the simulator waits for the target's greeting; False: the simulator opens the conversation; null: derive from inbound/outbound. Retell targets always let the simulator open (SDK limitation).",
-          "type": "boolean",
-          "x-nullable": true
-        },
         "description": {
           "title": "Description",
           "description": "Detailed description of the AI agent's purpose and capabilities",
@@ -43324,11 +42897,6 @@ export const OPENAPI_CONTRACT = Object.freeze({
           "type": "boolean",
           "default": true
         },
-        "target_speaks_first": {
-          "title": "Target speaks first",
-          "type": "boolean",
-          "x-nullable": true
-        },
         "description": {
           "title": "Description",
           "type": "string",
@@ -43442,7 +43010,6 @@ export const OPENAPI_CONTRACT = Object.freeze({
         "livekit_max_concurrency": {
           "title": "Livekit max concurrency",
           "type": "integer",
-          "maximum": 25,
           "minimum": 1,
           "x-nullable": true
         }
@@ -43540,11 +43107,6 @@ export const OPENAPI_CONTRACT = Object.freeze({
           "title": "Inbound",
           "type": "boolean"
         },
-        "target_speaks_first": {
-          "title": "Target speaks first",
-          "type": "boolean",
-          "x-nullable": true
-        },
         "knowledge_base": {
           "title": "Knowledge base",
           "type": "string",
@@ -43601,7 +43163,6 @@ export const OPENAPI_CONTRACT = Object.freeze({
         "livekit_max_concurrency": {
           "title": "Livekit max concurrency",
           "type": "integer",
-          "maximum": 25,
           "minimum": 1,
           "x-nullable": true
         }
@@ -43659,13 +43220,6 @@ export const OPENAPI_CONTRACT = Object.freeze({
           "description": "Whether the agent handles inbound calls",
           "type": "boolean",
           "readOnly": true
-        },
-        "target_speaks_first": {
-          "title": "Target speaks first",
-          "description": "Whether the target agent speaks first (greets) in a hosted voice simulation. True: the simulator waits for the target's greeting; False: the simulator opens the conversation; null: derive from inbound/outbound. Retell targets always let the simulator open (SDK limitation).",
-          "type": "boolean",
-          "readOnly": true,
-          "x-nullable": true
         },
         "description": {
           "title": "Description",
@@ -43883,13 +43437,6 @@ export const OPENAPI_CONTRACT = Object.freeze({
           "description": "Whether the agent handles inbound calls",
           "type": "boolean",
           "readOnly": true
-        },
-        "target_speaks_first": {
-          "title": "Target speaks first",
-          "description": "Whether the target agent speaks first (greets) in a hosted voice simulation. True: the simulator waits for the target's greeting; False: the simulator opens the conversation; null: derive from inbound/outbound. Retell targets always let the simulator open (SDK limitation).",
-          "type": "boolean",
-          "readOnly": true,
-          "x-nullable": true
         },
         "description": {
           "title": "Description",
@@ -44587,11 +44134,6 @@ export const OPENAPI_CONTRACT = Object.freeze({
           "title": "Inbound",
           "type": "boolean"
         },
-        "target_speaks_first": {
-          "title": "Target speaks first",
-          "type": "boolean",
-          "x-nullable": true
-        },
         "knowledge_base": {
           "title": "Knowledge base",
           "type": "string",
@@ -44636,7 +44178,6 @@ export const OPENAPI_CONTRACT = Object.freeze({
         "livekit_max_concurrency": {
           "title": "Livekit max concurrency",
           "type": "integer",
-          "maximum": 25,
           "minimum": 1
         },
         "commit_message": {
@@ -68000,47 +67541,6 @@ export const OPENAPI_CONTRACT = Object.freeze({
         }
       }
     },
-    "RunTestListPaginatedResponse": {
-      "type": "object",
-      "properties": {
-        "count": {
-          "title": "Count",
-          "type": "integer",
-          "readOnly": true
-        },
-        "next": {
-          "title": "Next",
-          "type": "string",
-          "readOnly": true,
-          "minLength": 1,
-          "x-nullable": true
-        },
-        "previous": {
-          "title": "Previous",
-          "type": "string",
-          "readOnly": true,
-          "minLength": 1,
-          "x-nullable": true
-        },
-        "results": {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/RunTestResponse"
-          },
-          "readOnly": true
-        },
-        "total_pages": {
-          "title": "Total pages",
-          "type": "integer",
-          "readOnly": true
-        },
-        "current_page": {
-          "title": "Current page",
-          "type": "integer",
-          "readOnly": true
-        }
-      }
-    },
     "RunTestMessageResponse": {
       "type": "object",
       "properties": {
@@ -76068,272 +75568,6 @@ export const OPENAPI_CONTRACT = Object.freeze({
             "type": "string",
             "minLength": 1
           }
-        }
-      }
-    },
-    "ALKSimulateBatchCreateResult": {
-      "required": [
-        "call_execution_ids",
-        "has_more",
-        "batched_scenarios"
-      ],
-      "type": "object",
-      "properties": {
-        "call_execution_ids": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "format": "uuid"
-          }
-        },
-        "has_more": {
-          "title": "Has more",
-          "type": "boolean"
-        },
-        "batched_scenarios": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "format": "uuid"
-          }
-        }
-      }
-    },
-    "ALKSimulateProvisionResult": {
-      "required": [
-        "run_test_id",
-        "scenario_ids",
-        "agent_definition_id"
-      ],
-      "type": "object",
-      "properties": {
-        "run_test_id": {
-          "title": "Run test id",
-          "type": "string",
-          "format": "uuid"
-        },
-        "scenario_ids": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "format": "uuid"
-          }
-        },
-        "agent_definition_id": {
-          "title": "Agent definition id",
-          "type": "string",
-          "format": "uuid"
-        }
-      }
-    },
-    "ALKSimulateProvisionPersona": {
-      "type": "object",
-      "properties": {
-        "name": {
-          "title": "Name",
-          "type": "string",
-          "maxLength": 255
-        },
-        "role": {
-          "title": "Role",
-          "type": "string",
-          "maxLength": 255
-        },
-        "situation": {
-          "title": "Situation",
-          "type": "string"
-        },
-        "outcome": {
-          "title": "Outcome",
-          "type": "string"
-        },
-        "persona": {
-          "title": "Persona",
-          "type": "object"
-        }
-      }
-    },
-    "ALKSimulateRecordingUploadResult": {
-      "required": [
-        "recording_url",
-        "object_key"
-      ],
-      "type": "object",
-      "properties": {
-        "recording_url": {
-          "title": "Recording url",
-          "type": "string",
-          "format": "uri",
-          "maxLength": 1024,
-          "minLength": 1
-        },
-        "object_key": {
-          "title": "Object key",
-          "type": "string",
-          "minLength": 1
-        }
-      }
-    },
-    "ALKSimulateCostBreakdown": {
-      "type": "object",
-      "properties": {
-        "stt_cost_cents": {
-          "title": "Stt cost cents",
-          "type": "integer",
-          "x-nullable": true
-        },
-        "llm_cost_cents": {
-          "title": "Llm cost cents",
-          "type": "integer",
-          "x-nullable": true
-        },
-        "tts_cost_cents": {
-          "title": "Tts cost cents",
-          "type": "integer",
-          "x-nullable": true
-        },
-        "storage_cost_cents": {
-          "title": "Storage cost cents",
-          "type": "number",
-          "x-nullable": true
-        },
-        "cost_cents": {
-          "title": "Cost cents",
-          "type": "integer",
-          "x-nullable": true
-        }
-      }
-    },
-    "ALKSimulateTranscriptSegment": {
-      "required": [
-        "speaker_role",
-        "content"
-      ],
-      "type": "object",
-      "properties": {
-        "speaker_role": {
-          "title": "Speaker role",
-          "type": "string",
-          "enum": [
-            "user",
-            "assistant",
-            "system",
-            "tool_calls",
-            "tool_call_result",
-            "unknown"
-          ]
-        },
-        "content": {
-          "title": "Content",
-          "type": "string"
-        },
-        "start_time_ms": {
-          "title": "Start time ms",
-          "type": "integer",
-          "default": 0,
-          "minimum": 0
-        },
-        "end_time_ms": {
-          "title": "End time ms",
-          "type": "integer",
-          "default": 0,
-          "minimum": 0
-        },
-        "confidence_score": {
-          "title": "Confidence score",
-          "type": "number",
-          "maximum": 1,
-          "minimum": 0,
-          "x-nullable": true
-        },
-        "latency_ms": {
-          "title": "Latency ms",
-          "type": "integer",
-          "minimum": 0,
-          "x-nullable": true
-        },
-        "tool_calls": {
-          "title": "Tool calls",
-          "type": "object"
-        },
-        "tool_call_id": {
-          "title": "Tool call id",
-          "type": "string",
-          "maxLength": 255
-        }
-      }
-    },
-    "ALKSimulateResultOutcome": {
-      "required": [
-        "call_execution_id",
-        "status",
-        "eval_dispatched"
-      ],
-      "type": "object",
-      "properties": {
-        "call_execution_id": {
-          "title": "Call execution id",
-          "type": "string",
-          "format": "uuid"
-        },
-        "status": {
-          "title": "Status",
-          "type": "string",
-          "minLength": 1
-        },
-        "eval_dispatched": {
-          "title": "Eval dispatched",
-          "type": "boolean"
-        }
-      }
-    },
-    "ALKSimulateStartTestExecutionResult": {
-      "required": [
-        "test_execution_id",
-        "run_test_id",
-        "scenario_ids",
-        "total_scenarios",
-        "status"
-      ],
-      "type": "object",
-      "properties": {
-        "test_execution_id": {
-          "title": "Test execution id",
-          "type": "string",
-          "format": "uuid"
-        },
-        "run_test_id": {
-          "title": "Run test id",
-          "type": "string",
-          "format": "uuid"
-        },
-        "scenario_ids": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "format": "uuid"
-          }
-        },
-        "total_scenarios": {
-          "title": "Total scenarios",
-          "type": "integer"
-        },
-        "status": {
-          "title": "Status",
-          "type": "string",
-          "minLength": 1
-        }
-      }
-    },
-    "ALKSimulateStatusUpdateOutcome": {
-      "required": [
-        "updated"
-      ],
-      "type": "object",
-      "properties": {
-        "updated": {
-          "title": "Updated",
-          "type": "boolean"
         }
       }
     },
