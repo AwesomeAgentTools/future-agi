@@ -248,12 +248,16 @@ const CreateRunTestPage = ({ open, onClose }) => {
       return response.data;
     },
     enabled: !!formData?.agentType,
+    keepPreviousData: true,
   });
 
   // Extract scenarios data
   const scenarios = scenariosData?.results || [];
   const scenariosTotal = scenariosData?.count || 0;
   const scenariosPage = scenariosPagination.page;
+  const scenariosTotalPages = Math.ceil(
+    scenariosTotal / scenariosPagination.pageSize,
+  );
 
   // Since search is done server-side, we don't need to filter locally
   const filteredScenarios = scenarios;
@@ -503,6 +507,14 @@ const CreateRunTestPage = ({ open, onClose }) => {
   // on slow devices don't cause multiple api calls happening
   // on slower devices
   const isMutatingRef = useRef(false);
+  const executeTestMutation = useMutation({
+    mutationFn: (testId) =>
+      axios.post(endpoints.runTests.runTest(testId), {
+        select_all: false,
+        scenario_ids: runnableScenarioIds,
+      }),
+  });
+
   const createTestMutation = useMutation({
     /**
      *
@@ -518,8 +530,20 @@ const CreateRunTestPage = ({ open, onClose }) => {
     onSettled: () => {
       isMutatingRef.current = false;
     },
-    onSuccess: (data) => {
-      enqueueSnackbar("Test created successfully!", { variant: "success" });
+    onSuccess: async (data) => {
+      if (formData?.agentType === AGENT_TYPES.VOICE) {
+        try {
+          await executeTestMutation.mutateAsync(data.id);
+          enqueueSnackbar("Simulation run started", { variant: "success" });
+        } catch (error) {
+          enqueueSnackbar("Test created, but the run could not be started.", {
+            variant: "error",
+          });
+        }
+      } else {
+        enqueueSnackbar("Test created successfully!", { variant: "success" });
+      }
+
       onClose();
       navigate(`/dashboard/simulate/test/${data.id}/runs`);
     },
@@ -1006,10 +1030,7 @@ const CreateRunTestPage = ({ open, onClose }) => {
       case 1:
         return (
           <>
-            {!isLoadingScenarios &&
-            !scenariosError &&
-            filteredScenarios.length === 0 &&
-            debouncedSearch === "" ? (
+            {filteredScenarios.length === 0 && debouncedSearch === "" ? (
               <EmptyLayout
                 title="Add your first scenario"
                 description="Create scenarios and experiments to evaluate your application across different test cases and conditions."
@@ -1235,11 +1256,8 @@ const CreateRunTestPage = ({ open, onClose }) => {
                       })}
                     </List>
 
-                    {/* Gated on rows, not on page count: the rows-per-page
-                        selector lives in this bar, so hiding it whenever the
-                        chosen size covers everything strands the user at that
-                        size with no way back. */}
-                    {scenariosTotal > 0 && (
+                    {/* Pagination */}
+                    {scenariosTotalPages > 1 && (
                       <Box
                         sx={{
                           display: "flex",

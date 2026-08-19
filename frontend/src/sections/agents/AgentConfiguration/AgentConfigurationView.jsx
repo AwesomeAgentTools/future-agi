@@ -35,11 +35,7 @@ const AgentConfigurationView = () => {
     setValue,
     getValues,
     trigger,
-    clearErrors,
-  } = useAgentConfigForm(
-    createAgentDefinitionSchema({ agentDefinitionId }),
-    agentDetails,
-  );
+  } = useAgentConfigForm(createAgentDefinitionSchema({ agentDefinitionId }), agentDetails);
 
   const { errors, isSubmitting, isDirty } = formState;
   const [error, setError] = useState("");
@@ -160,7 +156,6 @@ const AgentConfigurationView = () => {
               trigger={trigger}
               setValue={setValue}
               getValues={getValues}
-              clearErrors={clearErrors}
             />
             <Box sx={{ display: "flex", flexDirection: "column" }}>
               <FormTextFieldV2

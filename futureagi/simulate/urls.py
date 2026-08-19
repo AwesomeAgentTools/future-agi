@@ -95,7 +95,6 @@ from .views.agent_version import (
     DeleteAgentVersionView,
     RestoreAgentVersionView,
 )
-from .views.alk_simulate_ingestion import ALKSimulateIngestionViewSet
 from .views.livekit_api import (
     CallConfigView,
     CallExecutionUpdateView,
@@ -120,9 +119,6 @@ router.register(
     basename="agent-definition-operations",
 )
 router.register(r"agent-prompt-optimiser", AgentPromptOptimiserRunViewSet)
-router.register(
-    r"alk-simulate", ALKSimulateIngestionViewSet, basename="alk-simulate-ingestion"
-)
 
 urlpatterns = [
     path("api/", include(router.urls)),

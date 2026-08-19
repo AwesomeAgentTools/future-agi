@@ -29,13 +29,13 @@ const voiceFixture = {
   run_test_name: "Run Test",
 };
 
-const renderVoice = (agentType) => {
+const renderVoice = () => {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <SDkComponentVoiceTestRun agentType={agentType} />
+      <SDkComponentVoiceTestRun />
     </QueryClientProvider>,
   );
 };
@@ -55,14 +55,6 @@ describe("SDkComponentVoiceTestRun SDK code (TH-5814)", () => {
     );
     // sdk_code (regressed from sdkCode)
     expect(container.textContent).toContain("VOICE_SDK_MARKER");
-    expect(container.textContent).toContain("rt-1");
     expect(container.textContent).not.toContain("Code not available");
-  });
-
-  it("shows voice users the run ID without the chat callback snippet", async () => {
-    const { container } = renderVoice("voice");
-
-    await waitFor(() => expect(container.textContent).toContain("rt-1"));
-    expect(container.textContent).not.toContain("VOICE_SDK_MARKER");
   });
 });

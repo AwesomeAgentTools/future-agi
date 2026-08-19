@@ -10,7 +10,6 @@ class AgentConfigurationSnapshot(BaseModel):
 
     # Core fields
     inbound: bool
-    target_speaks_first: bool | None = None
     languages: list[str] = []
     provider: str | None
     agent_name: str

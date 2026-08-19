@@ -37,7 +37,7 @@ async def main():
 
     # Run simulation
     report = await runner.run_test(
-        run_id="{run_id}",
+        run_test_name= "{run_test_name}",
         agent_callback=customer_support_agent
     )
 
