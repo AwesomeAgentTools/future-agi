@@ -8419,7 +8419,8 @@ class TestMonitorMetricsQueryBuilder:
             "evaluation_metrics", datetime(2024, 1, 1), datetime(2024, 1, 31)
         )
         assert "JSONExtract(output_str_list, 'Array(String)')" in query
-        assert "OR output_str =" in query
+        # List-containment only: choice evals write output_str_list exclusively.
+        assert "OR output_str =" not in query
         assert params["choice_val"] == "Good"
 
     def test_evaluation_metrics_no_config_returns_null(self):
@@ -8481,7 +8482,7 @@ class TestMonitorMetricsQueryBuilder:
             "evaluation_metrics", datetime(2024, 1, 1), datetime(2024, 1, 31)
         )
         assert "avg(output_float)" in query
-        assert "stddevSamp(output_float)" in query
+        assert "stddevPop(output_float)" in query
 
     def test_historical_stats_aggregated_metrics_return_null(self):
         """COUNT_OF_ERRORS etc. should return NULL for stats (handled in Python)."""
