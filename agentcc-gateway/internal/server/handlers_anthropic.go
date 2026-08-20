@@ -160,13 +160,11 @@ func (h *Handlers) AnthropicMessages(w http.ResponseWriter, r *http.Request) {
 
 	// Fast path: provider natively speaks Anthropic.
 	if ap, ok := provider.(providers.AnthropicNativeProvider); ok {
-		// This path forwards the caller's bytes and never builds a canonical
-		// request, so plugins get a carrier rather than a nil pointer. Messages
-		// and tools are absent on purpose: a plugin rewriting them would have
-		// its edit discarded, so tool policy and semantic caching do not apply.
-		if rc.Request == nil {
-			rc.Request = &models.ChatCompletionRequest{Model: rc.Model, Stream: isStream}
-		}
+		// rc.Request is deliberately left nil, as it is on the genai path.
+		// A carrier with empty Messages would hash to the same cache key for
+		// every prompt (BuildCacheKey marshals Messages), and the response
+		// stored against it holds usage only — so a later request would be
+		// served a content-less 200. Request-shaped plugins skip on nil.
 		if isStream {
 			h.handleAnthropicStream(ctx, w, rc, ap, body, anthropicHeaders)
 		} else {
@@ -436,13 +434,16 @@ func (h *Handlers) handleAnthropicStream(ctx context.Context, w http.ResponseWri
 		h.engine.RunPostPlugins(pluginCtx, rc)
 	}
 
-	// If upstream returned an error status, read and forward.
+	// If upstream returned an error status, read and forward. Still finalised:
+	// the non-streaming path records a 4xx through Process, and a streamed one
+	// that skipped it would be missing from the log and the trace.
 	if statusCode >= 400 {
 		errBody, _ := io.ReadAll(io.LimitReader(stream, 1024*1024))
 		h.setAgentccHeaders(w, rc)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(statusCode)
 		w.Write(errBody)
+		finalize(false)
 		return
 	}
 
@@ -673,7 +674,7 @@ func (h *Handlers) handleAnthropicStreamViaCanonical(
 
 	// Tee for usage: the counts are already structured here, unlike in the
 	// translated SSE bytes.
-	chunkCh, usageCh := teeStreamUsage(rawChunkCh)
+	chunkCh, usageCh := teeStreamUsage(ctx, rawChunkCh)
 
 	// Must be reached from every exit below — the tokens were spent either way.
 	finalize := func(detach bool) {
@@ -816,9 +817,18 @@ type streamUsage struct {
 // teeStreamUsage passes chunks through untouched, keeping the last usage and
 // model. The result travels on a channel so reading it after the drain loop is
 // ordered against the goroutine that wrote it.
-func teeStreamUsage(in <-chan models.StreamChunk) (<-chan models.StreamChunk, <-chan streamUsage) {
+func teeStreamUsage(ctx context.Context, in <-chan models.StreamChunk) (<-chan models.StreamChunk, <-chan streamUsage) {
 	out := make(chan models.StreamChunk)
 	done := make(chan streamUsage, 1)
+
+	record := func(seen *streamUsage, chunk models.StreamChunk) {
+		if chunk.Usage != nil {
+			seen.usage = chunk.Usage
+		}
+		if chunk.Model != "" {
+			seen.model = chunk.Model
+		}
+	}
 
 	go func() {
 		var seen streamUsage
@@ -828,13 +838,20 @@ func teeStreamUsage(in <-chan models.StreamChunk) (<-chan models.StreamChunk, <-
 			close(out)
 		}()
 		for chunk := range in {
-			if chunk.Usage != nil {
-				seen.usage = chunk.Usage
+			record(&seen, chunk)
+			select {
+			case out <- chunk:
+			case <-ctx.Done():
+				// The consumer is gone — the translator returns on ctx.Done
+				// without draining. Forwarding would park here forever while
+				// finalize waits on the usage channel, leaking both goroutines
+				// and the provider stream. Keep draining so the counts still
+				// arrive, just stop forwarding.
+				for c := range in {
+					record(&seen, c)
+				}
+				return
 			}
-			if chunk.Model != "" {
-				seen.model = chunk.Model
-			}
-			out <- chunk
 		}
 	}()
 
@@ -851,13 +868,23 @@ func applyCanonicalStreamUsage(rc *models.RequestContext, usageCh <-chan streamU
 	if seen.usage == nil {
 		return
 	}
-	rc.Metadata["input_tokens"] = strconv.Itoa(seen.usage.PromptTokens)
-	rc.Metadata["output_tokens"] = strconv.Itoa(seen.usage.CompletionTokens)
+	if seen.usage.PromptTokens > 0 {
+		rc.Metadata["input_tokens"] = strconv.Itoa(seen.usage.PromptTokens)
+	}
+	if seen.usage.CompletionTokens > 0 {
+		rc.Metadata["output_tokens"] = strconv.Itoa(seen.usage.CompletionTokens)
+	}
 	model := rc.ResolvedModel
 	if model == "" {
 		model = rc.Model
 	}
-	rc.Response = &models.ChatCompletionResponse{Model: model, Usage: seen.usage}
+	usage := *seen.usage
+	if usage.TotalTokens == 0 {
+		// Providers vary on whether they send it; the native paths always fill
+		// it, so do the same here rather than diverge.
+		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	}
+	rc.Response = &models.ChatCompletionResponse{Model: model, Usage: &usage}
 }
 
 // setUsageResponse gives the post-plugins the minimal canonical response they

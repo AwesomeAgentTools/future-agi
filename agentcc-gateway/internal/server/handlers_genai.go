@@ -273,13 +273,16 @@ func (h *Handlers) handleGenAIStream(ctx context.Context, w http.ResponseWriter,
 		h.engine.RunPostPlugins(pluginCtx, rc)
 	}
 
-	// If upstream returned an error status, read and forward.
+	// If upstream returned an error status, read and forward. Still finalised:
+	// the non-streaming path records a 4xx through Process, and a streamed one
+	// that skipped it would be missing from the log and the trace.
 	if statusCode >= 400 {
 		errBody, _ := io.ReadAll(io.LimitReader(stream, 1024*1024))
 		h.setAgentccHeaders(w, rc)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(statusCode)
 		w.Write(errBody)
+		finalize(false)
 		return
 	}
 
@@ -562,7 +565,7 @@ func (h *Handlers) handleGenAIStreamViaCanonical(
 	}
 
 	// Tee for usage from the final chunk.
-	chunkCh, usageCh := teeStreamUsage(rawChunkCh)
+	chunkCh, usageCh := teeStreamUsage(ctx, rawChunkCh)
 
 	finalize := func(detach bool) {
 		applyCanonicalStreamUsage(rc, usageCh)
