@@ -8292,7 +8292,7 @@ class TestMonitorMetricsQueryBuilder:
         assert "countIf(status = 'ERROR')" in query
 
     def test_error_free_session_rates_query(self):
-        """ERROR_FREE_SESSION_RATES should group by trace_session_id."""
+        """ERROR_FREE_SESSION_RATES groups by the remapped trace_session_id."""
         from datetime import datetime
 
         builder = self._make_builder()
@@ -8300,9 +8300,10 @@ class TestMonitorMetricsQueryBuilder:
             "error_free_session_rates", datetime(2024, 1, 1), datetime(2024, 1, 31)
         )
         assert "trace_session_id" in query
+        assert "uniqIf(trace_session_id, error_count = 0)" in query
         # Remap-aware: groups by the survivor-resolved session id.
+        assert "trace_session_id_remap" in query
         assert "id_remap.survivor_id" in query
-        assert "GROUP BY" in query
 
     def test_service_provider_error_rates_query(self):
         """SERVICE_PROVIDER_ERROR_RATES should group by provider."""
@@ -8357,7 +8358,7 @@ class TestMonitorMetricsQueryBuilder:
         assert "sum(total_tokens)" in query
 
     def test_daily_tokens_spent_query(self):
-        """DAILY_TOKENS_SPENT should use >= start_time only."""
+        """DAILY_TOKENS_SPENT uses the unified half-open window + NULL-on-empty."""
         from datetime import datetime
 
         builder = self._make_builder()
@@ -8365,10 +8366,12 @@ class TestMonitorMetricsQueryBuilder:
             "daily_tokens_spent", datetime(2024, 1, 1), datetime(2024, 1, 31)
         )
         assert "sum(total_tokens)" in query
-        assert ">= %(start_time)s" in query
+        # Unified event-time window: half-open on start_time.
+        assert "start_time >= %(start_time)s AND start_time < %(end_time)s" in query
+        assert "THEN NULL" in query
 
     def test_monthly_tokens_spent_query(self):
-        """MONTHLY_TOKENS_SPENT should use >= start_time only."""
+        """MONTHLY_TOKENS_SPENT uses the shared token branch (trailing window is a param)."""
         from datetime import datetime
 
         builder = self._make_builder()
@@ -8420,8 +8423,11 @@ class TestMonitorMetricsQueryBuilder:
         query, params = builder.build_metric_value_query(
             "evaluation_metrics", datetime(2024, 1, 1), datetime(2024, 1, 31)
         )
-        assert "JSONExtract(output_str_list, 'Array(String)')" in query
         # List-containment only: choice evals write output_str_list exclusively.
+        assert (
+            "has(JSONExtract(output_str_list, 'Array(String)'), %(choice_val)s)"
+            in query
+        )
         assert "OR output_str =" not in query
         assert params["choice_val"] == "Good"
 
@@ -8475,7 +8481,7 @@ class TestMonitorMetricsQueryBuilder:
         assert "ifNotFinite(stddevPop(latency_ms), NULL) AS stddev" in query
 
     def test_historical_stats_eval_score(self):
-        """Historical stats for EVALUATION_METRICS SCORE should use output_float."""
+        """Eval SCORE historical stats use output_float with population stddev (C-2)."""
         from datetime import datetime
 
         builder = self._make_builder(
@@ -8488,17 +8494,17 @@ class TestMonitorMetricsQueryBuilder:
         assert "avg(output_float)" in query
         assert "stddevPop(output_float)" in query
 
-    def test_historical_stats_aggregated_metrics_bucket_in_ch(self):
-        """COUNT_OF_ERRORS etc. compute bucketed mean/stddev CH-natively."""
+    def test_historical_stats_aggregated_metrics_ch_native(self):
+        """COUNT_OF_ERRORS historical stats bucket in CH with sample stddev."""
         from datetime import datetime
 
         builder = self._make_builder()
         query, _ = builder.build_historical_stats_query(
             "count_of_errors", datetime(2024, 1, 1), datetime(2024, 1, 31)
         )
+        assert "countIf(status = 'ERROR') AS bucket_value" in query
         assert "avg(bucket_value)" in query
         assert "stddevSamp(bucket_value)" in query
-        assert "countIf(status = 'ERROR')" in query
         assert "GROUP BY bucket_ts" in query
 
     # -- Time series queries --
@@ -8552,7 +8558,7 @@ class TestMonitorMetricsQueryBuilder:
         assert "observation_type" in query
 
     def test_time_series_error_free_session_rates(self):
-        """ERROR_FREE_SESSION_RATES time series should group by session_id."""
+        """ERROR_FREE_SESSION_RATES time series groups by remapped trace_session_id."""
         from datetime import datetime
 
         builder = self._make_builder()
@@ -8562,7 +8568,8 @@ class TestMonitorMetricsQueryBuilder:
             datetime(2024, 1, 31),
             3600,
         )
-        assert "session_id" in query
+        assert "uniqIf(trace_session_id, error_count = 0)" in query
+        assert "trace_session_id_remap" in query
 
     def test_time_series_eval_metrics_score(self):
         """EVALUATION_METRICS SCORE time series should use eval_logger."""
