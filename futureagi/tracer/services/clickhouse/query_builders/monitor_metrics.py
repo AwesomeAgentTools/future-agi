@@ -48,6 +48,17 @@ EVALUATION_METRICS = "evaluation_metrics"
 SPANS_TABLE = "spans"
 EVAL_TABLE = "tracer_eval_logger"
 
+# Time-series buckets: to epoch seconds, integer-divide by the frequency to
+# floor to the bucket boundary, back to DateTime (300s: 12:07:43 -> 12:05:00).
+# Works for any frequency, unlike toStartOfHour/-FiveMinutes. Spans bucket on
+# ``start_time`` (event time); the eval table has none, so ``created_at``.
+_SPANS_BUCKET_EXPR = (
+    "toDateTime(intDiv(toUInt32(start_time), %(freq_seconds)s) * %(freq_seconds)s)"
+)
+_EVAL_BUCKET_EXPR = (
+    "toDateTime(intDiv(toUInt32(created_at), %(freq_seconds)s) * %(freq_seconds)s)"
+)
+
 
 class MonitorMetricsQueryBuilder(BaseQueryBuilder):
     """Build ClickHouse queries for monitor metric evaluation and graphing.
@@ -137,17 +148,44 @@ class MonitorMetricsQueryBuilder(BaseQueryBuilder):
                 params["mf_dr_start"] = _parse_dt(value[0])
                 params["mf_dr_end"] = _parse_dt(value[1])
                 ch_conditions.append(
-                    "created_at BETWEEN %(mf_dr_start)s AND %(mf_dr_end)s"
+                    "start_time BETWEEN %(mf_dr_start)s AND %(mf_dr_end)s "
+                    "AND created_at >= %(mf_dr_start)s - INTERVAL 1 DAY"
                 )
             elif key == "created_at" and value:
                 params["mf_created_at"] = _parse_dt(value)
-                ch_conditions.append("created_at >= %(mf_created_at)s")
+                ch_conditions.append(
+                    "start_time >= %(mf_created_at)s "
+                    "AND created_at >= %(mf_created_at)s - INTERVAL 1 DAY"
+                )
             elif key == "project_id":
                 # Already handled by project_where()
                 pass
 
         self._filter_clause = " AND ".join(ch_conditions) if ch_conditions else ""
         self._filter_params = params
+
+    def _spans_time_window(self) -> str:
+        """Spans time-window predicate — event-time semantics.
+
+        Deliberate change from pre-CH behavior: windows evaluate on
+        ``start_time`` (event time, the partition key, so CH prunes), not
+        ``created_at`` (ingest time, unindexed, full scan). Blind spot: spans
+        ingested after their window was evaluated are never counted.
+        TODO: offset evaluation windows by ingest lag. The padded
+        ``created_at`` companion only guards against clock-skewed future
+        ``start_time``. Mirrors ``DashboardQueryBuilder``.
+        """
+        return (
+            "start_time BETWEEN %(start_time)s AND %(end_time)s "
+            "AND created_at >= %(start_time)s - INTERVAL 1 DAY"
+        )
+
+    def _spans_time_window_half_open(self) -> str:
+        """Half-open (``>= start AND < end``) variant for daily/monthly sums."""
+        return (
+            "start_time >= %(start_time)s AND start_time < %(end_time)s "
+            "AND created_at >= %(start_time)s - INTERVAL 1 DAY"
+        )
 
     def build(self) -> Tuple[str, Dict[str, Any]]:
         """Not used directly -- use build_metric_value_query or build_time_series_query."""
@@ -177,13 +215,15 @@ class MonitorMetricsQueryBuilder(BaseQueryBuilder):
         params["end_time"] = _parse_dt(end_time)
 
         base_where = self._spans_base_where()
+        time_win = f"AND {self._spans_time_window()}"
+        time_win_ho = f"AND {self._spans_time_window_half_open()}"
 
         if metric_type == COUNT_OF_ERRORS:
             query = f"""
                 SELECT count() AS value
                 FROM {SPANS_TABLE}
                 {base_where}
-                  AND created_at BETWEEN %(start_time)s AND %(end_time)s
+                  {time_win}
                   AND status = 'ERROR'
             """
 
@@ -195,7 +235,7 @@ class MonitorMetricsQueryBuilder(BaseQueryBuilder):
                     END AS value
                 FROM {SPANS_TABLE}
                 {base_where}
-                  AND created_at BETWEEN %(start_time)s AND %(end_time)s
+                  {time_win}
                   AND observation_type = 'tool'
             """
 
@@ -211,7 +251,7 @@ class MonitorMetricsQueryBuilder(BaseQueryBuilder):
                         countIf(status = 'ERROR') AS error_count
                     FROM {SPANS_TABLE}
                     {base_where}
-                      AND created_at BETWEEN %(start_time)s AND %(end_time)s
+                      {time_win}
                       AND session_id != ''
                       AND session_id IS NOT NULL
                     GROUP BY session_id
@@ -230,7 +270,7 @@ class MonitorMetricsQueryBuilder(BaseQueryBuilder):
                         countIf(status = 'ERROR') AS error_count
                     FROM {SPANS_TABLE}
                     {base_where}
-                      AND created_at BETWEEN %(start_time)s AND %(end_time)s
+                      {time_win}
                       AND provider != ''
                       AND provider IS NOT NULL
                     GROUP BY provider
@@ -245,7 +285,7 @@ class MonitorMetricsQueryBuilder(BaseQueryBuilder):
                     END AS value
                 FROM {SPANS_TABLE}
                 {base_where}
-                  AND created_at BETWEEN %(start_time)s AND %(end_time)s
+                  {time_win}
                   AND observation_type = 'llm'
             """
 
@@ -254,7 +294,7 @@ class MonitorMetricsQueryBuilder(BaseQueryBuilder):
                 SELECT avg(latency_ms) AS value
                 FROM {SPANS_TABLE}
                 {base_where}
-                  AND created_at BETWEEN %(start_time)s AND %(end_time)s
+                  {time_win}
             """
 
         elif metric_type == LLM_RESPONSE_TIME:
@@ -262,7 +302,7 @@ class MonitorMetricsQueryBuilder(BaseQueryBuilder):
                 SELECT avg(latency_ms) AS value
                 FROM {SPANS_TABLE}
                 {base_where}
-                  AND created_at BETWEEN %(start_time)s AND %(end_time)s
+                  {time_win}
                   AND observation_type = 'llm'
             """
 
@@ -271,7 +311,7 @@ class MonitorMetricsQueryBuilder(BaseQueryBuilder):
                 SELECT sum(total_tokens) AS value
                 FROM {SPANS_TABLE}
                 {base_where}
-                  AND created_at BETWEEN %(start_time)s AND %(end_time)s
+                  {time_win}
             """
 
         elif metric_type == DAILY_TOKENS_SPENT:
@@ -279,8 +319,7 @@ class MonitorMetricsQueryBuilder(BaseQueryBuilder):
                 SELECT sum(total_tokens) AS value
                 FROM {SPANS_TABLE}
                 {base_where}
-                  AND created_at >= %(start_time)s
-                  AND created_at < %(end_time)s
+                  {time_win_ho}
             """
 
         elif metric_type == MONTHLY_TOKENS_SPENT:
@@ -288,8 +327,7 @@ class MonitorMetricsQueryBuilder(BaseQueryBuilder):
                 SELECT sum(total_tokens) AS value
                 FROM {SPANS_TABLE}
                 {base_where}
-                  AND created_at >= %(start_time)s
-                  AND created_at < %(end_time)s
+                  {time_win_ho}
             """
 
         elif metric_type == EVALUATION_METRICS:
@@ -372,6 +410,7 @@ class MonitorMetricsQueryBuilder(BaseQueryBuilder):
         params["end_time"] = _parse_dt(end_time)
 
         base_where = self._spans_base_where()
+        time_win = f"AND {self._spans_time_window()}"
 
         if metric_type == ERROR_RATES_FOR_FUNCTION_CALLING:
             query = f"""
@@ -383,7 +422,7 @@ class MonitorMetricsQueryBuilder(BaseQueryBuilder):
                         CASE WHEN status = 'ERROR' THEN 1.0 ELSE 0.0 END AS is_error
                     FROM {SPANS_TABLE}
                     {base_where}
-                      AND created_at BETWEEN %(start_time)s AND %(end_time)s
+                      {time_win}
                       AND observation_type = 'tool'
                 )
             """
@@ -398,7 +437,7 @@ class MonitorMetricsQueryBuilder(BaseQueryBuilder):
                         CASE WHEN countIf(status = 'ERROR') > 0 THEN 0.0 ELSE 1.0 END AS is_error_free
                     FROM {SPANS_TABLE}
                     {base_where}
-                      AND created_at BETWEEN %(start_time)s AND %(end_time)s
+                      {time_win}
                       AND session_id != ''
                       AND session_id IS NOT NULL
                     GROUP BY session_id
@@ -415,7 +454,7 @@ class MonitorMetricsQueryBuilder(BaseQueryBuilder):
                         CASE WHEN countIf(status = 'ERROR') > 0 THEN 0.0 ELSE 1.0 END AS is_error_free
                     FROM {SPANS_TABLE}
                     {base_where}
-                      AND created_at BETWEEN %(start_time)s AND %(end_time)s
+                      {time_win}
                       AND provider != ''
                       AND provider IS NOT NULL
                     GROUP BY provider
@@ -432,7 +471,7 @@ class MonitorMetricsQueryBuilder(BaseQueryBuilder):
                         CASE WHEN status = 'ERROR' THEN 1.0 ELSE 0.0 END AS is_error
                     FROM {SPANS_TABLE}
                     {base_where}
-                      AND created_at BETWEEN %(start_time)s AND %(end_time)s
+                      {time_win}
                       AND observation_type = 'llm'
                 )
             """
@@ -444,7 +483,7 @@ class MonitorMetricsQueryBuilder(BaseQueryBuilder):
                     stddevSamp(latency_ms) AS stddev
                 FROM {SPANS_TABLE}
                 {base_where}
-                  AND created_at BETWEEN %(start_time)s AND %(end_time)s
+                  {time_win}
             """
 
         elif metric_type == LLM_RESPONSE_TIME:
@@ -454,7 +493,7 @@ class MonitorMetricsQueryBuilder(BaseQueryBuilder):
                     stddevSamp(latency_ms) AS stddev
                 FROM {SPANS_TABLE}
                 {base_where}
-                  AND created_at BETWEEN %(start_time)s AND %(end_time)s
+                  {time_win}
                   AND observation_type = 'llm'
             """
 
@@ -547,10 +586,10 @@ class MonitorMetricsQueryBuilder(BaseQueryBuilder):
         params["end_time"] = _parse_dt(end_time)
         params["freq_seconds"] = frequency_seconds
 
-        bucket_expr = "toDateTime(intDiv(toUInt32(created_at), %(freq_seconds)s) * %(freq_seconds)s)"
+        bucket_expr = _SPANS_BUCKET_EXPR
 
         base_where = self._spans_base_where()
-        time_filter = "AND created_at BETWEEN %(start_time)s AND %(end_time)s"
+        time_filter = f"AND {self._spans_time_window()}"
 
         if metric_type in (TOKEN_USAGE, DAILY_TOKENS_SPENT, MONTHLY_TOKENS_SPENT):
             query = f"""
@@ -667,7 +706,7 @@ class MonitorMetricsQueryBuilder(BaseQueryBuilder):
             """
 
         elif metric_type == EVALUATION_METRICS:
-            query, params = self._build_eval_time_series_query(params, bucket_expr)
+            query, params = self._build_eval_time_series_query(params)
 
         else:
             query = "SELECT NULL AS timestamp, NULL AS value WHERE 1 = 0"
@@ -677,14 +716,17 @@ class MonitorMetricsQueryBuilder(BaseQueryBuilder):
     def _build_eval_time_series_query(
         self,
         params: Dict[str, Any],
-        bucket_expr: str,
     ) -> Tuple[str, Dict[str, Any]]:
-        """Build eval metric time-series query."""
+        """Build eval metric time-series query.
+
+        Buckets on ``created_at``: the eval table has no ``start_time`` column.
+        """
         if not self.eval_config_id:
             return "SELECT NULL AS timestamp, NULL AS value WHERE 1 = 0", params
 
         params["eval_config_id"] = self.eval_config_id
         eval_where = self._eval_base_where()
+        bucket_expr = _EVAL_BUCKET_EXPR
         time_filter = "AND created_at BETWEEN %(start_time)s AND %(end_time)s"
 
         if self.eval_output_type == "SCORE":
