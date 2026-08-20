@@ -8300,7 +8300,9 @@ class TestMonitorMetricsQueryBuilder:
             "error_free_session_rates", datetime(2024, 1, 1), datetime(2024, 1, 31)
         )
         assert "trace_session_id" in query
-        assert "GROUP BY trace_session_id" in query
+        # Remap-aware: groups by the survivor-resolved session id.
+        assert "id_remap.survivor_id" in query
+        assert "GROUP BY" in query
 
     def test_service_provider_error_rates_query(self):
         """SERVICE_PROVIDER_ERROR_RATES should group by provider."""
@@ -8467,8 +8469,10 @@ class TestMonitorMetricsQueryBuilder:
         query, _ = builder.build_historical_stats_query(
             "span_response_time", datetime(2024, 1, 1), datetime(2024, 1, 31)
         )
-        assert "avg(latency_ms) AS mean" in query
-        assert "stddevSamp(latency_ms) AS stddev" in query
+        # NaN -> NULL so empty windows suppress alerts instead of firing.
+        assert "ifNotFinite(avg(latency_ms), NULL) AS mean" in query
+        # Population stddev (PG StdDev default) with NaN -> NULL guard.
+        assert "ifNotFinite(stddevPop(latency_ms), NULL) AS stddev" in query
 
     def test_historical_stats_eval_score(self):
         """Historical stats for EVALUATION_METRICS SCORE should use output_float."""
@@ -8617,31 +8621,20 @@ class TestMonitorMetricsQueryBuilder:
         """All metric types should produce valid SQL (not crash)."""
         from datetime import datetime
 
-        from tracer.services.clickhouse.query_builders.monitor_metrics import (
-            COUNT_OF_ERRORS,
-            DAILY_TOKENS_SPENT,
-            ERROR_FREE_SESSION_RATES,
-            ERROR_RATES_FOR_FUNCTION_CALLING,
-            LLM_API_FAILURE_RATES,
-            LLM_RESPONSE_TIME,
-            MONTHLY_TOKENS_SPENT,
-            SERVICE_PROVIDER_ERROR_RATES,
-            SPAN_RESPONSE_TIME,
-            TOKEN_USAGE,
-        )
+        from tracer.models.monitor import MonitorMetricTypeChoices
 
         builder = self._make_builder()
         metric_types = [
-            COUNT_OF_ERRORS,
-            ERROR_RATES_FOR_FUNCTION_CALLING,
-            ERROR_FREE_SESSION_RATES,
-            SERVICE_PROVIDER_ERROR_RATES,
-            LLM_API_FAILURE_RATES,
-            SPAN_RESPONSE_TIME,
-            LLM_RESPONSE_TIME,
-            TOKEN_USAGE,
-            DAILY_TOKENS_SPENT,
-            MONTHLY_TOKENS_SPENT,
+            MonitorMetricTypeChoices.COUNT_OF_ERRORS,
+            MonitorMetricTypeChoices.ERROR_RATES_FOR_FUNCTION_CALLING,
+            MonitorMetricTypeChoices.ERROR_FREE_SESSION_RATES,
+            MonitorMetricTypeChoices.SERVICE_PROVIDER_ERROR_RATES,
+            MonitorMetricTypeChoices.LLM_API_FAILURE_RATES,
+            MonitorMetricTypeChoices.SPAN_RESPONSE_TIME,
+            MonitorMetricTypeChoices.LLM_RESPONSE_TIME,
+            MonitorMetricTypeChoices.TOKEN_USAGE,
+            MonitorMetricTypeChoices.DAILY_TOKENS_SPENT,
+            MonitorMetricTypeChoices.MONTHLY_TOKENS_SPENT,
         ]
         for mt in metric_types:
             query, params = builder.build_metric_value_query(
@@ -8750,7 +8743,9 @@ class TestSessionAnalyticsQueryBuilder:
         builder = self._make_builder()
         query, params = builder.build_session_metrics_query(["sess-1", "sess-2"])
         assert "trace_session_id" in query
-        assert "GROUP BY trace_session_id" in query
+        # Remap-aware: groups by the survivor-resolved session id.
+        assert "id_remap.survivor_id" in query
+        assert "GROUP BY" in query
         assert "count(DISTINCT trace_id)" in query
         assert "sum(total_tokens)" in query
         assert "sum(cost)" in query

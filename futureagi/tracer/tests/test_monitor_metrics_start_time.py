@@ -1,23 +1,21 @@
-"""
-Pin the monitor builder's time-window predicates to ``start_time``.
+"""Monitor builder time windows — event-time semantics.
 
-The v2 spans table is ``PARTITION BY toDate(start_time)`` with
-``toStartOfHour(start_time)`` in the primary key and no index on
-``created_at``. Filtering ``created_at`` prunes nothing → full-history scans.
-These tests assert the COMPILED SQL filters/buckets spans on ``start_time``
-(with a padded ``created_at`` companion bound); eval-table queries window and
-bucket via their joined span (the eval table has no ``start_time`` column).
-
-No real ClickHouse is hit — only the generated SQL string is asserted.
+Everything (alerts, graphs, baselines) measures when the activity happened in
+the user's system: exact half-open ``start_time`` window (also the partition
+key, so it prunes directly) + a padded ``created_at`` lower guard against
+clock-skewed producers. Buckets are on ``start_time``; eval queries window and
+bucket via their joined span (the eval table has no span-time column).
+Pure SQL-string assertions, no ClickHouse.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 
-from tracer.services.clickhouse.query_builders import monitor_metrics as mm
+from tracer.models.monitor import MonitorMetricTypeChoices
 from tracer.services.clickhouse.query_builders.monitor_metrics import (
     MonitorMetricsQueryBuilder,
 )
@@ -27,35 +25,36 @@ EVAL_CONFIG_ID = "22222222-2222-2222-2222-222222222222"
 START = datetime(2026, 8, 1, tzinfo=UTC)
 END = datetime(2026, 8, 8, tzinfo=UTC)
 
-COMPANION = "created_at >= %(start_time)s - INTERVAL 1 DAY"
-BETWEEN_START = "start_time BETWEEN %(start_time)s AND %(end_time)s"
-HALF_OPEN_START = "start_time >= %(start_time)s AND start_time < %(end_time)s"
+# One unified half-open event-time window for every spans query.
+EXACT_HALF_OPEN = "start_time >= %(start_time)s AND start_time < %(end_time)s"
+SKEW_GUARD = "created_at >= %(start_time)s - INTERVAL 1 DAY"
 
-# Spans metric types whose time window is a BETWEEN on start_time.
-SPANS_BETWEEN = [
-    mm.COUNT_OF_ERRORS,
-    mm.ERROR_RATES_FOR_FUNCTION_CALLING,
-    mm.ERROR_FREE_SESSION_RATES,
-    mm.SERVICE_PROVIDER_ERROR_RATES,
-    mm.LLM_API_FAILURE_RATES,
-    mm.SPAN_RESPONSE_TIME,
-    mm.LLM_RESPONSE_TIME,
-    mm.TOKEN_USAGE,
+SPANS_METRICS = [
+    MonitorMetricTypeChoices.COUNT_OF_ERRORS,
+    MonitorMetricTypeChoices.ERROR_RATES_FOR_FUNCTION_CALLING,
+    MonitorMetricTypeChoices.ERROR_FREE_SESSION_RATES,
+    MonitorMetricTypeChoices.SERVICE_PROVIDER_ERROR_RATES,
+    MonitorMetricTypeChoices.LLM_API_FAILURE_RATES,
+    MonitorMetricTypeChoices.SPAN_RESPONSE_TIME,
+    MonitorMetricTypeChoices.LLM_RESPONSE_TIME,
+    MonitorMetricTypeChoices.TOKEN_USAGE,
+    MonitorMetricTypeChoices.DAILY_TOKENS_SPENT,
+    MonitorMetricTypeChoices.MONTHLY_TOKENS_SPENT,
 ]
-SPANS_HALF_OPEN = [mm.DAILY_TOKENS_SPENT, mm.MONTHLY_TOKENS_SPENT]
-# Per-row metrics that have a historical-stats branch (excludes the
-# time-aggregated ones handled in Python and eval).
 HISTORICAL_SPANS = [
-    mm.ERROR_RATES_FOR_FUNCTION_CALLING,
-    mm.ERROR_FREE_SESSION_RATES,
-    mm.SERVICE_PROVIDER_ERROR_RATES,
-    mm.LLM_API_FAILURE_RATES,
-    mm.SPAN_RESPONSE_TIME,
-    mm.LLM_RESPONSE_TIME,
+    MonitorMetricTypeChoices.ERROR_RATES_FOR_FUNCTION_CALLING,
+    MonitorMetricTypeChoices.ERROR_FREE_SESSION_RATES,
+    MonitorMetricTypeChoices.SERVICE_PROVIDER_ERROR_RATES,
+    MonitorMetricTypeChoices.LLM_API_FAILURE_RATES,
+    MonitorMetricTypeChoices.SPAN_RESPONSE_TIME,
+    MonitorMetricTypeChoices.LLM_RESPONSE_TIME,
 ]
 
 
-def _builder(filters=None, eval_output_type=None):
+def _builder(
+    filters: dict[str, Any] | None = None,
+    eval_output_type: str | None = None,
+) -> MonitorMetricsQueryBuilder:
     return MonitorMetricsQueryBuilder(
         project_id=PROJECT_ID,
         filters=filters,
@@ -65,77 +64,57 @@ def _builder(filters=None, eval_output_type=None):
     )
 
 
-def _assert_spans_pruned(sql: str) -> None:
-    """A spans query must prune on start_time and never bind bare created_at."""
-    assert COMPANION in sql, "missing padded created_at companion bound"
-    assert "created_at BETWEEN" not in sql, "spans query still filters created_at"
+def _assert_event_time_window(sql: str) -> None:
+    assert EXACT_HALF_OPEN in sql, "missing exact start_time window"
+    assert SKEW_GUARD in sql, "missing created_at skew guard"
+    assert "created_at BETWEEN" not in sql
+    assert "created_at >= %(start_time)s AND created_at < %(end_time)s" not in sql
 
 
-@pytest.mark.parametrize("metric_type", SPANS_BETWEEN)
-def test_metric_value_spans_filter_start_time(metric_type):
+@pytest.mark.parametrize("metric_type", SPANS_METRICS)
+def test_metric_value_event_time_window(metric_type: str) -> None:
     sql, _ = _builder().build_metric_value_query(metric_type, START, END)
-    assert BETWEEN_START in sql
-    _assert_spans_pruned(sql)
-
-
-@pytest.mark.parametrize("metric_type", SPANS_HALF_OPEN)
-def test_metric_value_half_open_filters_start_time(metric_type):
-    sql, _ = _builder().build_metric_value_query(metric_type, START, END)
-    assert HALF_OPEN_START in sql
-    _assert_spans_pruned(sql)
+    _assert_event_time_window(sql)
 
 
 @pytest.mark.parametrize("metric_type", HISTORICAL_SPANS)
-def test_historical_stats_filter_start_time(metric_type):
+def test_historical_stats_event_time_window(metric_type: str) -> None:
     sql, _ = _builder().build_historical_stats_query(metric_type, START, END)
-    assert BETWEEN_START in sql
-    _assert_spans_pruned(sql)
+    _assert_event_time_window(sql)
 
 
-@pytest.mark.parametrize("metric_type", SPANS_BETWEEN)
-def test_time_series_buckets_and_filters_start_time(metric_type):
+@pytest.mark.parametrize("metric_type", SPANS_METRICS)
+def test_time_series_buckets_start_time(metric_type: str) -> None:
     sql, _ = _builder().build_time_series_query(metric_type, START, END, 3600)
-    assert "toUInt32(start_time)" in sql, "spans bucket must floor start_time"
+    assert "toUInt32(start_time)" in sql, "series must bucket on event time"
     assert "toUInt32(created_at)" not in sql
-    _assert_spans_pruned(sql)
+    _assert_event_time_window(sql)
 
 
-def test_date_range_and_created_at_filters_use_start_time():
-    filters = {
-        "date_range": [START.isoformat(), END.isoformat()],
-        "created_at": START.isoformat(),
-    }
-    sql, _ = _builder(filters=filters).build_metric_value_query(
-        mm.COUNT_OF_ERRORS, START, END
-    )
-    assert "start_time BETWEEN %(mf_dr_start)s AND %(mf_dr_end)s" in sql
-    assert "start_time >= %(mf_created_at)s" in sql
-    assert "created_at BETWEEN %(mf_dr_start)s" not in sql
+# --- Eval queries window/bucket via the joined span --------------------------
 
 
-# --- Eval-table queries window/bucket via the joined span, not created_at ----
-
-
-def test_eval_value_query_windows_span_time():
+def test_eval_value_query_windows_span_time() -> None:
     # The metric window lives on the SPAN membership join (evals run async
     # after their spans); the eval table keeps only a loose created_at lower
     # bound (its sole partition prune).
     sql, _ = _builder(eval_output_type="SCORE").build_metric_value_query(
-        mm.EVALUATION_METRICS, START, END
+        MonitorMetricTypeChoices.EVALUATION_METRICS, START, END
     )
     subq = sql.split("INNER JOIN (", 1)[1]
-    assert "created_at >= %(start_time)s AND created_at < %(end_time)s" in subq
+    assert EXACT_HALF_OPEN in subq
     guards = sql.split("ON observation_span_id = sp.id", 1)[1]
-    assert "created_at >= %(start_time)s - INTERVAL 1 DAY" in guards
+    assert SKEW_GUARD in guards
     # No bucket expression in a scalar query.
     assert "toUInt32(" not in sql
 
 
-def test_eval_time_series_buckets_span_start_time():
+def test_eval_time_series_buckets_span_start_time() -> None:
     # Eval graphs chart the user's application timeline: buckets come from
     # the joined span's start_time, never the eval row's created_at.
     sql, _ = _builder(eval_output_type="SCORE").build_time_series_query(
-        mm.EVALUATION_METRICS, START, END, 3600
+        MonitorMetricTypeChoices.EVALUATION_METRICS, START, END, 3600
     )
     assert "toUInt32(sp.start_time)" in sql
     assert "toUInt32(created_at)" not in sql
+    assert "INNER JOIN" in sql and "ON observation_span_id = sp.id" in sql

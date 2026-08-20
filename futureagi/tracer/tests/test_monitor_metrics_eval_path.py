@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 import pytest
 from django.test import override_settings
 
-from tracer.services.clickhouse.query_builders import monitor_metrics as mm
+from tracer.models.monitor import MonitorMetricTypeChoices
 from tracer.services.clickhouse.query_builders.monitor_metrics import (
     MonitorMetricsQueryBuilder,
 )
@@ -58,9 +58,9 @@ def _eval_sqls(
 ) -> list[str]:
     b = _builder(cls, filters=filters)
     return [
-        b.build_metric_value_query(mm.EVALUATION_METRICS, START, END)[0],
-        b.build_historical_stats_query(mm.EVALUATION_METRICS, START, END)[0],
-        b.build_time_series_query(mm.EVALUATION_METRICS, START, END, 3600)[0],
+        b.build_metric_value_query(MonitorMetricTypeChoices.EVALUATION_METRICS, START, END)[0],
+        b.build_historical_stats_query(MonitorMetricTypeChoices.EVALUATION_METRICS, START, END)[0],
+        b.build_time_series_query(MonitorMetricTypeChoices.EVALUATION_METRICS, START, END, 3600)[0],
     ]
 
 
@@ -89,17 +89,16 @@ def test_eval_v2_table_uses_is_deleted() -> None:
 
 def test_eval_membership_is_windowed_span_join() -> None:
     # Membership is a JOIN on a span subquery windowed on the SPAN's
-    # created_at (evals run async after their spans), with the ±1-day
-    # start_time pruning pads. A JOIN streams the span set — the old IN
+    # start_time (event time; evals run async after their spans), with the
+    # created_at skew guard. A JOIN streams the span set — the old IN
     # materialized it in memory (105M ids / 30d at prod scale). The series
     # additionally selects start_time to bucket on.
     value_sql, stats_sql, ts_sql = _eval_sqls()
     for sql in (value_sql, stats_sql, ts_sql):
         subq = sql.split("INNER JOIN (", 1)[1]
         assert "ON observation_span_id = sp.id" in subq
-        assert "created_at >= %(start_time)s AND created_at < %(end_time)s" in subq
-        assert "start_time >= %(start_time)s - INTERVAL 1 DAY" in subq
-        assert "start_time < %(end_time)s + INTERVAL 1 DAY" in subq
+        assert "start_time >= %(start_time)s AND start_time < %(end_time)s" in subq
+        assert "created_at >= %(start_time)s - INTERVAL 1 DAY" in subq
         assert "project_id = %(project_id)s" in subq
         assert "observation_span_id IN" not in sql
         assert "INTERVAL 30 DAY" not in sql
@@ -143,7 +142,7 @@ def test_v1_eval_filter_emits_legacy_span_attr_token() -> None:
     b = _builder(filters=ATTR_FILTER)
     assert b._filter_clause, "attr filter should compile to a clause"
     assert (
-        "span_attr" in b.build_metric_value_query(mm.EVALUATION_METRICS, START, END)[0]
+        "span_attr" in b.build_metric_value_query(MonitorMetricTypeChoices.EVALUATION_METRICS, START, END)[0]
     )
 
 
@@ -169,10 +168,10 @@ def test_eval_empty_window_yields_null_for_all_output_types() -> None:
         )
         assert (
             "ifNotFinite("
-            in b.build_metric_value_query(mm.EVALUATION_METRICS, START, END)[0]
+            in b.build_metric_value_query(MonitorMetricTypeChoices.EVALUATION_METRICS, START, END)[0]
         )
         assert (
-            b.build_historical_stats_query(mm.EVALUATION_METRICS, START, END)[0].count(
+            b.build_historical_stats_query(MonitorMetricTypeChoices.EVALUATION_METRICS, START, END)[0].count(
                 "ifNotFinite("
             )
             >= 2
@@ -187,7 +186,7 @@ def test_all_eval_output_types_build(output_type: str) -> None:
         eval_output_type=output_type,
         threshold_metric_value="Passed" if output_type != "SCORE" else None,
     )
-    sql, _ = b.build_metric_value_query(mm.EVALUATION_METRICS, START, END)
+    sql, _ = b.build_metric_value_query(MonitorMetricTypeChoices.EVALUATION_METRICS, START, END)
     assert "FROM " in sql and "custom_eval_config_id" in sql
 
 
@@ -200,9 +199,9 @@ def test_choices_without_threshold_value_returns_null() -> None:
         eval_output_type="CHOICES",
         threshold_metric_value=None,
     )
-    value_sql, _ = b.build_metric_value_query(mm.EVALUATION_METRICS, START, END)
-    stats_sql, _ = b.build_historical_stats_query(mm.EVALUATION_METRICS, START, END)
-    ts_sql, _ = b.build_time_series_query(mm.EVALUATION_METRICS, START, END, 3600)
+    value_sql, _ = b.build_metric_value_query(MonitorMetricTypeChoices.EVALUATION_METRICS, START, END)
+    stats_sql, _ = b.build_historical_stats_query(MonitorMetricTypeChoices.EVALUATION_METRICS, START, END)
+    ts_sql, _ = b.build_time_series_query(MonitorMetricTypeChoices.EVALUATION_METRICS, START, END, 3600)
     assert "NULL" in value_sql and "output_str_list" not in value_sql
     assert "NULL" in stats_sql and "output_str_list" not in stats_sql
     assert "output_str_list" not in ts_sql
@@ -215,7 +214,7 @@ def test_pass_fail_time_series_shape() -> None:
         eval_output_type="PASS_FAIL",
         threshold_metric_value="Passed",
     )
-    sql, params = b.build_time_series_query(mm.EVALUATION_METRICS, START, END, 3600)
+    sql, params = b.build_time_series_query(MonitorMetricTypeChoices.EVALUATION_METRICS, START, END, 3600)
     assert "output_bool = %(output_bool_val)s" in sql
     assert params["output_bool_val"] == 1
     assert "GROUP BY timestamp" in sql
@@ -228,7 +227,7 @@ def test_choices_time_series_shape() -> None:
         eval_output_type="CHOICES",
         threshold_metric_value="Good",
     )
-    sql, params = b.build_time_series_query(mm.EVALUATION_METRICS, START, END, 3600)
+    sql, params = b.build_time_series_query(MonitorMetricTypeChoices.EVALUATION_METRICS, START, END, 3600)
     assert "has(JSONExtract(output_str_list, 'Array(String)'), %(choice_val)s)" in sql
     assert params["choice_val"] == "Good"
     assert "GROUP BY timestamp" in sql
