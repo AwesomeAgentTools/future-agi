@@ -536,7 +536,11 @@ const STATUS_COLORS = {
   INSUFFICIENT_DATA: "#9E9E9E",
 };
 
-export function getCompareChartConfig(apiData, customOptions = {}) {
+export function getCompareChartConfig(
+  apiData,
+  customOptions = {},
+  { isDark = false } = {},
+) {
   if (!apiData?.result?.graph_data || !apiData?.result?.alert_bar_data) {
     throw new Error("Invalid API data structure");
   }
@@ -657,6 +661,7 @@ export function getCompareChartConfig(apiData, customOptions = {}) {
       },
     },
     tooltip: {
+      theme: isDark ? "dark" : "light",
       enabledOnSeries: [1],
       marker: {
         show: true,
@@ -792,6 +797,7 @@ export function getSimpleLineChartConfig(
       },
     },
     tooltip: {
+      theme: isDark ? "dark" : "light",
       y: {
         formatter: (value) => `${value}`,
       },
