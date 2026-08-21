@@ -196,7 +196,7 @@ export const getDefaultDateRange = () => {
     return [
       formatDate(
         sub(new Date(), {
-          months: 6,
+          days: 7,
         }),
       ),
       formatDate(endOfToday()),
@@ -205,7 +205,7 @@ export const getDefaultDateRange = () => {
 
   return {
     dateFilter: getDateArray(),
-    dateOption: "6M",
+    dateOption: "7D",
   };
 };
 
