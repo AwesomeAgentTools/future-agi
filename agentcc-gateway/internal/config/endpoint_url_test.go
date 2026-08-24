@@ -58,6 +58,32 @@ func TestJoinEndpoint(t *testing.T) {
 			prefix: "", path: "/v1/assistants",
 			want: "https://api.perplexity.ai/assistants",
 		},
+		{
+			// The "/v1" strip is a whole segment, not a string prefix. Without
+			// the boundary check this returned ".../v20/models".
+			name: "versioned path is not eaten by the strip", baseURL: "https://up.test",
+			prefix: "/v2", path: "/v10/models",
+			want: "https://up.test/v2/v10/models",
+		},
+		{
+			// Same trap with a non-numeric suffix, e.g. a Gemini-style path.
+			name: "v1beta path is not eaten by the strip", baseURL: "https://up.test",
+			prefix: "/v2", path: "/v1beta/models",
+			want: "https://up.test/v2/v1beta/models",
+		},
+		{
+			// A bare "/v1" is a whole segment and is stripped.
+			name: "bare version path collapses onto the prefix", baseURL: "https://up.test",
+			prefix: "/v1", path: "/v1",
+			want: "https://up.test/v1",
+		},
+		{
+			// The prefix always carries a leading slash, so HasSuffix already
+			// matches on a separator. Pins that "/superv1" cannot false-match.
+			name: "lookalike suffix without a separator is not a match", baseURL: "https://api.example.com/superv1",
+			prefix: "/v1", path: "/v1/models",
+			want: "https://api.example.com/superv1/v1/models",
+		},
 	}
 
 	for _, tt := range tests {

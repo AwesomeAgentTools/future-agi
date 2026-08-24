@@ -1271,7 +1271,7 @@ func (c *ProviderConfig) EndpointURL(path string) string {
 // config — the registry builds probe URLs before any provider exists.
 func JoinEndpoint(baseURL, prefix, path string) string {
 	base := strings.TrimRight(baseURL, "/")
-	path = strings.TrimPrefix(path, DefaultAPIPathPrefix)
+	path = trimDefaultPrefix(path)
 	if prefix == "" {
 		return base + path
 	}
@@ -1279,6 +1279,21 @@ func JoinEndpoint(baseURL, prefix, path string) string {
 		return base + path
 	}
 	return base + prefix + path
+}
+
+// trimDefaultPrefix removes the "/v1" the call sites hardcode, but only when it
+// is a whole path segment. A blind TrimPrefix eats the "/v1" out of "/v10/models"
+// and "/v1beta/models", leaving "0/models" to be re-prefixed into "/v20/models".
+// Only the proxy endpoints take a caller-supplied path, so that is where a
+// non-"/v1" version segment can actually arrive.
+func trimDefaultPrefix(path string) string {
+	if path == DefaultAPIPathPrefix {
+		return ""
+	}
+	if strings.HasPrefix(path, DefaultAPIPathPrefix+"/") {
+		return strings.TrimPrefix(path, DefaultAPIPathPrefix)
+	}
+	return path
 }
 
 func normalizePathPrefix(prefix string) string {
