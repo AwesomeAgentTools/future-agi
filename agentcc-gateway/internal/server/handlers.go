@@ -2011,7 +2011,11 @@ func isCredentialShapedKey(key string) bool {
 	lower := strings.ToLower(key)
 	for _, needle := range []string{
 		"secret", "token", "credential", "password", "passwd",
-		"api_key", "apikey", "auth", "private_key", "bearer", "signature",
+		"api_key", "apikey", "private_key", "bearer", "signature",
+		// Not a bare "auth": that also swallows author and authority, which
+		// are ordinary body fields. Separator-less forms like authtoken are
+		// caught by "token" above.
+		"authorization", "auth_", "auth-",
 	} {
 		if strings.Contains(lower, needle) {
 			return true

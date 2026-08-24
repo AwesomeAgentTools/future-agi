@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/futureagi/agentcc-gateway/internal/models"
@@ -343,6 +345,63 @@ func TestKnownRequestFieldsCoverEachDialect(t *testing.T) {
 		"tools", "toolConfig", "safetySettings", "cachedContent"} {
 		if _, ok := gem[f]; !ok {
 			t.Errorf("gemini field %q missing from KnownRequestFields", f)
+		}
+	}
+}
+
+// The credential filter over-blocks on purpose — a missing attribute costs
+// nothing, a leaked one costs a lot — but it must not swallow ordinary words
+// that merely start the same way.
+func TestIsCredentialShapedKey(t *testing.T) {
+	dropped := []string{
+		"vertex_credentials", "api_key", "apiKey", "auth_token", "auth-token",
+		"authtoken", "Authorization", "upstream_secret", "user_password",
+		"private_key", "bearer_token", "request_signature",
+	}
+	for _, k := range dropped {
+		if !isCredentialShapedKey(k) {
+			t.Errorf("%q reaches the span but looks like a credential", k)
+		}
+	}
+
+	kept := []string{"author", "authority", "author_id", "authored_at", "routing_weight", "store"}
+	for _, k := range kept {
+		if isCredentialShapedKey(k) {
+			t.Errorf("%q is an ordinary field and must not be dropped", k)
+		}
+	}
+}
+
+// The dialect endpoints capture caller extras from their own raw body bytes,
+// since they never build a canonical request the OTel plugin could read them
+// from. That capture only reaches a span if it happens before the pipeline
+// runs — TH-7619 wired h.engine.Process onto these two handlers, so the calls
+// that were inert when they were written are now live.
+//
+// Asserted against the source for the same reason TestBillableHandlersRunThePipeline
+// is: the failure mode is an omission or a reordering, not a wrong value.
+func TestDialectHandlersCaptureCallerExtrasBeforeThePipeline(t *testing.T) {
+	for _, file := range []string{"handlers_anthropic.go", "handlers_genai.go"} {
+		src, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatalf("read %s: %v", file, err)
+		}
+		text := string(src)
+
+		capture := strings.Index(text, "applyCallerExtrasFromBody(")
+		if capture < 0 {
+			t.Errorf("%s never calls applyCallerExtrasFromBody — caller body fields "+
+				"reach no span, and this path builds no canonical request to recover them from", file)
+			continue
+		}
+		process := strings.Index(text, "h.engine.Process(")
+		if process < 0 {
+			t.Errorf("%s never calls h.engine.Process", file)
+			continue
+		}
+		if capture > process {
+			t.Errorf("%s captures caller extras after the pipeline runs; the OTel "+
+				"plugin reads rc.CallerExtras inside it, so they would be exported empty", file)
 		}
 	}
 }
