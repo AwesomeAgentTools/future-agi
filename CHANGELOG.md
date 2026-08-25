@@ -5,7 +5,6 @@
 
 ### Features
 
-* automating internal ticketing ([01cbddd](https://github.com/future-agi/future-agi/commit/01cbdddc17f76c2fad6a876d41bd70b04c079334))
 * automating internal ticketing ([5e02f38](https://github.com/future-agi/future-agi/commit/5e02f38b9841ac3e079447e0341f91ba84621171))
 * **gateway:** export caller metadata, body fields and headers as span attributes ([d9f36f2](https://github.com/future-agi/future-agi/commit/d9f36f256d7ba7ab89dfd059446fc43551d8fb88))
 * **gateway:** support Anthropic server tools on the OpenAI-format endpoint ([3b42204](https://github.com/future-agi/future-agi/commit/3b42204c0abea18b5bb3f36b2a6ef3f287ff3745))
