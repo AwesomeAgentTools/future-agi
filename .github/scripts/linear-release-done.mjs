@@ -162,7 +162,10 @@ async function compareData(version) {
   const ids = new Set()
   for (const c of cmp?.commits ?? []) {
     const msg = c.commit?.message ?? ''
-    for (const m of msg.matchAll(/#(\d+)/g)) prNumbers.add(Number(m[1]))
+    // Only the two real merge formats — squash `(#123)` and merge-commit
+    // `Merge pull request #123` — so stray `#123` mentions in prose don't drag
+    // unrelated PRs (and their tickets) into the release.
+    for (const m of msg.matchAll(/(?:\(#|Merge pull request #)(\d+)/g)) prNumbers.add(Number(m[1]))
     for (const id of extractIds(msg)) ids.add(id)
   }
   return { prev, prNumbers: [...prNumbers], ids }
