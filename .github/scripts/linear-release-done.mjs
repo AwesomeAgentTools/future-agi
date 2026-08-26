@@ -5,11 +5,12 @@
 // shipped in the release and act on it by its current state:
 //   • "Ready to Merge"        → move to Done + comment the release link (auto-close)
 //   • any other in-flight state (In Review / In Progress / Todo / …)
-//                             → do NOT close; comment on the ticket AND ping the
-//                               owner on Slack (or #tech if unassigned) to close it
+//                             → do NOT auto-close; comment on the ticket, and list
+//                               it in a single #tech message asking owners to close
 //   • terminal / not-in-flight (Done, Canceled, Backlog, Icebox, Triage, On hold)
 //                             → skip
-// Finally, post a summary to Slack.
+// The goal is that shipped tickets end up closed: what can be closed safely is
+// closed automatically; the rest are surfaced in #tech so their owners close them.
 //
 // Ticket discovery: diff the previous stable tag against this one, harvest PR
 // numbers from the commit messages (squash `(#123)` and `Merge pull request #123`),
@@ -26,10 +27,9 @@
 //   GITHUB_REPOSITORY  owner/repo (e.g. future-agi/future-agi)
 //   VERSION            release tag, e.g. v1.23.0
 //   RELEASE_URL        link to the release (used in comments/messages)
-//   SLACK_BOT_TOKEN    bot token (chat:write, users:read.email, im:write) — needed
-//                      for owner DMs, the #tech fallback, and the summary
-//   SLACK_TECH_CHANNEL channel id for unassigned nudges + the summary (e.g. C06...)
-//   SLACK_WEBHOOK_URL  optional summary fallback when SLACK_BOT_TOKEN is unset
+//   SLACK_BOT_TOKEN    bot token (chat:write) — posts the #tech message + summary
+//   SLACK_TECH_CHANNEL channel id for the nudge message + summary (e.g. C06...)
+//   SLACK_WEBHOOK_URL  optional fallback when SLACK_BOT_TOKEN is unset
 //   DRY_RUN            "true" → log intended writes only, change nothing
 
 const {
@@ -59,7 +59,7 @@ const ID_RE = new RegExp(`\\b(${TEAM_PREFIXES.join('|')})-\\d+\\b`, 'gi')
 // State whose tickets are auto-closed to Done (clearly shipped + approved).
 const CLOSE_STATES = new Set(['Ready to Merge'])
 // Never act on these — terminal, or explicitly not in-flight. Everything that is
-// neither a CLOSE_STATE nor skipped is treated as "in flight" → nudge the owner.
+// neither a CLOSE_STATE nor skipped is treated as "in flight" → surfaced in #tech.
 const SKIP_TYPES = new Set(['completed', 'canceled', 'duplicate', 'triage', 'backlog'])
 const SKIP_STATE_NAMES = new Set(['On hold'])
 
@@ -89,7 +89,7 @@ async function resolveIssue(identifier) {
         title
         url
         state { id name type }
-        assignee { email displayName }
+        assignee { displayName }
         team { key states { nodes { id name type } } }
       }
     }
@@ -101,16 +101,15 @@ async function resolveIssue(identifier) {
     states.find(s => s.type === 'completed' && s.name === 'Done') ??
     states.find(s => s.type === 'completed')
   return {
-    id:            issue.id,
-    identifier:    issue.identifier,
-    title:         issue.title ?? '',
-    url:           issue.url ?? '',
-    stateName:     issue.state?.name ?? '(unknown)',
-    stateType:     issue.state?.type ?? '(unknown)',
-    assigneeEmail: issue.assignee?.email ?? null,
-    assigneeName:  issue.assignee?.displayName ?? null,
-    doneStateId:   done?.id ?? null,
-    doneName:      done?.name ?? null,
+    id:           issue.id,
+    identifier:   issue.identifier,
+    title:        issue.title ?? '',
+    url:          issue.url ?? '',
+    stateName:    issue.state?.name ?? '(unknown)',
+    stateType:    issue.state?.type ?? '(unknown)',
+    assigneeName: issue.assignee?.displayName ?? null,
+    doneStateId:  done?.id ?? null,
+    doneName:     done?.name ?? null,
   }
 }
 
@@ -213,74 +212,46 @@ async function mapWithConcurrency(items, limit, fn) {
   return results
 }
 
-function firstName(name) { return (name ?? '').trim().split(/\s+/)[0] || 'there' }
 function log(...a) { console.log(...a) }
 function die(msg) { console.error(`[linear-release-done] ERROR: ${msg}`); process.exit(1) }
 
 // ── Slack ─────────────────────────────────────────────────────────────────────
 
-async function slackApi(method, payload) {
-  const res = await fetch(`https://slack.com/api/${method}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json; charset=utf-8', Authorization: `Bearer ${SLACK_BOT_TOKEN}` },
-    body: JSON.stringify(payload),
-  })
-  const json = await res.json()
-  if (!json.ok) throw new Error(`Slack ${method} failed: ${json.error}`)
-  return json
-}
-
-async function lookupSlackUserId(email) {
-  if (!email) return null
-  const res = await fetch(`https://slack.com/api/users.lookupByEmail?email=${encodeURIComponent(email)}`, {
-    headers: { Authorization: `Bearer ${SLACK_BOT_TOKEN}` },
-  })
-  const json = await res.json()
-  return json.ok ? json.user.id : null
-}
-
-async function slackPost(channel, text) {
-  if (!channel) return
-  if (DRY) { log(`  [dry] slack → ${channel}: ${text}`); return }
-  await slackApi('chat.postMessage', { channel, text })
-}
-
-// Nudge the owner (DM) about a shipped-but-open ticket; fall back to #tech when
-// the ticket is unassigned or the owner can't be resolved on Slack.
-async function nudgeOnSlack(issue) {
-  if (!SLACK_BOT_TOKEN) { log(`  ⚠  SLACK_BOT_TOKEN unset — cannot Slack-nudge ${issue.identifier}`); return 'no-slack' }
-  const owner = issue.assigneeEmail ? await lookupSlackUserId(issue.assigneeEmail).catch(() => null) : null
-  if (owner) {
-    await slackPost(owner, `Hi ${firstName(issue.assigneeName)} — Linear ticket ${issue.identifier} ("${issue.title}") shipped in release ${VERSION} but is still "${issue.stateName}". If it's complete, please close it in Linear. ${issue.url}`)
-    return 'owner'
-  }
-  if (SLACK_TECH_CHANNEL) {
-    const who = issue.assigneeEmail ? `(owner ${issue.assigneeEmail} not found on Slack)` : '(unassigned)'
-    await slackPost(SLACK_TECH_CHANNEL, `Ticket ${issue.identifier} ("${issue.title}") ${who} shipped in release ${VERSION} but is still "${issue.stateName}" — if it's yours and complete, please move it to Done. ${issue.url}`)
-    return 'tech'
-  }
-  log(`  ⚠  no Slack target for ${issue.identifier} (unassigned and SLACK_TECH_CHANNEL unset)`)
-  return 'no-target'
-}
-
-async function postSummary({ moved, nudged, skipped, notFound }) {
-  const relLink = RELEASE_URL ? `<${RELEASE_URL}|${VERSION}>` : VERSION
-  const lines = [
-    `${DRY ? '🧪 *[DRY RUN]* ' : '🚀 '}*Release ${relLink}* — Linear sync`,
-    moved.length ? `✅ *Closed (${moved.length}):* ${moved.map(m => m.identifier).join(', ')}` : '✅ *Closed:* none',
-  ]
-  if (nudged.length)   lines.push(`📣 *Nudged to close (${nudged.length}):* ${nudged.map(n => `${n.identifier}→${n.via}`).join(', ')}`)
-  if (skipped.length)  lines.push(`⏭️ *Skipped (${skipped.length}):* ${skipped.map(s => `${s.identifier} (${s.reason})`).join(', ')}`)
-  if (notFound.length) lines.push(`❓ *Not found (${notFound.length}):* ${notFound.join(', ')}`)
-  const text = lines.join('\n')
-  if (DRY) { log('[dry] would post summary to Slack:\n' + text); return }
-  if (SLACK_BOT_TOKEN && SLACK_TECH_CHANNEL) { await slackPost(SLACK_TECH_CHANNEL, text); return }
-  if (SLACK_WEBHOOK_URL) {
-    const res = await fetch(SLACK_WEBHOOK_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) })
-    if (!res.ok) log(`⚠  Slack summary failed: ${res.status} ${await res.text()}`)
+async function slackPost(text) {
+  if (DRY) { log('[dry] would post to Slack:\n' + text); return }
+  if (SLACK_BOT_TOKEN && SLACK_TECH_CHANNEL) {
+    const res = await fetch('https://slack.com/api/chat.postMessage', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json; charset=utf-8', Authorization: `Bearer ${SLACK_BOT_TOKEN}` },
+      body: JSON.stringify({ channel: SLACK_TECH_CHANNEL, text, unfurl_links: false }),
+    })
+    const json = await res.json()
+    if (!json.ok) log(`⚠  Slack chat.postMessage failed: ${json.error}`)
     return
   }
-  log('No Slack target configured — skipping summary')
+  if (SLACK_WEBHOOK_URL) {
+    const res = await fetch(SLACK_WEBHOOK_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) })
+    if (!res.ok) log(`⚠  Slack webhook failed: ${res.status} ${await res.text()}`)
+    return
+  }
+  log('No Slack target configured — skipping message')
+}
+
+// A single #tech message: what was auto-closed, and — the important part — what
+// shipped but still needs its owner to close it.
+async function postSlack({ moved, nudged, skipped, notFound }) {
+  const relLink = RELEASE_URL ? `<${RELEASE_URL}|${VERSION}>` : VERSION
+  const lines = [`${DRY ? '🧪 *[DRY RUN]* ' : '🚀 '}*Release ${relLink}* — Linear sync`]
+  lines.push(moved.length ? `✅ *Auto-closed (${moved.length}):* ${moved.map(m => m.identifier).join(', ')}` : '✅ *Auto-closed:* none')
+  if (nudged.length) {
+    lines.push(`📣 *Please close if complete (${nudged.length}):*`)
+    for (const n of nudged) {
+      lines.push(`   • <${n.url}|${n.identifier}> — ${n.stateName}${n.assigneeName ? ` — ${n.assigneeName}` : ' — unassigned'}`)
+    }
+  }
+  if (skipped.length)  lines.push(`⏭️ *Skipped (${skipped.length}):* already Done/terminal`)
+  if (notFound.length) lines.push(`❓ *Not found (${notFound.length}):* ${notFound.join(', ')}`)
+  await slackPost(lines.join('\n'))
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -330,15 +301,15 @@ async function main() {
       moved.push({ identifier: issue.identifier }); return
     }
 
-    // In-flight but not "Ready to Merge": don't close — comment + Slack the owner.
+    // In-flight but not "Ready to Merge": comment on the ticket and collect it for
+    // the #tech round-up so its owner closes it.
     await commentOnIssue(issue, `Shipped in [${VERSION}](${RELEASE_URL || ''}) but this ticket is still in "${issue.stateName}". If the work is complete, please move it to Done — it wasn't auto-closed because it wasn't in "Ready to Merge".`)
-    const via = await nudgeOnSlack(issue)
-    log(`  📣 ${issue.identifier}: in "${issue.stateName}" — nudged (${via})`)
-    nudged.push({ identifier: issue.identifier, via })
+    log(`  📣 ${issue.identifier}: in "${issue.stateName}" — flagged for #tech`)
+    nudged.push({ identifier: issue.identifier, stateName: issue.stateName, assigneeName: issue.assigneeName, url: issue.url })
   })
 
-  log(`[linear-release-done] done — closed ${moved.length}, nudged ${nudged.length}, skipped ${skipped.length}, not-found ${notFound.length}`)
-  await postSummary({ moved, nudged, skipped, notFound })
+  log(`[linear-release-done] done — closed ${moved.length}, flagged ${nudged.length}, skipped ${skipped.length}, not-found ${notFound.length}`)
+  await postSlack({ moved, nudged, skipped, notFound })
 }
 
 main().catch(err => { console.error('[linear-release-done] fatal:', err); process.exit(1) })
