@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.31.0](https://github.com/future-agi/future-agi/compare/v1.30.0...v1.31.0) (2026-08-27)
+
+
+### Features
+
+* group-only #tech nudges (drop owner DMs) ([bf7bad6](https://github.com/future-agi/future-agi/commit/bf7bad6c53cbc07328b13b3f83ca549c5d5cf2ac))
+* group-only #tech nudges for shipped-but-open tickets ([968f0d6](https://github.com/future-agi/future-agi/commit/968f0d642cb2d19eb0a1d1aa2841e67a6b779dc4))
+* nudge owners for in-flight tickets instead of force-closing ([aa99426](https://github.com/future-agi/future-agi/commit/aa9942650ab3c5dce0c2713c2259be550d3bb13b))
+* reconcile release tickets by state + fix discovery ([f605cd5](https://github.com/future-agi/future-agi/commit/f605cd59b4a63b7ecc4694169c3d5a62d22207f7))
+
+
+### Bug Fixes
+
+* broaden release ticket discovery to all PRs in the tag range ([7b006c7](https://github.com/future-agi/future-agi/commit/7b006c73f8c2c7886423afde8645bc6c4580769c))
+* **evals:** treat a non-string eval mapping value as invalid instead of crashing ([02ff5a9](https://github.com/future-agi/future-agi/commit/02ff5a9dd05761e3bed977c399ba4159ed239a16))
+* **evals:** treat a non-string eval mapping value as invalid instead of crashing ([1fdd5ed](https://github.com/future-agi/future-agi/commit/1fdd5ed8f7a3a1cf7540e2097fbc47f65c43ff25))
+* match only real merge formats when harvesting PR numbers ([a3d28ba](https://github.com/future-agi/future-agi/commit/a3d28bafcce0fe54a28a34bb5c9e27f1257bbf90))
+
 ## [1.30.0](https://github.com/future-agi/future-agi/compare/v1.29.1...v1.30.0) (2026-08-25)
 
 
