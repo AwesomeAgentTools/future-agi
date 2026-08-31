@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.32.0](https://github.com/future-agi/future-agi/compare/v1.31.0...v1.32.0) (2026-08-31)
+
+
+### Features
+
+* **system-evals:** add seven insurance agent system evals ([ea2c238](https://github.com/future-agi/future-agi/commit/ea2c238f0ea79e194b725352a7d054d8db1f23f0))
+* **system-evals:** add seven insurance agent system evals and bump seed version ([5520980](https://github.com/future-agi/future-agi/commit/5520980d0856f2a6232000d4a9ad320c8f344f82))
+
 ## [1.31.0](https://github.com/future-agi/future-agi/compare/v1.30.0...v1.31.0) (2026-08-27)
 
 
